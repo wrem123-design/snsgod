@@ -38,8 +38,20 @@ function normalizeCharacters(parsed: Record<string, unknown>, fallback: SNSGodSt
     id: String(item.id || item.key || item.uuid || `character_${index}`),
     name: String(item.name || item.displayName || item.title || `캐릭터 ${index + 1}`),
     handle: item.handle ? String(item.handle) : item.username ? String(item.username).replace(/^@/, '') : undefined,
-    avatar: typeof item.avatar === 'string' ? item.avatar : typeof item.profileImage === 'string' ? item.profileImage : undefined,
-    profileImage: typeof item.profileImage === 'string' ? item.profileImage : typeof item.profilePhoto === 'string' ? item.profilePhoto : undefined,
+    avatar: typeof item.avatar === 'string'
+      ? item.avatar
+      : typeof item.profileImage === 'string'
+        ? item.profileImage
+        : typeof item.profilePhoto === 'string'
+          ? item.profilePhoto
+          : undefined,
+    profileImage: typeof item.avatar === 'string'
+      ? item.avatar
+      : typeof item.profileImage === 'string'
+        ? item.profileImage
+        : typeof item.profilePhoto === 'string'
+          ? item.profilePhoto
+          : undefined,
     coverImage: typeof item.coverImage === 'string' ? item.coverImage : typeof item.backgroundImage === 'string' ? item.backgroundImage : undefined
   })) as SNSGodState['characters'];
 }

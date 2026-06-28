@@ -9,17 +9,19 @@ type MenuItem = {
   onPress: () => void;
 };
 
-export function MenuHubScreen({ mode, onOpenSumGod, onOpenGallery, onOpenNotifications, onOpenSettings }: {
+export function MenuHubScreen({ mode, onOpenSumGod, onOpenGallery, onOpenNotifications, onOpenSettings, onOpenDebug }: {
   mode: 'etc';
   onOpenSumGod: () => void;
   onOpenGallery: () => void;
   onOpenNotifications: () => void;
   onOpenSettings: () => void;
+  onOpenDebug: () => void;
 }) {
   const items: MenuItem[] = [
     { title: 'SumGod', subtitle: '커플 질문 다이어리', icon: 'S', onPress: onOpenSumGod },
     { title: '갤러리', subtitle: '저장된 이미지 보기', icon: '□', onPress: onOpenGallery },
-    { title: '알림 목록', subtitle: '최근 알림 10개 확인', icon: '!', onPress: onOpenNotifications }
+    { title: '알림 목록', subtitle: '최근 알림 10개 확인', icon: '!', onPress: onOpenNotifications },
+    { title: '디버그', subtitle: '로그 확인과 앱 상태 재로드', icon: 'D', onPress: onOpenDebug }
   ];
 
   return (

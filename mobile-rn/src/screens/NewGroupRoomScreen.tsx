@@ -9,9 +9,10 @@ export function NewGroupRoomScreen({ state, onBack, onCreate }: {
   onBack: () => void;
   onCreate: (next: SNSGodState, roomId: string) => Promise<void> | void;
 }) {
+  const availableCharacters = state.characters.filter(character => character.randomTemporary !== true);
   const [name, setName] = useState('새 단톡');
   const [selected, setSelected] = useState<Record<string, boolean>>({});
-  const selectedIds = state.characters.filter(character => selected[character.id]).map(character => character.id);
+  const selectedIds = availableCharacters.filter(character => selected[character.id]).map(character => character.id);
 
   function create() {
     if (!selectedIds.length) return;
@@ -47,7 +48,7 @@ export function NewGroupRoomScreen({ state, onBack, onCreate }: {
         </View>
         <View style={styles.card}>
           <Text style={styles.cardTitle}>참여 캐릭터</Text>
-          {state.characters.map(character => (
+          {availableCharacters.length ? availableCharacters.map(character => (
             <View key={character.id} style={styles.row}>
               <View style={styles.avatarText}><Text style={styles.avatarLabel}>{character.avatarText || character.name.slice(0, 2)}</Text></View>
               <View style={styles.rowBody}>
@@ -56,7 +57,7 @@ export function NewGroupRoomScreen({ state, onBack, onCreate }: {
               </View>
               <Switch value={Boolean(selected[character.id])} onValueChange={value => setSelected(prev => ({ ...prev, [character.id]: value }))} />
             </View>
-          ))}
+          )) : <Text style={styles.emptyText}>그룹대화에 추가할 수 있는 캐릭터가 없습니다.</Text>}
         </View>
       </ScrollView>
     </View>
@@ -83,5 +84,6 @@ const styles = StyleSheet.create({
   avatarLabel: { color: colors.text, fontWeight: '900' },
   rowBody: { flex: 1 },
   name: { color: colors.text, fontWeight: '900', fontSize: 16 },
-  handle: { marginTop: 3, color: colors.sub, fontWeight: '700' }
+  handle: { marginTop: 3, color: colors.sub, fontWeight: '700' },
+  emptyText: { paddingVertical: 18, color: colors.sub, fontWeight: '900', textAlign: 'center' }
 });

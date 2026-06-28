@@ -50,8 +50,30 @@ function commentCountHint(value: string | undefined): number {
   return Math.max(0, Math.min(8, Math.round(min + Math.random() * Math.max(0, max - min))));
 }
 
-function shouldGenerateComments(state: SNSGodState): boolean {
-  return state.config.sns?.autoComments !== false && commentCountHint(state.config.sns?.commentQty) > 0;
+export function snsOptionsFor(state: SNSGodState, platform: SNSPost['platform'], character?: SNSGodCharacter) {
+  const base = state.config.sns || {};
+  const platformOptions = base.platformOptions?.[platform] || {};
+  const characterOptions = character?.snsOptions?.[platform] || {};
+  return {
+    anonymous: base.anonymous === true,
+    nsfw: base.nsfw === true,
+    textOnly: base.textOnly === true,
+    noDM: base.noDM === true,
+    thirdPartyDM: base.thirdPartyDM === true,
+    autoComments: base.autoComments !== false,
+    commentQty: base.commentQty || '2-4',
+    subject: base.subject || '',
+    mood: base.mood || '',
+    autoImage: base.autoImage !== false,
+    ...platformOptions,
+    ...characterOptions,
+    platform
+  };
+}
+
+function shouldGenerateComments(state: SNSGodState, platform: SNSPost['platform'], character?: SNSGodCharacter): boolean {
+  const sns = snsOptionsFor(state, platform, character);
+  return sns.autoComments !== false && commentCountHint(sns.commentQty) > 0;
 }
 
 function toPost(item: GeneratedPlatform, character: SNSGodCharacter, platform: SNSPost['platform']): SNSPost {
@@ -105,12 +127,12 @@ function toDmThreads(generated: GeneratedSns, character: SNSGodCharacter, postId
 }
 
 export async function generateSNSPost(state: SNSGodState, character: SNSGodCharacter, platform: SNSPost['platform']): Promise<SNSGodState> {
-  const sns = state.config.sns || {};
+  const sns = snsOptionsFor(state, platform, character);
   const recentRooms = state.chatRooms[character.id] || [];
   const transcript = recentRooms.flatMap(room => state.messages[room.id] || []).slice(-Number(state.config.apiProfiles[state.config.apiType]?.snsContextMessageLimit || 12))
     .map(message => `${message.role === 'user' ? state.config.userName : character.name}: ${message.content}`)
     .join('\n');
-  const targetPlatform = sns.platform === 'hybrid' ? 'twitter and instagram' : platform;
+  const targetPlatform = platform === 'instagram' ? 'instagram' : 'twitter/x';
   const prompt = [
     (state.config.prompts?.snsPosting || DEFAULT_PROMPTS.snsPosting).replaceAll('{character.name}', character.name),
     'Create a Lightboard SNS result with believable platform UI data, audience comments, and optional DM snippets.',
@@ -120,7 +142,7 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
     sns.autoComments === false ? 'Do not invent audience comments; return comments as an empty array.' : 'Invent fresh believable audience comments for this post only.',
     sns.anonymous ? 'Use a private/anonymous account vibe.' : 'Use the character account openly.',
     sns.nsfw ? 'This is an adult private back-account version. Mature/NSFW tone is allowed only when it fits the adult fictional character and context.' : 'Keep it SFW unless the current conversation explicitly requires otherwise.',
-    (sns.nsfw || sns.hybridNsfwSplit) ? 'When hybrid NSFW split is enabled, Instagram must stay public-safe and polished; Twitter/X may use the private alt-account vibe. Avoid explicit terms for Instagram.' : '',
+    platform === 'instagram' ? 'Write for an Instagram-style public visual feed. Keep the tone polished and feed-friendly.' : 'Write for a Twitter/X-style timeline. Shorter, sharper, more conversational posts are allowed.',
     sns.textOnly ? 'Do not include imagePrompt.' : 'If an image fits, include imagePrompt as English visual prompt.',
     sns.noDM ? 'Do not create dms.' : 'Create one short SNS DM thread when natural.',
     sns.thirdPartyDM ? 'Third-party commenters may initiate DMs if useful.' : 'DMs should stay centered on the character and user.',
@@ -136,7 +158,7 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
   const generatedPlatforms = (parsed.platforms || []).filter(item => platformMatches(item.platform, platform));
   const posts: SNSPost[] = (generatedPlatforms.length ? generatedPlatforms : [{ platform, text: text.trim() }]).map(item => {
     const next = toPost(item, character, platform);
-    return shouldGenerateComments(state) ? next : { ...next, comments: [], replies: 0 };
+    return shouldGenerateComments(state, platform, character) ? next : { ...next, comments: [], replies: 0 };
   });
   const postsWithImages: SNSPost[] = [];
   for (const post of posts) {
@@ -170,32 +192,6 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
       characterId: character.id,
       createdAt: Date.now()
     }, ...(state.notifications || [])]
-  };
-}
-
-export async function generateSNSCommentReply(state: SNSGodState, post: SNSPost, content: string): Promise<{ comment: NonNullable<SNSPost['comments']>[number]; keyIndex: number }> {
-  const character = state.characters.find(item => item.id === post.characterId);
-  const prompt = [
-    'You are simulating a private SNS comment reply. Return JSON only.',
-    '{"author":"","handle":"","content":"","likes":0}',
-    `Post by ${character?.name || 'Character'}: ${post.content}`,
-    `User/comment direction: ${content}`,
-    `Character profile: ${character?.prompt || '(empty)'}`,
-    'Write one believable Korean comment from the character account or a follower depending on context.'
-  ].join('\n\n');
-  const { text, keyIndex } = await callLLMText(state, [{ role: 'system', content: prompt }]);
-  const parsed = parseJsonObject<{ author?: string; handle?: string; content?: string; likes?: number }>(text) || { content: text };
-  return {
-    keyIndex,
-    comment: {
-      id: makeId('comment'),
-      author: String(parsed.author || character?.name || 'Character'),
-      handle: parsed.handle ? String(parsed.handle).replace(/^@/, '') : character?.handle,
-      content: String(parsed.content || text).trim(),
-      likes: Number(parsed.likes || 0),
-      createdAt: Date.now(),
-      ai: true
-    }
   };
 }
 

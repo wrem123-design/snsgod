@@ -10,7 +10,8 @@ export function NewRoomScreen({ state, onBack, onCreate }: {
   onBack: () => void;
   onCreate: (next: SNSGodState, roomId: string) => Promise<void> | void;
 }) {
-  const [characterId, setCharacterId] = useState(state.characters[0]?.id || '');
+  const availableCharacters = state.characters.filter(character => character.randomTemporary !== true);
+  const [characterId, setCharacterId] = useState(availableCharacters[0]?.id || '');
   const [name, setName] = useState('새 채팅');
 
   async function create() {
@@ -30,7 +31,7 @@ export function NewRoomScreen({ state, onBack, onCreate }: {
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.label}>대상 캐릭터</Text>
         <View style={styles.characterList}>
-          {state.characters.map(character => (
+          {availableCharacters.length ? availableCharacters.map(character => (
             <Pressable key={character.id} onPress={() => setCharacterId(character.id)} style={[styles.characterRow, characterId === character.id && styles.characterActive]}>
               <Avatar character={character} size={42} />
               <View style={styles.characterBody}>
@@ -39,11 +40,11 @@ export function NewRoomScreen({ state, onBack, onCreate }: {
               </View>
               <Text style={styles.chevron}>{characterId === character.id ? '✓' : '›'}</Text>
             </Pressable>
-          ))}
+          )) : <Text style={styles.emptyText}>새 대화방을 만들 수 있는 캐릭터가 없습니다.</Text>}
         </View>
         <Text style={styles.label}>방 이름</Text>
         <TextInput value={name} onChangeText={setName} style={styles.input} />
-        <Pressable onPress={create} style={styles.primary}><Text style={styles.primaryText}>새 대화방 만들기</Text></Pressable>
+        <Pressable onPress={create} disabled={!characterId} style={[styles.primary, !characterId && styles.disabled]}><Text style={styles.primaryText}>새 대화방 만들기</Text></Pressable>
       </ScrollView>
     </View>
   );
@@ -66,6 +67,7 @@ const styles = StyleSheet.create({
   chevron: { fontSize: 18, color: colors.sub, fontWeight: '900' },
   input: { minHeight: 46, borderWidth: 1, borderColor: colors.border, borderRadius: 7, paddingHorizontal: 12, backgroundColor: '#fffefa', color: colors.text, fontSize: 15 },
   primary: { minHeight: 48, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
-  primaryText: { color: '#241a00', fontSize: 16, fontWeight: '900' }
+  primaryText: { color: '#241a00', fontSize: 16, fontWeight: '900' },
+  disabled: { opacity: 0.45 },
+  emptyText: { padding: 18, color: colors.sub, fontWeight: '900', textAlign: 'center' }
 });
-

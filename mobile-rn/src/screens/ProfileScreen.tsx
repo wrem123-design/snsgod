@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
@@ -17,6 +17,7 @@ export function ProfileScreen({ state, characterId, onBack, onOpenChat, onOpenCa
   onOpenCall: (character: SNSGodCharacter) => void;
   onOpenSettings: (character: SNSGodCharacter) => void;
 }) {
+  const [selectedHistoryImage, setSelectedHistoryImage] = useState('');
   const character = findCharacter(state, characterId);
   if (!character) {
     return (
@@ -28,7 +29,8 @@ export function ProfileScreen({ state, characterId, onBack, onOpenChat, onOpenCa
   }
 
   const cover = imageUri(character.coverImage);
-  const profile = imageUri(character.profileImage || character.avatar);
+  const profile = imageUri(character.avatar || character.profileImage);
+  const history = (character.profileImageHistory || []).filter(item => imageUri(item.image));
 
   return (
     <View style={styles.screen}>
@@ -62,6 +64,20 @@ export function ProfileScreen({ state, characterId, onBack, onOpenChat, onOpenCa
           <Text style={styles.cardTitle}>소개</Text>
           <Text style={styles.bodyText}>{character.prompt || character.userDescription || '아직 소개가 없습니다.'}</Text>
         </View>
+        {history.length ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>프로필 앨범</Text>
+            {selectedHistoryImage ? <Image source={{ uri: selectedHistoryImage }} style={styles.historyLarge} resizeMode="contain" /> : null}
+            <View style={styles.historyGrid}>
+              {history.map(item => (
+                <Pressable key={item.id} onPress={() => setSelectedHistoryImage(item.image)} style={styles.historyTile}>
+                  <Image source={{ uri: item.image }} style={styles.historyImage} />
+                  <Text style={styles.historyLabel}>{item.kind === 'cover' ? '배경' : '프로필'}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -89,6 +105,11 @@ const styles = StyleSheet.create({
   card: { marginTop: 14, marginHorizontal: 16, padding: 14, borderRadius: 10, backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
   cardTitle: { color: colors.text, fontWeight: '900', marginBottom: 8 },
   bodyText: { color: colors.sub, lineHeight: 20 },
+  historyLarge: { width: '100%', height: 260, borderRadius: 10, backgroundColor: '#eee8dc', marginBottom: 10 },
+  historyGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  historyTile: { width: 82, padding: 5, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa' },
+  historyImage: { width: 70, height: 70, borderRadius: 8, backgroundColor: '#eee8dc' },
+  historyLabel: { marginTop: 4, color: colors.sub, fontSize: 11, fontWeight: '800', textAlign: 'center' },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: colors.bg },
   emptyText: { color: colors.text, fontWeight: '900' },
   primary: { marginTop: 12, height: 42, paddingHorizontal: 16, borderRadius: 8, backgroundColor: colors.accent, justifyContent: 'center' },

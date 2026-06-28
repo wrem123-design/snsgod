@@ -43,7 +43,7 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
   }).join('\n');
   const lore = activeLore(state, room, `${transcript}\n${latestUserText}`);
   const memoryText = (character.memories || []).slice(-8).map(item => `- ${item}`).join('\n');
-  const stickerText = (character.stickers || state.userStickers || [])
+  const stickerText = [...(character.stickers || []), ...(state.userStickers || [])]
     .slice(0, 20)
     .map(item => `- ${item.id}: ${item.name}${item.description ? ` (${item.description})` : ''}`)
     .join('\n');
@@ -57,11 +57,13 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
         : 'Write imagePrompt as a specific, grounded phone-photo scene.',
       'Do not claim an image was attached unless imagePrompt is included.'
     ].join(' ');
-  const content = [
+  const system = [
     prompts.systemRules,
     prompts.roleObjective.replaceAll('{character.name}', character.name),
     prompts.characterActing,
     prompts.jsonFormat,
+    'Return valid JSON only. Do not wrap it in markdown fences. Do not expose keys such as reactionDelay, messages, content, or newMemory as visible chat text.',
+    'Do not echo, rewrite, summarize, or delete the latest user message. The visible message content must contain only the character\'s new reply.',
     prompts.memoryRules,
     prompts.stickerRules,
     prompts.language,
@@ -73,9 +75,15 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
     roomNote ? `Room-only relationship/context note:\n${roomNote}` : '',
     memoryText ? `Character memories:\n${memoryText}` : '',
     stickerText ? `Available stickers:\n${stickerText}` : 'Available stickers: none',
-    lore.length ? `Lore triggered by current chat:\n${lore.map(entry => `- ${entry.title}: ${entry.content}`).join('\n')}` : '',
-    `Conversation transcript:\n${transcript || '(empty)'}`,
-    'Reply to the latest user message naturally.'
+    lore.length ? `Lore triggered by current chat:\n${lore.map(entry => `- ${entry.title}: ${entry.content}`).join('\n')}` : ''
   ].filter(Boolean).join('\n\n');
-  return [{ role: 'system' as const, content }];
+  const user = [
+    `Conversation transcript:\n${transcript || '(empty)'}`,
+    `Latest user message: ${latestUserText}`,
+    'Reply naturally as the character now.'
+  ].filter(Boolean).join('\n\n');
+  return [
+    { role: 'system' as const, content: system },
+    { role: 'user' as const, content: user }
+  ];
 }

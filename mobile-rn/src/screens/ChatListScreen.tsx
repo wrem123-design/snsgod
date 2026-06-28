@@ -23,9 +23,10 @@ type GroupRow = {
 };
 
 function rowsFromState(state: SNSGodState): Array<Row | GroupRow> {
-  const directRows = state.characters.flatMap(character => {
+  const randomRoomIds = new Set((state.randomChats || []).map(room => room.id));
+  const directRows = state.characters.filter(character => character.randomTemporary !== true).flatMap(character => {
     const rooms = state.chatRooms[character.id] || [];
-    return rooms.map(room => {
+    return rooms.filter(room => room.type !== 'random' && room.randomChat !== true && !randomRoomIds.has(room.id)).map(room => {
       const messages = state.messages[room.id] || [];
       const last = messages[messages.length - 1];
       return { kind: 'direct' as const, character, room, lastText: last?.content || '새 채팅', unread: state.unreadCounts[room.id] || 0, lastActivity: room.lastActivity || room.createdAt || 0 };
@@ -64,28 +65,25 @@ export function ChatListScreen({ state, onOpenSettings, onOpenRoom, onNewRoom, o
   const rows = rowsFromState(state);
   const unreadNotifications = (state.notifications || []).filter(item => !item.read).length;
   const kakaoTheme = state.config.snsTheme === 'kakao';
+  const headerActions = [
+    { label: '알림', icon: '!', onPress: onOpenNotifications, badge: unreadNotifications },
+    { label: '새 개인채팅', icon: '1:1', onPress: onNewRoom },
+    { label: '새 그룹채팅', icon: 'G', onPress: onNewGroupRoom },
+    { label: '새 캐릭터', icon: '+', onPress: onNewCharacter },
+    { label: '설정', icon: '⚙', onPress: onOpenSettings }
+  ];
   return (
     <View style={[styles.screen, !kakaoTheme && styles.screenDefault]}>
       <View style={[styles.header, !kakaoTheme && styles.headerDefault]}>
         <View style={styles.titleRow}>
           <Text style={styles.title}>채팅</Text>
           <View style={styles.headerActions}>
-            <Pressable accessibilityLabel="알림" onPress={onOpenNotifications} style={[styles.roundIcon, !kakaoTheme && styles.roundIconDefault]}>
-              <Text style={styles.roundIconText}>!</Text>
-              {unreadNotifications > 0 ? <Text style={styles.alertBadge}>{unreadNotifications}</Text> : null}
-            </Pressable>
-            <Pressable accessibilityLabel="새 개인채팅" onPress={onNewRoom} style={[styles.roundIcon, !kakaoTheme && styles.roundIconDefault]}>
-              <Text style={styles.roundIconText}>＋</Text>
-            </Pressable>
-            <Pressable accessibilityLabel="새 그룹채팅" onPress={onNewGroupRoom} style={[styles.roundIcon, !kakaoTheme && styles.roundIconDefault]}>
-              <Text style={styles.roundIconText}>▦</Text>
-            </Pressable>
-            <Pressable accessibilityLabel="새 캐릭터" onPress={onNewCharacter} style={[styles.roundIcon, !kakaoTheme && styles.roundIconDefault]}>
-              <Text style={styles.roundIconText}>◇</Text>
-            </Pressable>
-            <Pressable accessibilityLabel="설정" onPress={onOpenSettings} style={[styles.roundIcon, !kakaoTheme && styles.roundIconDefault]}>
-              <Text style={styles.roundIconText}>⚙</Text>
-            </Pressable>
+            {headerActions.map(action => (
+              <Pressable key={action.label} accessibilityLabel={action.label} onPress={action.onPress} style={[styles.roundIcon, !kakaoTheme && styles.roundIconDefault]}>
+                <Text style={[styles.roundIconText, action.icon.length > 1 && styles.roundIconTextSmall]}>{action.icon}</Text>
+                {action.badge && action.badge > 0 ? <Text style={styles.alertBadge}>{action.badge}</Text> : null}
+              </Pressable>
+            ))}
           </View>
         </View>
       </View>
@@ -102,7 +100,7 @@ export function ChatListScreen({ state, onOpenSettings, onOpenRoom, onNewRoom, o
             )}
             <View style={[styles.rowBody, !kakaoTheme && styles.rowBodyDefault]}>
               <View style={styles.rowTop}>
-                <Text style={styles.name}>{item.kind === 'group' ? `${item.room.name} ${item.participants.length}` : item.room.name === '기본 채팅' ? item.character.name : item.room.name}</Text>
+                <Text style={styles.name}>{item.kind === 'group' ? `${item.room.name} ${item.participants.length}` : item.character.name}</Text>
                 {item.unread > 0 ? <Text style={styles.badge}>{item.unread}</Text> : null}
               </View>
               <Text style={styles.preview} numberOfLines={1}>{item.lastText}</Text>
@@ -130,14 +128,15 @@ function GroupAvatar({ participants }: { participants: SNSGodCharacter[] }) {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#ffffff' },
   screenDefault: { backgroundColor: colors.bg },
-  header: { minHeight: 72, paddingHorizontal: 20, paddingTop: 16, gap: 14 },
+  header: { minHeight: 72, paddingHorizontal: 16, paddingTop: 16, gap: 14 },
   headerDefault: { backgroundColor: colors.panel, borderBottomWidth: 1, borderBottomColor: colors.border },
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  title: { fontSize: 28, fontWeight: '900', color: '#050505' },
+  title: { fontSize: 27, fontWeight: '900', color: '#050505' },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  roundIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#f2f2f2', alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  roundIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#f2f2f2', alignItems: 'center', justifyContent: 'center', position: 'relative' },
   roundIconDefault: { backgroundColor: '#eee8dc', borderWidth: 1, borderColor: colors.border },
   roundIconText: { color: '#333', fontWeight: '900', fontSize: 20, lineHeight: 24 },
+  roundIconTextSmall: { fontSize: 12, lineHeight: 16 },
   alertBadge: { position: 'absolute', top: -3, right: -4, minWidth: 19, height: 19, borderRadius: 10, overflow: 'hidden', lineHeight: 19, textAlign: 'center', backgroundColor: colors.danger, color: '#fff', fontWeight: '900', fontSize: 11 },
   list: { paddingBottom: 24 },
   row: { minHeight: 86, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', gap: 14 },

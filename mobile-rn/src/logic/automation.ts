@@ -1,4 +1,4 @@
-import { callLLM } from './api';
+import { callLLM, generateImageDataUri } from './api';
 import { makeId } from './ids';
 import { DEFAULT_PROMPTS, userNameFor, userProfileFor } from './prompts';
 import { appendMessage, findCharacter } from './stateHelpers';
@@ -17,7 +17,7 @@ function eligiblePrivateRooms(state: SNSGodState, firstMessageOnly: boolean): { 
   const sent = (state.__randomFirstSent || {}) as Record<string, string>;
   const pairs: { character: SNSGodCharacter; room: SNSGodRoom }[] = [];
   for (const character of state.characters) {
-    if (character.enabled === false || character.proactiveEnabled === false) continue;
+    if (character.randomTemporary === true || character.enabled === false || character.proactiveEnabled === false) continue;
     const rooms = state.chatRooms[character.id] || [];
     for (const room of rooms) {
       const messages = state.messages[room.id] || [];
@@ -39,7 +39,7 @@ function eligibleGroupRooms(state: SNSGodState): { room: GroupRoom; speaker: SNS
   if (state.config.autoEnabled === false || state.config.groupFirst !== true) return [];
   const pairs: { room: GroupRoom; speaker: SNSGodCharacter; participants: SNSGodCharacter[] }[] = [];
   for (const room of state.groupRooms || []) {
-    const participants = state.characters.filter(character => room.participantIds.includes(character.id) && character.enabled !== false && character.proactiveEnabled !== false);
+    const participants = state.characters.filter(character => character.randomTemporary !== true && room.participantIds.includes(character.id) && character.enabled !== false && character.proactiveEnabled !== false);
     if (!participants.length) continue;
     const frequency = Math.max(1, Math.min(...participants.map(character => Number(character.frequencyMinutes || 10))));
     if (minutesSince(room.lastActivity || room.createdAt) < frequency) continue;
@@ -81,7 +81,7 @@ function calendarEventsFor(state: SNSGodState, character: SNSGodCharacter) {
 async function runCalendarEvent(state: SNSGodState): Promise<SNSGodState | undefined> {
   const sent = (state.__calendarSent || {}) as Record<string, string>;
   for (const character of state.characters) {
-    if (character.enabled === false) continue;
+    if (character.randomTemporary === true || character.enabled === false) continue;
     const room = (state.chatRooms[character.id] || [])[0];
     if (!room) continue;
     const event = calendarEventsFor(state, character).find(item => eventMatchesToday(item.date));
@@ -138,7 +138,7 @@ function runPhoneInvite(state: SNSGodState): SNSGodState | undefined {
   if (state.config.autoEnabled === false || state.config.characterPhoneCallEnabled === false) return undefined;
   const sent = (state.__phoneInviteAt || {}) as Record<string, number>;
   const candidates = state.characters.filter(character => {
-    if (character.enabled === false || character.proactiveEnabled === false) return false;
+    if (character.randomTemporary === true || character.enabled === false || character.proactiveEnabled === false) return false;
     const intervalMinutes = Math.max(60, Number(character.frequencyMinutes || 10) * 6);
     if (minutesSince(sent[character.id]) < intervalMinutes) return false;
     const chance = Math.max(0, Math.min(18, Number(character.initiative ?? 40) / 6));
@@ -160,6 +160,56 @@ function runPhoneInvite(state: SNSGodState): SNSGodState | undefined {
       createdAt: Date.now()
     }, ...(state.notifications || [])].slice(0, 100)
   };
+}
+
+async function runProfileImageAutomation(state: SNSGodState): Promise<SNSGodState | undefined> {
+  if (state.config.autoEnabled === false || state.config.imageGeneration?.enabled !== true) return undefined;
+  for (const character of state.characters) {
+    if (character.randomTemporary === true || character.enabled === false) continue;
+    const baseIntervalMinutes = Math.max(180, Number(character.frequencyMinutes || 10) * 30);
+    const canProfile = character.profilePhotoAutoChange === true && minutesSince(Number(character.lastProfilePhotoChangeAt || 0)) >= baseIntervalMinutes;
+    const canCover = character.coverPhotoAutoChange === true && minutesSince(Number(character.lastCoverPhotoChangeAt || 0)) >= baseIntervalMinutes;
+    const profileChance = Math.max(0, Math.min(100, Number(character.profilePhotoChangeChance ?? 5)));
+    const coverChance = Math.max(0, Math.min(100, Number(character.coverPhotoChangeChance ?? 5)));
+    const shouldProfile = canProfile && Math.random() * 100 <= profileChance;
+    const shouldCover = canCover && Math.random() * 100 <= coverChance;
+    if (!shouldProfile && !shouldCover) continue;
+    const now = Date.now();
+    try {
+      if (shouldProfile) {
+        const prompt = String(character.profileAvatarPrompt || `portrait profile photo, clear face, casual expression, messenger profile picture, ${character.name}. Character personality: ${character.prompt || ''}`);
+        const image = await generateImageDataUri(state, prompt, character, { referenceImage: String(character.profileReferenceImage || ''), kind: 'profile' });
+        const historyItem = { id: makeId('profile_image'), image, prompt, createdAt: now, kind: 'profile' as const };
+        return {
+          ...state,
+          characters: state.characters.map(item => item.id === character.id ? {
+            ...item,
+            avatar: image,
+            profileImage: image,
+            lastProfilePhotoChangeAt: now,
+            profileImageHistory: [historyItem, ...(item.profileImageHistory || [])].slice(0, 60)
+          } : item)
+        };
+      }
+      if (shouldCover) {
+        const prompt = String(character.profileCoverPrompt || `quiet mood cover background for ${character.name}, no people, no text. Character mood and personality: ${character.prompt || ''}`);
+        const image = await generateImageDataUri(state, prompt, character, { kind: 'cover' });
+        const historyItem = { id: makeId('profile_image'), image, prompt, createdAt: now, kind: 'cover' as const };
+        return {
+          ...state,
+          characters: state.characters.map(item => item.id === character.id ? {
+            ...item,
+            coverImage: image,
+            lastCoverPhotoChangeAt: now,
+            profileImageHistory: [historyItem, ...(item.profileImageHistory || [])].slice(0, 60)
+          } : item)
+        };
+      }
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 async function runPrivateFirstMessage(state: SNSGodState, firstMessageOnly: boolean): Promise<SNSGodState | undefined> {
@@ -279,6 +329,9 @@ async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | u
 }
 
 export async function runAutomationTick(state: SNSGodState): Promise<SNSGodState> {
+  const profileImageNext = await runProfileImageAutomation(state);
+  if (profileImageNext) return profileImageNext;
+
   const calendarNext = await runCalendarEvent(state);
   if (calendarNext) return calendarNext;
 
@@ -286,7 +339,7 @@ export async function runAutomationTick(state: SNSGodState): Promise<SNSGodState
     const chance = Math.max(0, Math.min(100, Number(state.config.snsAutoChance ?? 40)));
     const countNeeded = Math.max(1, Number(state.config.snsStartCount || 6));
     const eligibleCharacters = state.characters.filter(character => {
-      if (character.enabled === false) return false;
+      if (character.randomTemporary === true || character.enabled === false || character.snsAutoEnabled === false) return false;
       const rooms = state.chatRooms[character.id] || [];
       const messageCount = rooms.reduce((sum, room) => sum + (state.messages[room.id] || []).length, 0);
       const latestPost = state.snsPosts.filter(post => post.characterId === character.id).sort((a, b) => b.createdAt - a.createdAt)[0];

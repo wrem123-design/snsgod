@@ -73,11 +73,12 @@ const CALENDAR_PRESETS = [
   }
 ];
 
-export function CharacterSettingsScreen({ state, characterId, onBack, onChange }: {
+export function CharacterSettingsScreen({ state, characterId, onBack, onChange, onDelete }: {
   state: SNSGodState;
   characterId: string;
   onBack: () => void;
   onChange: (next: SNSGodState) => Promise<void> | void;
+  onDelete?: (characterId: string) => Promise<void> | void;
 }) {
   const character = findCharacter(state, characterId);
   const [draft, setDraft] = useState<SNSGodCharacter | null>(character ? normalizeDraft(character) : null);
@@ -137,6 +138,8 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange }
       latitude: Number(draft.latitude) || 37.5665,
       longitude: Number(draft.longitude) || 126.978,
       statusMessageChangeChance: clampNumber(draft.statusMessageChangeChance, 0, 100, 40),
+      avatar: String(draft.avatar || draft.profileImage || ''),
+      profileImage: String(draft.avatar || draft.profileImage || ''),
       profilePhotoChangeChance: clampNumber(draft.profilePhotoChangeChance, 0, 100, 5),
       coverPhotoChangeChance: clampNumber(draft.coverPhotoChangeChance, 0, 100, 5),
       calendarEvents: (draft.calendarEvents || []).map(normalizeCalendarEvent).filter(item => item.title || item.date),
@@ -148,14 +151,37 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange }
     if (close) onBack();
   }
 
+  function confirmDeleteCharacter() {
+    const name = draft?.name || character?.name || '이 캐릭터';
+    Alert.alert(
+      '캐릭터 삭제',
+      `${name} 캐릭터와 관련 개인 채팅방, 메시지, SNS 기록을 삭제할까요? 이 작업은 되돌릴 수 없습니다.`,
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '삭제',
+          style: 'destructive',
+          onPress: () => {
+            void onDelete?.(characterId);
+          }
+        }
+      ]
+    );
+  }
+
   function set<K extends keyof SNSGodCharacter>(key: K, value: SNSGodCharacter[K]) {
     setDraft(prev => prev ? { ...prev, [key]: value } : prev);
   }
 
-  async function chooseImage(key: 'avatar' | 'profileImage' | 'coverImage') {
+  async function chooseImage(key: 'avatar' | 'coverImage' | 'profileReferenceImage') {
     try {
       const image = await pickImageDataUri();
-      if (image) set(key, image);
+      if (!image) return;
+      if (key === 'avatar') {
+        setDraft(prev => prev ? { ...prev, avatar: image, profileImage: image } : prev);
+      } else {
+        set(key, image);
+      }
     } catch (error) {
       Alert.alert('사진 선택 실패', error instanceof Error ? error.message : String(error));
     }
@@ -173,14 +199,20 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange }
     }
   }
 
-  async function generateProfileImage(kind: 'profileImage' | 'coverImage') {
+  async function generateProfileImage(kind: 'avatar' | 'coverImage') {
     if (!draft) return;
     try {
-      const prompt = kind === 'profileImage'
+      const prompt = kind === 'avatar'
         ? String(draft.profileAvatarPrompt || `portrait profile photo, clear face, casual expression, messenger profile picture, ${draft.name}`)
         : String(draft.profileCoverPrompt || `quiet mood cover background for ${draft.name}, no people, no text`);
-      const image = await generateImageDataUri(state, prompt, draft);
-      set(kind, image);
+      const referenceImage = kind === 'avatar' ? String(draft.profileReferenceImage || '') : '';
+      const image = await generateImageDataUri(state, prompt, draft, { referenceImage, kind: kind === 'avatar' ? 'profile' : 'cover' });
+      const historyItem = { id: makeId('profile_image'), image, prompt, createdAt: Date.now(), kind: kind === 'avatar' ? 'profile' as const : 'cover' as const };
+      if (kind === 'avatar') {
+        setDraft(prev => prev ? { ...prev, avatar: image, profileImage: image, profileImageHistory: [historyItem, ...(prev.profileImageHistory || [])].slice(0, 60) } : prev);
+      } else {
+        setDraft(prev => prev ? { ...prev, coverImage: image, profileImageHistory: [historyItem, ...(prev.profileImageHistory || [])].slice(0, 60) } : prev);
+      }
     } catch (error) {
       Alert.alert('AI 이미지 생성 실패', error instanceof Error ? error.message : String(error));
     }
@@ -295,8 +327,19 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange }
           <Section title="프로필 / 상태 / 이미지">
             <Field label="상태 메시지" value={String(draft.statusMessage || '')} onChangeText={value => set('statusMessage', value)} />
             <Field label="프로필 소개" value={String(draft.profileMessage || '')} onChangeText={value => set('profileMessage', value)} multiline help="캐릭터 사진을 눌렀을 때 보이는 프로필 문구입니다." />
-            <ImageField label="아바타/목록 사진" value={draft.avatar} onChoose={() => chooseImage('avatar')} onClear={() => set('avatar', '')} />
-            <ImageField label="프로필 큰 사진" value={draft.profileImage} onChoose={() => chooseImage('profileImage')} onClear={() => set('profileImage', '')} onGenerate={() => generateProfileImage('profileImage')} />
+            <ImageField
+              label="프로필/목록 사진"
+              value={draft.avatar || draft.profileImage}
+              onChoose={() => chooseImage('avatar')}
+              onClear={() => setDraft(prev => prev ? { ...prev, avatar: '', profileImage: '' } : prev)}
+              onGenerate={() => generateProfileImage('avatar')}
+            />
+            <ImageField
+              label="프로필 생성 레퍼런스 원본"
+              value={String(draft.profileReferenceImage || '')}
+              onChoose={() => chooseImage('profileReferenceImage')}
+              onClear={() => set('profileReferenceImage', '')}
+            />
             <ImageField label="프로필 배경 사진" value={draft.coverImage} onChoose={() => chooseImage('coverImage')} onClear={() => set('coverImage', '')} onGenerate={() => generateProfileImage('coverImage')} wide />
             <Field label="프로필사진 프롬프트" value={String(draft.profileAvatarPrompt || '')} onChangeText={value => set('profileAvatarPrompt', value)} multiline />
             <Field label="배경사진 프롬프트" value={String(draft.profileCoverPrompt || '')} onChangeText={value => set('profileCoverPrompt', value)} multiline />
@@ -394,15 +437,21 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange }
           </Section>
         ) : null}
 
-        <Pressable onPress={() => save(true)} style={styles.primary}><Text style={styles.primaryText}>캐릭터 저장</Text></Pressable>
+        <View style={styles.footerActions}>
+          <Pressable onPress={confirmDeleteCharacter} style={styles.deletePrimary}><Text style={styles.deletePrimaryText}>삭제</Text></Pressable>
+          <Pressable onPress={() => save(true)} style={styles.primaryFooter}><Text style={styles.primaryText}>캐릭터 저장</Text></Pressable>
+        </View>
       </ScrollView>
     </View>
   );
 }
 
 function normalizeDraft(character: SNSGodCharacter): SNSGodCharacter {
+  const unifiedProfileImage = character.avatar || character.profileImage || '';
   return {
     ...character,
+    avatar: unifiedProfileImage,
+    profileImage: unifiedProfileImage,
     language: String(character.language || 'inherit'),
     color: String(character.color || '#8bd3dd'),
     messageStyle: character.messageStyle || 'balanced',
@@ -619,6 +668,10 @@ const styles = StyleSheet.create({
   danger: { minHeight: 34, paddingHorizontal: 12, borderRadius: 7, borderWidth: 1, borderColor: '#f2a9a9', alignItems: 'center', justifyContent: 'center' },
   dangerText: { color: colors.danger, fontWeight: '900' },
   primary: { minHeight: 48, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  footerActions: { flexDirection: 'row', gap: 10 },
+  primaryFooter: { flex: 2, minHeight: 48, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  deletePrimary: { flex: 1, minHeight: 48, borderRadius: 8, borderWidth: 1, borderColor: '#e07f7f', backgroundColor: '#fff1f1', alignItems: 'center', justifyContent: 'center' },
+  deletePrimaryText: { color: colors.danger, fontWeight: '900', fontSize: 16 },
   primaryText: { color: '#241a00', fontWeight: '900', fontSize: 16 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg, padding: 24 },
   emptyText: { color: colors.text, fontWeight: '900', marginBottom: 14 }

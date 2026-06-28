@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
 import { SNSDmThread, SNSGodCharacter, SNSGodState, SNSPost } from '../types';
-import { generateSNSCommentReply, generateSNSPost, generateSnsDmReply } from '../logic/sns';
+import { generateSNSPost, generateSnsDmReply, snsOptionsFor } from '../logic/sns';
 import { makeId } from '../logic/ids';
 import { pickImageDataUri } from '../logic/media';
 
@@ -14,24 +14,92 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
   onOpenNotifications: () => void;
   onChange: (next: SNSGodState) => Promise<void> | void;
 }) {
-  const [selectedCharacterId, setSelectedCharacterId] = useState(state.characters[0]?.id || '');
+  const availableCharacters = state.characters.filter(character => character.randomTemporary !== true);
+  const [selectedCharacterId, setSelectedCharacterId] = useState(availableCharacters[0]?.id || '');
   const [loading, setLoading] = useState(false);
   const [imageData, setImageData] = useState('');
   const [activeDmId, setActiveDmId] = useState('');
   const [dmText, setDmText] = useState('');
   const [showGenerator, setShowGenerator] = useState(false);
   const [showDmList, setShowDmList] = useState(false);
-  const selectedCharacter = state.characters.find(character => character.id === selectedCharacterId) || state.characters[0];
-  const posts = (state.snsPosts || []).filter(post => post.platform === platform && (!selectedCharacter?.id || post.characterId === selectedCharacter.id));
-  const dmThreads = (state.snsDmThreads || []).filter(thread => !selectedCharacter?.id || thread.characterId === selectedCharacter.id);
+  const selectedCharacter = availableCharacters.find(character => character.id === selectedCharacterId) || availableCharacters[0];
+  const activeSnsOptions = snsOptionsFor(state, platform, selectedCharacter);
+  const [snsAutoEnabled, setSnsAutoEnabled] = useState(selectedCharacter?.snsAutoEnabled !== false);
+  const [draftAnonymous, setDraftAnonymous] = useState(activeSnsOptions.anonymous === true);
+  const [draftNsfw, setDraftNsfw] = useState(activeSnsOptions.nsfw === true);
+  const [draftTextOnly, setDraftTextOnly] = useState(activeSnsOptions.textOnly === true);
+  const [draftNoDM, setDraftNoDM] = useState(activeSnsOptions.noDM === true);
+  const [draftThirdPartyDM, setDraftThirdPartyDM] = useState(activeSnsOptions.thirdPartyDM === true);
+  const [draftAutoComments, setDraftAutoComments] = useState(activeSnsOptions.autoComments !== false);
+  const [draftAutoImage, setDraftAutoImage] = useState(activeSnsOptions.autoImage !== false);
+  const [draftCommentQty, setDraftCommentQty] = useState(String(activeSnsOptions.commentQty || '2-4'));
+  const [draftSubject, setDraftSubject] = useState(String(activeSnsOptions.subject || ''));
+  const [draftMood, setDraftMood] = useState(String(activeSnsOptions.mood || ''));
+  const posts = selectedCharacter?.id ? (state.snsPosts || []).filter(post => post.platform === platform && post.characterId === selectedCharacter.id) : [];
+  const dmThreads = selectedCharacter?.id ? (state.snsDmThreads || []).filter(thread => thread.characterId === selectedCharacter.id) : [];
   const unreadNotifications = (state.notifications || []).filter(item => !item.read).length;
-  const snsOptions = state.config.sns || {};
+
+  useEffect(() => {
+    if (availableCharacters.length && !availableCharacters.some(character => character.id === selectedCharacterId)) {
+      setSelectedCharacterId(availableCharacters[0].id);
+    }
+  }, [availableCharacters, selectedCharacterId]);
+
+  useEffect(() => {
+    const options = snsOptionsFor(state, platform, selectedCharacter);
+    setSnsAutoEnabled(selectedCharacter?.snsAutoEnabled !== false);
+    setDraftAnonymous(options.anonymous === true);
+    setDraftNsfw(options.nsfw === true);
+    setDraftTextOnly(options.textOnly === true);
+    setDraftNoDM(options.noDM === true);
+    setDraftThirdPartyDM(options.thirdPartyDM === true);
+    setDraftAutoComments(options.autoComments !== false);
+    setDraftAutoImage(options.autoImage !== false);
+    setDraftCommentQty(String(options.commentQty || '2-4'));
+    setDraftSubject(String(options.subject || ''));
+    setDraftMood(String(options.mood || ''));
+  }, [platform, selectedCharacter?.id, selectedCharacter?.snsOptions, selectedCharacter?.snsAutoEnabled, state.config.sns]);
+
+  function stateWithDraftOptions(): SNSGodState {
+    const nextOptions = {
+      anonymous: draftAnonymous,
+      nsfw: draftNsfw,
+      textOnly: draftTextOnly,
+      noDM: draftNoDM,
+      thirdPartyDM: draftThirdPartyDM,
+      autoComments: draftAutoComments,
+      commentQty: draftCommentQty || '2-4',
+      subject: draftSubject,
+      mood: draftMood,
+      autoImage: draftAutoImage
+    };
+    return {
+      ...state,
+      characters: selectedCharacter
+        ? state.characters.map(character => character.id === selectedCharacter.id ? {
+          ...character,
+          snsAutoEnabled,
+          snsOptions: {
+            ...(character.snsOptions || {}),
+            [platform]: nextOptions
+          }
+        } : character)
+        : state.characters
+    };
+  }
+
+  async function saveSnsOptions() {
+    await onChange(stateWithDraftOptions());
+    Alert.alert('저장 완료', `${selectedCharacter?.name || '선택 캐릭터'}의 ${platform === 'instagram' ? 'Instagram' : 'X'} SNS 옵션을 저장했습니다.`);
+  }
 
   async function generate() {
     if (!selectedCharacter || loading) return;
     setLoading(true);
     try {
-      const generated = await generateSNSPost(state, selectedCharacter, platform);
+      const draftState = stateWithDraftOptions();
+      const draftCharacter = draftState.characters.find(character => character.id === selectedCharacter.id) || selectedCharacter;
+      const generated = await generateSNSPost(draftState, draftCharacter, platform);
       const next = imageData
         ? { ...generated, snsPosts: generated.snsPosts.map((post, index) => index === 0 ? { ...post, image: imageData } : post) }
         : generated;
@@ -91,24 +159,6 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
     });
   }
 
-  async function addAiComment(post: SNSPost, content: string) {
-    const trimmed = content.trim() || '이 게시물에 어울리는 자연스러운 댓글';
-    setLoading(true);
-    try {
-      const result = await generateSNSCommentReply(state, post, trimmed);
-      const profile = state.config.apiProfiles[state.config.apiType] || {};
-      await onChange({
-        ...state,
-        config: { ...state.config, apiProfiles: { ...state.config.apiProfiles, [state.config.apiType]: { ...profile, apiKeyIndex: result.keyIndex } } },
-        snsPosts: (state.snsPosts || []).map(item => item.id === post.id ? { ...item, comments: [...(item.comments || []), result.comment], replies: (item.replies || item.comments?.length || 0) + 1 } : item)
-      });
-    } catch (error) {
-      Alert.alert('AI 댓글 생성 실패', error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoading(false);
-    }
-  }
-
   async function sendDmReply(ai: boolean) {
     const thread = (state.snsDmThreads || []).find(item => item.id === activeDmId);
     const trimmed = dmText.trim();
@@ -150,7 +200,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
       <View style={[styles.header, platform === 'twitter' && styles.xHeader]}>
         <View style={styles.headerTitle}>
           <Text style={[styles.title, platform === 'twitter' && styles.xTitle]}>{platform === 'instagram' ? 'Instagram' : 'X'}</Text>
-          <Text style={[styles.subtitle, platform === 'twitter' && styles.xSubtitle]}>{selectedCharacter?.name || '전체'} · {posts.length} posts{snsOptions.nsfw ? ' · NSFW 뒷계' : ''}</Text>
+          <Text style={[styles.subtitle, platform === 'twitter' && styles.xSubtitle]}>{selectedCharacter?.name || '전체'} · {posts.length} posts{activeSnsOptions.nsfw ? ' · NSFW 뒷계' : ''}</Text>
         </View>
         <View style={styles.headerActions}>
           <Pressable accessibilityLabel="SNS 생성" onPress={() => setShowGenerator(value => !value)} style={[styles.actionPill, showGenerator && styles.actionPillActive]}>
@@ -173,7 +223,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
       <View style={[styles.characterRail, platform === 'twitter' && styles.xCharacterRail]}>
         <FlatList
           horizontal
-          data={state.characters}
+          data={availableCharacters}
           keyExtractor={item => item.id}
           contentContainerStyle={styles.characterRailContent}
           renderItem={({ item }) => <CharacterChip character={item} active={item.id === selectedCharacterId} platform={platform} onPress={() => setSelectedCharacterId(item.id)} />}
@@ -181,18 +231,41 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
       </View>
 
       {showGenerator ? <View style={[styles.generator, platform === 'twitter' && styles.xGenerator]}>
-        <Text style={[styles.generatorTitle, platform === 'twitter' && styles.xPanelText]}>SNS 생성</Text>
-        <Text style={[styles.generatorSub, platform === 'twitter' && styles.xSubtitle]}>{selectedCharacter?.name || '캐릭터'} · {platform === 'instagram' ? 'Instagram' : 'X'} · 댓글 {snsOptions.commentQty || '2-4'} · {snsOptions.autoComments === false ? 'AI 댓글 끔' : 'AI 댓글 자동'} · {snsOptions.anonymous ? '익명계' : '공개계'}{snsOptions.nsfw ? ' · NSFW 뒷계' : ''}</Text>
+        <Text style={[styles.generatorTitle, platform === 'twitter' && styles.xPanelText]}>{selectedCharacter?.name || '캐릭터'} SNS 설정</Text>
+        <Text style={[styles.generatorSub, platform === 'twitter' && styles.xSubtitle]}>{platform === 'instagram' ? 'Instagram 전용' : 'X 전용'} · 댓글 {draftCommentQty || '2-4'} · {draftAutoComments ? 'AI 댓글 자동' : 'AI 댓글 끔'} · {draftAnonymous ? '익명계' : '공개계'}{draftNsfw ? ' · NSFW 뒷계' : ''}</Text>
+        <View style={styles.settingGrid}>
+          <TogglePill label="이 캐릭터 SNS 자동 생성 허용" value={snsAutoEnabled} onPress={() => setSnsAutoEnabled(value => !value)} />
+          <TogglePill label="익명계" value={draftAnonymous} onPress={() => setDraftAnonymous(value => !value)} />
+          <TogglePill label="NSFW 뒷계" value={draftNsfw} onPress={() => setDraftNsfw(value => !value)} />
+          <TogglePill label="글만" value={draftTextOnly} onPress={() => setDraftTextOnly(value => !value)} />
+          <TogglePill label="DM 끄기" value={draftNoDM} onPress={() => setDraftNoDM(value => !value)} />
+          <TogglePill label="제3자 DM 허용" value={draftThirdPartyDM} onPress={() => setDraftThirdPartyDM(value => !value)} />
+          <TogglePill label="AI 댓글 자동 생성" value={draftAutoComments} onPress={() => setDraftAutoComments(value => !value)} />
+          <TogglePill label="자동 이미지" value={draftAutoImage} onPress={() => setDraftAutoImage(value => !value)} />
+        </View>
+        <View style={styles.twoCols}>
+          <View style={styles.col}>
+            <Text style={[styles.fieldLabel, platform === 'twitter' && styles.xSubtitle]}>생성 댓글 수</Text>
+            <TextInput value={draftCommentQty} onChangeText={setDraftCommentQty} style={[styles.fieldInput, platform === 'twitter' && styles.xInput]} placeholder="2-4" placeholderTextColor="#8c8c8c" />
+          </View>
+          <View style={styles.col}>
+            <Text style={[styles.fieldLabel, platform === 'twitter' && styles.xSubtitle]}>무드</Text>
+            <TextInput value={draftMood} onChangeText={setDraftMood} style={[styles.fieldInput, platform === 'twitter' && styles.xInput]} placeholder="그날 기분에 따라" placeholderTextColor="#8c8c8c" />
+          </View>
+        </View>
+        <Text style={[styles.fieldLabel, platform === 'twitter' && styles.xSubtitle]}>소재</Text>
+        <TextInput value={draftSubject} onChangeText={setDraftSubject} style={[styles.fieldInput, styles.subjectInput, platform === 'twitter' && styles.xInput]} placeholder="일상 잡담, 짧은 트윗, 방금 대화 등 원하는 방향" placeholderTextColor="#8c8c8c" multiline />
         <View style={styles.optionBadges}>
-          <Text style={styles.optionBadge}>{snsOptions.textOnly ? '글만' : snsOptions.autoImage === false ? '이미지 끔' : '이미지 가능'}</Text>
-          <Text style={styles.optionBadge}>{snsOptions.noDM ? 'DM 끔' : snsOptions.thirdPartyDM ? '제3자 DM 허용' : 'DM 가능'}</Text>
-          {snsOptions.hybridNsfwSplit !== false ? <Text style={styles.optionBadge}>하이브리드 분리</Text> : null}
+          <Text style={styles.optionBadge}>{draftTextOnly ? '글만' : draftAutoImage ? '이미지 가능' : '이미지 끔'}</Text>
+          <Text style={styles.optionBadge}>{draftNoDM ? 'DM 끔' : draftThirdPartyDM ? '제3자 DM 허용' : 'DM 가능'}</Text>
+          <Text style={styles.optionBadge}>{platform === 'instagram' ? 'Instagram 별도 설정' : 'X 별도 설정'}</Text>
         </View>
         {imageData ? <Image source={{ uri: imageData }} style={styles.pendingImage} /> : null}
         <View style={styles.generatorActions}>
           <Pressable onPress={choosePostImage} style={styles.secondary}><Text style={styles.secondaryText}>{imageData ? '사진 변경' : '사진 첨부'}</Text></Pressable>
           {imageData ? <Pressable onPress={clearPostImage} style={styles.secondary}><Text style={styles.secondaryText}>첨부 해제</Text></Pressable> : null}
         </View>
+        <Pressable onPress={saveSnsOptions} style={styles.secondary}><Text style={styles.secondaryText}>옵션 저장</Text></Pressable>
         <Pressable onPress={generate} style={styles.primary} disabled={loading || !selectedCharacter}>
           {loading ? <ActivityIndicator color="#241a00" /> : <Text style={styles.primaryText}>SNS 생성</Text>}
         </Pressable>
@@ -216,9 +289,17 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
         keyExtractor={item => item.id}
         contentContainerStyle={[styles.feed, platform === 'instagram' && styles.instagramFeed, platform === 'twitter' && styles.twitterFeed]}
         ListEmptyComponent={<Text style={styles.emptyText}>아직 {selectedCharacter?.name || '이 캐릭터'}의 {platform === 'instagram' ? 'Instagram' : 'Twitter/X'} 게시물이 없습니다.</Text>}
-        renderItem={({ item }) => <PostCard platform={platform} post={item} character={state.characters.find(character => character.id === item.characterId)} onLike={() => likePost(item.id)} onDelete={() => deletePost(item.id)} onComment={content => addComment(item.id, content)} onAiComment={content => addAiComment(item, content)} />}
+        renderItem={({ item }) => <PostCard platform={platform} post={item} character={state.characters.find(character => character.id === item.characterId)} onLike={() => likePost(item.id)} onDelete={() => deletePost(item.id)} onComment={content => addComment(item.id, content)} />}
       />
     </View>
+  );
+}
+
+function TogglePill({ label, value, onPress }: { label: string; value: boolean; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} style={[styles.togglePill, value && styles.togglePillOn]}>
+      <Text style={[styles.toggleText, value && styles.toggleTextOn]}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -280,7 +361,7 @@ function DmModal({ thread, value, onChangeText, onClose, onSend, onAiSend, loadi
   );
 }
 
-function PostCard({ platform, post, character, onLike, onDelete, onComment, onAiComment }: { platform: SNSPost['platform']; post: SNSPost; character?: SNSGodCharacter; onLike: () => void; onDelete: () => void; onComment: (content: string) => void; onAiComment: (content: string) => void }) {
+function PostCard({ platform, post, character, onLike, onDelete, onComment }: { platform: SNSPost['platform']; post: SNSPost; character?: SNSGodCharacter; onLike: () => void; onDelete: () => void; onComment: (content: string) => void }) {
   const [comment, setComment] = useState('');
   function submitComment() {
     onComment(comment);
@@ -326,14 +407,13 @@ function PostCard({ platform, post, character, onLike, onDelete, onComment, onAi
       </View>
       {(post.comments || []).slice(-5).map(item => (
         <View key={item.id} style={styles.commentRow}>
-          <Text style={styles.commentAuthor}>{item.author}{item.ai ? ' · AI' : ''}</Text>
+          <Text style={styles.commentAuthor}>{item.author}</Text>
           <Text style={styles.commentText}>{item.content}</Text>
         </View>
       ))}
       <View style={[styles.commentComposer, platform === 'twitter' && styles.xCommentComposer]}>
         <TextInput value={comment} onChangeText={setComment} style={styles.commentInput} placeholder="댓글 달기" placeholderTextColor="#aaa" />
         <Pressable onPress={submitComment} style={styles.commentButton}><Text style={styles.commentButtonText}>게시</Text></Pressable>
-        <Pressable onPress={() => { onAiComment(comment); setComment(''); }} style={styles.commentButtonAlt}><Text style={styles.commentButtonAltText}>AI</Text></Pressable>
       </View>
     </View>
   );
@@ -385,6 +465,17 @@ const styles = StyleSheet.create({
   generatorSub: { marginTop: 3, color: colors.sub, fontSize: 12 },
   optionBadges: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
   optionBadge: { paddingHorizontal: 9, paddingVertical: 5, borderRadius: 999, backgroundColor: '#eef4ff', color: '#305170', fontSize: 11, fontWeight: '900', overflow: 'hidden' },
+  settingGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  togglePill: { minHeight: 34, paddingHorizontal: 10, borderRadius: 17, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
+  togglePillOn: { backgroundColor: colors.accent, borderColor: '#c4a842' },
+  toggleText: { color: colors.sub, fontWeight: '900', fontSize: 12 },
+  toggleTextOn: { color: '#241a00' },
+  twoCols: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  col: { flex: 1 },
+  fieldLabel: { marginTop: 10, marginBottom: 5, color: colors.sub, fontSize: 12, fontWeight: '900' },
+  fieldInput: { minHeight: 40, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', paddingHorizontal: 10, color: colors.text },
+  subjectInput: { minHeight: 64, paddingVertical: 9 },
+  xInput: { backgroundColor: '#000', borderColor: '#2f3336', color: '#e7e9ea' },
   generatorActions: { flexDirection: 'row', gap: 8 },
   primary: { marginTop: 12, minHeight: 42, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
   primaryText: { color: '#241a00', fontWeight: '900' },
@@ -444,9 +535,7 @@ const styles = StyleSheet.create({
   xCommentComposer: { borderTopColor: '#2f3336', backgroundColor: '#000000' },
   commentInput: { flex: 1, minHeight: 38, borderRadius: 19, paddingHorizontal: 12, backgroundColor: '#f7f5ef', color: colors.text },
   commentButton: { minWidth: 52, minHeight: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
-  commentButtonAlt: { minWidth: 44, minHeight: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: '#111' },
   commentButtonText: { color: '#241a00', fontWeight: '900' },
-  commentButtonAltText: { color: '#fff', fontWeight: '900' },
   modal: { ...StyleSheet.absoluteFillObject, zIndex: 20, backgroundColor: 'rgba(0,0,0,0.38)', justifyContent: 'flex-end' },
   dmPanel: { maxHeight: '82%', backgroundColor: '#f7f2e9', borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: 'hidden' },
   dmPanelHeader: { minHeight: 58, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },

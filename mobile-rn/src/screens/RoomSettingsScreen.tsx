@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors } from '../theme';
 import { SNSGodRoom, SNSGodState } from '../types';
-import { findCharacter, findRoom, updateRoom } from '../logic/stateHelpers';
+import { deleteRoom, findCharacter, findRoom, updateRoom } from '../logic/stateHelpers';
+import { isRandomRoom, removeRandomChatRoom } from '../logic/randomChat';
 
 export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
   state: SNSGodState;
@@ -38,6 +39,21 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
     setDraft(prev => prev ? { ...prev, [key]: value } : prev);
   }
 
+  function confirmDelete() {
+    Alert.alert('채팅방 삭제', '이 채팅방의 메시지와 안읽음 기록을 삭제할까요?', [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '삭제',
+        style: 'destructive',
+        onPress: async () => {
+          const next = isRandomRoom(state, room) ? removeRandomChatRoom(state, roomId) : deleteRoom(state, roomId);
+          await onChange(next);
+          onBack();
+        }
+      }
+    ]);
+  }
+
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
@@ -55,6 +71,7 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
           <Field label="추가 방 프롬프트" value={String(draft.roomPrompt || '')} onChangeText={value => set('roomPrompt', value)} multiline />
         </View>
         <Pressable onPress={save} style={styles.primary}><Text style={styles.primaryText}>방 설정 저장</Text></Pressable>
+        <Pressable onPress={confirmDelete} style={styles.danger}><Text style={styles.dangerText}>채팅방 삭제</Text></Pressable>
       </ScrollView>
     </View>
   );
@@ -88,6 +105,8 @@ const styles = StyleSheet.create({
   help: { color: colors.sub, fontSize: 12, lineHeight: 18 },
   primary: { minHeight: 48, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
   primaryText: { color: '#241a00', fontWeight: '900', fontSize: 16 },
+  danger: { minHeight: 48, borderRadius: 8, borderWidth: 1, borderColor: '#f0b7b7', backgroundColor: '#fff1f1', alignItems: 'center', justifyContent: 'center' },
+  dangerText: { color: colors.danger, fontWeight: '900', fontSize: 16 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg, padding: 24 },
   emptyText: { color: colors.text, fontWeight: '900', marginBottom: 14 }
 });

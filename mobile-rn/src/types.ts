@@ -6,6 +6,16 @@ export type ApiProfile = {
   apiEndpoint?: string;
   apiModel?: string;
   staticModel?: string;
+  serviceAccountJson?: string;
+  location?: string;
+  serviceTier?: 'auto' | 'standard' | 'flex' | string;
+  tokenBridgeUrl?: string;
+  corsProxyUrl?: string;
+  proxyAccessToken?: string;
+  directMode?: boolean;
+  fetchModels?: boolean;
+  thinkingLevel?: 'off' | 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH' | string;
+  thinkingBudgetTokens?: number;
   maxTokens?: number;
   temperature?: number;
   contextMessageLimit?: number;
@@ -16,10 +26,13 @@ export type ApiProfile = {
 
 export type ImageGenerationConfig = {
   enabled?: boolean;
-  provider?: 'openai' | 'custom';
+  provider?: 'openai' | 'custom' | 'grok-local';
   apiKey?: string;
   apiEndpoint?: string;
   apiModel?: string;
+  grokBaseUrl?: string;
+  grokResolution?: string;
+  grokAspectRatio?: string;
   size?: string;
   quality?: string;
   promptPrefix?: string;
@@ -60,10 +73,9 @@ export type SNSGodConfig = {
   characterPhoneCallEnabled?: boolean;
   imageGeneration?: ImageGenerationConfig;
   sns?: {
-    platform?: 'instagram' | 'twitter' | 'hybrid';
+    platform?: 'instagram' | 'twitter';
     anonymous?: boolean;
     nsfw?: boolean;
-    hybridNsfwSplit?: boolean;
     textOnly?: boolean;
     noDM?: boolean;
     thirdPartyDM?: boolean;
@@ -72,8 +84,33 @@ export type SNSGodConfig = {
     subject?: string;
     mood?: string;
     autoImage?: boolean;
+    platformOptions?: Partial<Record<'instagram' | 'twitter', {
+      anonymous?: boolean;
+      nsfw?: boolean;
+      textOnly?: boolean;
+      noDM?: boolean;
+      thirdPartyDM?: boolean;
+      autoComments?: boolean;
+      commentQty?: string;
+      subject?: string;
+      mood?: string;
+      autoImage?: boolean;
+    }>>;
   };
   [key: string]: unknown;
+};
+
+export type SnsPlatformOptions = {
+  anonymous?: boolean;
+  nsfw?: boolean;
+  textOnly?: boolean;
+  noDM?: boolean;
+  thirdPartyDM?: boolean;
+  autoComments?: boolean;
+  commentQty?: string;
+  subject?: string;
+  mood?: string;
+  autoImage?: boolean;
 };
 
 export type SNSGodCharacter = {
@@ -104,11 +141,17 @@ export type SNSGodCharacter = {
   profileMessage?: string;
   profileImage?: string;
   coverImage?: string;
+  profileReferenceImage?: string;
+  profileImageHistory?: { id: string; image: string; prompt?: string; createdAt: number; kind?: 'profile' | 'cover' }[];
+  lastProfilePhotoChangeAt?: number;
+  lastCoverPhotoChangeAt?: number;
   profileAvatarPrompt?: string;
   profileCoverPrompt?: string;
   calendarEvents?: CalendarEvent[];
   memories?: string[];
   stickers?: Sticker[];
+  snsAutoEnabled?: boolean;
+  snsOptions?: Partial<Record<'instagram' | 'twitter', SnsPlatformOptions>>;
   enabled?: boolean;
   proactiveEnabled?: boolean;
   timeContextEnabled?: boolean;
@@ -127,6 +170,13 @@ export type SNSGodRoom = {
   roomPrompt?: string;
   pinned?: boolean;
   [key: string]: unknown;
+};
+
+export type RandomChatRoom = SNSGodRoom & {
+  type: 'random';
+  character: SNSGodCharacter;
+  conceptSeed?: string;
+  promoted?: boolean;
 };
 
 export type SNSGodMessage = {
@@ -235,6 +285,8 @@ export type SNSGodState = {
   loreFolders?: unknown[];
   userStickers?: Sticker[];
   notifications?: NotificationItem[];
+  randomChats?: RandomChatRoom[];
+  randomCharacters?: SNSGodCharacter[];
   selectedRoomId?: string;
   __importedAt?: number;
   __savedAt?: number;

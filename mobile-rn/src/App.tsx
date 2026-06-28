@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, BackHandler, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, BackHandler, DevSettings, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { ChatListScreen } from './screens/ChatListScreen';
 import { ChatRoomScreen } from './screens/ChatRoomScreen';
 import { CharacterSettingsScreen } from './screens/CharacterSettingsScreen';
@@ -19,12 +19,16 @@ import { GroupChatRoomScreen } from './screens/GroupChatRoomScreen';
 import { GroupRoomSettingsScreen } from './screens/GroupRoomSettingsScreen';
 import { PromptSettingsScreen } from './screens/PromptSettingsScreen';
 import { GalleryScreen } from './screens/GalleryScreen';
+import { DebugScreen } from './screens/DebugScreen';
 import { BottomNav, BottomTab } from './components/BottomNav';
 import { MenuHubScreen } from './screens/MenuHubScreen';
 import { loadState, saveState } from './storage/persist';
 import { colors } from './theme';
 import { SNSGodCharacter, SNSGodState, SNSPost } from './types';
 import { runAutomationTick } from './logic/automation';
+import { appendDebugLog } from './logic/debugLog';
+import { findRandomChat, removeRandomChatRoom } from './logic/randomChat';
+import { deleteCharacter } from './logic/stateHelpers';
 
 type Route =
   | { name: 'chatList' }
@@ -43,7 +47,9 @@ type Route =
   | { name: 'randomHub' }
   | { name: 'etc' }
   | { name: 'gallery' }
+  | { name: 'debug' }
   | { name: 'random' }
+  | { name: 'randomChatRoom'; roomId: string }
   | { name: 'sumgod' }
   | { name: 'profile'; characterId: string; returnRoomId?: string }
   | { name: 'call'; characterId: string; returnRoute?: Route }
@@ -65,6 +71,7 @@ export default function App() {
       if (!options?.replace && !sameRoute(current, next)) {
         routeHistoryRef.current = [...routeHistoryRef.current, current].slice(-60);
       }
+      void appendDebugLog('navigation', `${current.name} -> ${next.name}${options?.replace ? ' (replace)' : ''}`);
       return next;
     });
   }
@@ -74,7 +81,11 @@ export default function App() {
   }
 
   useEffect(() => {
-    loadState().then(setState).catch(error => {
+    loadState().then(next => {
+      setState(next);
+      void appendDebugLog('app', `state loaded: characters=${next.characters.length}, rooms=${Object.values(next.chatRooms).flat().length}`);
+    }).catch(error => {
+      void appendDebugLog('app', `start failed: ${String(error?.message || error)}`, 'error');
       Alert.alert('시작 실패', String(error?.message || error));
     });
   }, []);
@@ -97,13 +108,16 @@ export default function App() {
       const current = stateRef.current;
       if (!current || automationRunningRef.current) return;
       const profile = current.config.apiProfiles[current.config.apiType] || {};
-      const hasKey = Boolean(profile.apiKey || profile.apiKeys?.some(Boolean));
+      const hasKey = current.config.apiType === 'vertex'
+        ? Boolean(String(profile.serviceAccountJson || '').trim())
+        : Boolean(profile.apiKey || profile.apiKeys?.some(Boolean));
       if (!hasKey) return;
       automationRunningRef.current = true;
       try {
         const next = await runAutomationTick(current);
         if (next !== current) await commit(next);
-      } catch {
+      } catch (error) {
+        void appendDebugLog('automation', String(error instanceof Error ? error.message : error), 'warn');
         // Automation failures should not interrupt active use; manual chat still reports errors.
       } finally {
         automationRunningRef.current = false;
@@ -116,6 +130,19 @@ export default function App() {
     setState(next);
     stateRef.current = next;
     await saveState(next);
+    void appendDebugLog('storage', `state saved: characters=${next.characters.length}, notifications=${(next.notifications || []).length}`);
+  }
+
+  async function reloadSavedState() {
+    const next = await loadState();
+    setState(next);
+    stateRef.current = next;
+    void appendDebugLog('debug', `saved state reloaded: characters=${next.characters.length}`);
+  }
+
+  function reloadBundle() {
+    void appendDebugLog('debug', 'JS bundle reload requested');
+    DevSettings.reload();
   }
 
   function openCharacterChat(character: SNSGodCharacter) {
@@ -134,12 +161,29 @@ export default function App() {
 
   function activeBottomTab(): BottomTab {
     if (route.name === 'sns') return route.platform === 'twitter' ? 'twitter' : 'instagram';
-    if (route.name === 'random' || route.name === 'randomHub') return 'random';
-    if (route.name === 'etc' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'notifications') return 'etc';
+    if (route.name === 'random' || route.name === 'randomHub' || route.name === 'randomChatRoom') return 'random';
+    if (route.name === 'etc' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'notifications') return 'etc';
     return 'friends';
   }
 
-  const showBottomNav = route.name === 'chatList' || route.name === 'sns' || route.name === 'random' || route.name === 'etc' || route.name === 'sumgod' || route.name === 'gallery';
+  const showBottomNav = route.name === 'chatList' || route.name === 'sns' || route.name === 'random' || route.name === 'etc' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug';
+
+  async function leaveRandomRoom(roomId: string) {
+    const current = stateRef.current;
+    if (!current) return;
+    const next = removeRandomChatRoom(current, roomId);
+    await commit(next);
+    navigate({ name: 'random' }, { replace: true });
+  }
+
+  async function handleDeleteCharacter(characterId: string) {
+    const current = stateRef.current;
+    if (!current) return;
+    const next = deleteCharacter(current, characterId);
+    await commit(next);
+    routeHistoryRef.current = [];
+    navigate({ name: 'chatList' }, { replace: true });
+  }
 
   if (!state) {
     return (
@@ -181,11 +225,14 @@ export default function App() {
           onOpenGallery={() => navigate({ name: 'gallery' })}
           onOpenNotifications={() => navigate({ name: 'notifications' })}
           onOpenSettings={() => navigate({ name: 'settings' })}
+          onOpenDebug={() => navigate({ name: 'debug' })}
         />
       ) : route.name === 'gallery' ? (
         <GalleryScreen state={state} onBack={goBack} />
+      ) : route.name === 'debug' ? (
+        <DebugScreen onBack={goBack} onReloadState={reloadSavedState} onReloadBundle={reloadBundle} />
       ) : route.name === 'random' ? (
-        <RandomChatScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'chatRoom', roomId })} />
+        <RandomChatScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'randomChatRoom', roomId })} />
       ) : route.name === 'sumgod' ? (
         <SumGodScreen state={state} onChange={commit} onBack={goBack} />
       ) : route.name === 'notifications' ? (
@@ -195,7 +242,8 @@ export default function App() {
           onBack={goBack}
           onOpenRoom={roomId => {
             const isGroupRoom = (stateRef.current?.groupRooms || []).some(room => room.id === roomId);
-            navigate(isGroupRoom ? { name: 'groupChatRoom', roomId } : { name: 'chatRoom', roomId });
+            const isRandom = Boolean(stateRef.current && findRandomChat(stateRef.current, roomId));
+            navigate(isGroupRoom ? { name: 'groupChatRoom', roomId } : isRandom ? { name: 'randomChatRoom', roomId } : { name: 'chatRoom', roomId });
           }}
         />
       ) : route.name === 'profile' ? (
@@ -214,7 +262,7 @@ export default function App() {
       ) : route.name === 'groupRoomSettings' ? (
         <GroupRoomSettingsScreen state={state} roomId={route.roomId} onChange={commit} onBack={goBack} />
       ) : route.name === 'characterSettings' ? (
-        <CharacterSettingsScreen state={state} characterId={route.characterId} onChange={commit} onBack={goBack} />
+        <CharacterSettingsScreen state={state} characterId={route.characterId} onChange={commit} onBack={goBack} onDelete={handleDeleteCharacter} />
       ) : route.name === 'newRoom' ? (
         <NewRoomScreen state={state} onBack={goBack} onCreate={async (next, roomId) => { await commit(next); navigate({ name: 'chatRoom', roomId }, { replace: true }); }} />
       ) : route.name === 'newGroupRoom' ? (
@@ -238,6 +286,18 @@ export default function App() {
           onOpenRoomSettings={roomId => navigate({ name: 'roomSettings', roomId, returnRoomId: route.roomId })}
           onOpenCharacterSettings={characterId => navigate({ name: 'characterSettings', characterId, returnRoomId: route.roomId })}
           onOpenProfile={characterId => navigate({ name: 'profile', characterId, returnRoomId: route.roomId })}
+        />
+      ) : route.name === 'randomChatRoom' ? (
+        <ChatRoomScreen
+          state={state}
+          roomId={route.roomId}
+          onChange={commit}
+          onBack={() => navigate({ name: 'random' })}
+          onOpenRoomSettings={roomId => navigate({ name: 'roomSettings', roomId, returnRoomId: route.roomId })}
+          onOpenCharacterSettings={characterId => navigate({ name: 'characterSettings', characterId, returnRoomId: route.roomId })}
+          onOpenProfile={characterId => navigate({ name: 'profile', characterId, returnRoomId: route.roomId })}
+          randomMode
+          onLeaveRandomRoom={leaveRandomRoom}
         />
       ) : (
         <ChatListScreen

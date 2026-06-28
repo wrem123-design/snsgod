@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Alert, Image, NativeModules, PermissionsAndroid, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
@@ -9,9 +9,16 @@ import { normalizeLegacyState } from '../storage/importLegacy';
 import { callLLMText } from '../logic/api';
 import { makeId } from '../logic/ids';
 import { pickStickerDataUri } from '../logic/media';
+import { Avatar } from '../components/Avatar';
+import { fetchGrokAccounts, fetchGrokBilling, fetchGrokStatus, GrokBilling, GrokLocalAccount, GrokLocalStatus, grokBaseUrl, logoutGrokOAuth, selectGrokOAuth } from '../logic/grokLocal';
 
-const PROVIDERS: ApiProvider[] = ['gemini', 'openai', 'anthropic', 'custom'];
+const PROVIDERS: ApiProvider[] = ['vertex', 'gemini', 'openai', 'anthropic', 'custom'];
 const PROVIDER_PRESETS: Partial<Record<ApiProvider, { endpoint: string; model: string }[]>> = {
+  vertex: [
+    { endpoint: '', model: 'gemini-3-flash-preview' },
+    { endpoint: '', model: 'gemini-3.1-pro-preview' },
+    { endpoint: '', model: 'gemini-2.5-flash' }
+  ],
   gemini: [
     { endpoint: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-2.5-flash' },
     { endpoint: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-2.5-flash-lite' },
@@ -43,12 +50,58 @@ function getSettingsSection(value: unknown): SettingsSection {
   return SECTION_TABS.some(tab => tab.key === value) ? value as SettingsSection : 'user';
 }
 
+type SnsSettingsPlatform = 'instagram' | 'twitter';
+
+function snsPlatform(value: unknown): SnsSettingsPlatform {
+  return value === 'twitter' ? 'twitter' : 'instagram';
+}
+
+function snsPlatformOptions(config: SNSGodState['config']['sns'] | undefined, platform: SnsSettingsPlatform) {
+  const base = config || {};
+  return {
+    anonymous: base.anonymous === true,
+    nsfw: base.nsfw === true,
+    textOnly: base.textOnly === true,
+    noDM: base.noDM === true,
+    thirdPartyDM: base.thirdPartyDM === true,
+    autoComments: base.autoComments !== false,
+    commentQty: base.commentQty || '2-4',
+    subject: base.subject || '',
+    mood: base.mood || '',
+    autoImage: base.autoImage !== false,
+    ...(base.platformOptions?.[platform] || {})
+  };
+}
+
 const EVENT_PRESETS = [
   { title: "나's birthday", date: '1985-02-08', type: '유저 생일', prompt: "Event type: the user's birthday. The celebrant is 나. Write as the character directly to 나 in a private DM." },
   { title: '연인 기념일', date: 'MM-DD', type: '연인', prompt: 'Event type: relationship anniversary. The character remembers it naturally and may contact the user first.' },
   { title: '결혼기념일', date: 'MM-DD', type: '결혼기념일', prompt: 'Event type: wedding anniversary. Keep the tone intimate and in character.' },
   { title: '약속', date: 'YYYY-MM-DD', type: '약속', prompt: 'Event type: appointment. The character may mention or prepare for the plan.' }
 ];
+
+const TERMUX_GROK_COMMAND = "cd ~/grok && (pkill -f 'python app.py' 2>/dev/null || true) && FLASK_HOST=127.0.0.1 FLASK_PORT=5000 nohup python app.py > ~/grok/grok.log 2>&1 &";
+const TERMUX_GROK_LOGIN_COMMAND = 'cd ~/grok && hermes auth add xai-oauth';
+
+const TermuxBridge = NativeModules.TermuxBridge as undefined | {
+  openTermux: () => Promise<string>;
+  runCommand: (command: string) => Promise<string>;
+  copyText: (text: string) => Promise<string>;
+};
+
+async function requestTermuxRunPermission(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  const permission = 'com.termux.permission.RUN_COMMAND' as never;
+  const alreadyGranted = await PermissionsAndroid.check(permission);
+  if (alreadyGranted) return true;
+  const result = await PermissionsAndroid.request(permission, {
+    title: 'Termux 실행 권한',
+    message: 'SNSGod가 Termux에 Grok 서버 실행 명령을 전달하려면 이 권한이 필요합니다.',
+    buttonPositive: '허용',
+    buttonNegative: '거부'
+  });
+  return result === PermissionsAndroid.RESULTS.GRANTED;
+}
 
 export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpenPrompts, onOpenCharacterSettings }: {
   state: SNSGodState;
@@ -67,11 +120,21 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   }, [profile.apiKey, profile.apiKeys]);
   const [model, setModel] = useState(String(profile.apiModel || ''));
   const [endpoint, setEndpoint] = useState(String(profile.apiEndpoint || ''));
-  const [maxTokens, setMaxTokens] = useState(String(profile.maxTokens || 700));
+  const [maxTokens, setMaxTokens] = useState(String(profile.maxTokens || (provider === 'vertex' ? 4096 : 700)));
   const [temperature, setTemperature] = useState(String(profile.temperature || 0.85));
   const [apiKey1, setApiKey1] = useState(keySlots[0]);
   const [apiKey2, setApiKey2] = useState(keySlots[1]);
   const [apiKey3, setApiKey3] = useState(keySlots[2]);
+  const [vertexServiceAccountJson, setVertexServiceAccountJson] = useState(String(profile.serviceAccountJson || ''));
+  const [vertexLocation, setVertexLocation] = useState(String(profile.location || 'global'));
+  const [vertexServiceTier, setVertexServiceTier] = useState(String(profile.serviceTier || 'auto'));
+  const [vertexTokenBridgeUrl, setVertexTokenBridgeUrl] = useState(String(profile.tokenBridgeUrl || ''));
+  const [vertexCorsProxyUrl, setVertexCorsProxyUrl] = useState(String(profile.corsProxyUrl || ''));
+  const [vertexProxyAccessToken, setVertexProxyAccessToken] = useState(String(profile.proxyAccessToken || ''));
+  const [vertexDirectMode, setVertexDirectMode] = useState(profile.directMode === true);
+  const [vertexFetchModels, setVertexFetchModels] = useState(profile.fetchModels === true);
+  const [vertexThinkingLevel, setVertexThinkingLevel] = useState(String(profile.thinkingLevel || 'off'));
+  const [vertexThinkingBudget, setVertexThinkingBudget] = useState(String(profile.thinkingBudgetTokens || 0));
   const [userName, setUserName] = useState(state.config.userName || '나');
   const [roomName, setRoomName] = useState(state.config.roomName || '채팅');
   const [language, setLanguage] = useState(state.config.language || 'Korean');
@@ -88,27 +151,34 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   const imageConfig = state.config.imageGeneration || {};
   const snsConfig = state.config.sns || {};
   const [imageEnabled, setImageEnabled] = useState(imageConfig.enabled === true);
+  const [imageProvider, setImageProvider] = useState(String(imageConfig.provider || 'openai'));
   const [imageApiKey, setImageApiKey] = useState(String(imageConfig.apiKey || ''));
   const [imageEndpoint, setImageEndpoint] = useState(String(imageConfig.apiEndpoint || 'https://api.openai.com/v1/responses'));
+  const [grokLocalBaseUrl, setGrokLocalBaseUrl] = useState(grokBaseUrl(imageConfig));
   const [imageModel, setImageModel] = useState(String(imageConfig.apiModel || 'gpt-5'));
   const [imageSize, setImageSize] = useState(String(imageConfig.size || '1024x1024'));
   const [imageQuality, setImageQuality] = useState(String(imageConfig.quality || 'auto'));
+  const [grokResolution, setGrokResolution] = useState(String(imageConfig.grokResolution || '1k'));
+  const [grokAspectRatio, setGrokAspectRatio] = useState(String(imageConfig.grokAspectRatio || 'auto'));
   const [imagePrefix, setImagePrefix] = useState(String(imageConfig.promptPrefix || ''));
   const [imageNegative, setImageNegative] = useState(String(imageConfig.negativePrompt || ''));
   const [imageNsfw, setImageNsfw] = useState(imageConfig.nsfw === true);
   const [imageIllustration, setImageIllustration] = useState(imageConfig.illustrationMode === true);
-  const [snsDefaultPlatform, setSnsDefaultPlatform] = useState(String(snsConfig.platform || 'hybrid'));
-  const [snsCommentQty, setSnsCommentQty] = useState(String(snsConfig.commentQty || '2-4'));
-  const [snsSubject, setSnsSubject] = useState(String(snsConfig.subject || ''));
-  const [snsMood, setSnsMood] = useState(String(snsConfig.mood || ''));
-  const [snsAnonymous, setSnsAnonymous] = useState(snsConfig.anonymous === true);
-  const [snsNsfw, setSnsNsfw] = useState(snsConfig.nsfw === true);
-  const [snsHybridNsfwSplit, setSnsHybridNsfwSplit] = useState(snsConfig.hybridNsfwSplit !== false);
-  const [snsTextOnly, setSnsTextOnly] = useState(snsConfig.textOnly === true);
-  const [snsNoDM, setSnsNoDM] = useState(snsConfig.noDM === true);
-  const [snsThirdPartyDM, setSnsThirdPartyDM] = useState(snsConfig.thirdPartyDM === true);
-  const [snsAutoComments, setSnsAutoComments] = useState(snsConfig.autoComments !== false);
-  const [snsAutoImage, setSnsAutoImage] = useState(snsConfig.autoImage !== false);
+  const [grokStatus, setGrokStatus] = useState<GrokLocalStatus | undefined>();
+  const [grokBilling, setGrokBilling] = useState<GrokBilling | undefined>();
+  const [grokAccounts, setGrokAccounts] = useState<GrokLocalAccount[]>([]);
+  const [snsDefaultPlatform, setSnsDefaultPlatform] = useState<SnsSettingsPlatform>(() => snsPlatform(snsConfig.platform));
+  const initialSnsOptions = useMemo(() => snsPlatformOptions(snsConfig, snsPlatform(snsConfig.platform)), [snsConfig]);
+  const [snsCommentQty, setSnsCommentQty] = useState(String(initialSnsOptions.commentQty || '2-4'));
+  const [snsSubject, setSnsSubject] = useState(String(initialSnsOptions.subject || ''));
+  const [snsMood, setSnsMood] = useState(String(initialSnsOptions.mood || ''));
+  const [snsAnonymous, setSnsAnonymous] = useState(initialSnsOptions.anonymous === true);
+  const [snsNsfw, setSnsNsfw] = useState(initialSnsOptions.nsfw === true);
+  const [snsTextOnly, setSnsTextOnly] = useState(initialSnsOptions.textOnly === true);
+  const [snsNoDM, setSnsNoDM] = useState(initialSnsOptions.noDM === true);
+  const [snsThirdPartyDM, setSnsThirdPartyDM] = useState(initialSnsOptions.thirdPartyDM === true);
+  const [snsAutoComments, setSnsAutoComments] = useState(initialSnsOptions.autoComments !== false);
+  const [snsAutoImage, setSnsAutoImage] = useState(initialSnsOptions.autoImage !== false);
   const [importJson, setImportJson] = useState('');
   const [saving, setSaving] = useState(false);
   const [testingApi, setTestingApi] = useState(false);
@@ -120,6 +190,20 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   const [eventDate, setEventDate] = useState('');
   const [eventType, setEventType] = useState('');
   const [eventPrompt, setEventPrompt] = useState('');
+
+  useEffect(() => {
+    const options = snsPlatformOptions(state.config.sns, snsDefaultPlatform);
+    setSnsCommentQty(String(options.commentQty || '2-4'));
+    setSnsSubject(String(options.subject || ''));
+    setSnsMood(String(options.mood || ''));
+    setSnsAnonymous(options.anonymous === true);
+    setSnsNsfw(options.nsfw === true);
+    setSnsTextOnly(options.textOnly === true);
+    setSnsNoDM(options.noDM === true);
+    setSnsThirdPartyDM(options.thirdPartyDM === true);
+    setSnsAutoComments(options.autoComments !== false);
+    setSnsAutoImage(options.autoImage !== false);
+  }, [snsDefaultPlatform, state.config.sns]);
 
   async function openSection(section: SettingsSection) {
     setActiveSection(section);
@@ -144,16 +228,60 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     setProvider(nextProvider);
     setModel(String(nextProfile.apiModel || ''));
     setEndpoint(String(nextProfile.apiEndpoint || ''));
-    setMaxTokens(String(nextProfile.maxTokens || 700));
+    setMaxTokens(String(nextProfile.maxTokens || (provider === 'vertex' ? 4096 : 700)));
     setTemperature(String(nextProfile.temperature || 0.85));
     setApiKey1(keys[0] || '');
     setApiKey2(keys[1] || '');
     setApiKey3(keys[2] || '');
+    setVertexServiceAccountJson(String(nextProfile.serviceAccountJson || ''));
+    setVertexLocation(String(nextProfile.location || 'global'));
+    setVertexServiceTier(String(nextProfile.serviceTier || 'auto'));
+    setVertexTokenBridgeUrl(String(nextProfile.tokenBridgeUrl || ''));
+    setVertexCorsProxyUrl(String(nextProfile.corsProxyUrl || ''));
+    setVertexProxyAccessToken(String(nextProfile.proxyAccessToken || ''));
+    setVertexDirectMode(nextProfile.directMode === true);
+    setVertexFetchModels(nextProfile.fetchModels === true);
+    setVertexThinkingLevel(String(nextProfile.thinkingLevel || 'off'));
+    setVertexThinkingBudget(String(nextProfile.thinkingBudgetTokens || 0));
   }
 
   function buildApiState(): { next: SNSGodState; keyCount: number } {
     const profile = { ...(state.config.apiProfiles[provider] || {}) };
     const keys = [apiKey1, apiKey2, apiKey3].map(value => String(value || '').trim()).filter(Boolean);
+    const normalizedModel = model.trim() || (provider === 'vertex' ? 'gemini-3-flash-preview' : '');
+    const normalizedMaxTokens = Math.max(32, Math.round(Number(maxTokens) || (provider === 'vertex' ? 4096 : 700)));
+    const safeMaxTokens = provider === 'vertex' && /gemini-3/i.test(normalizedModel)
+      ? Math.max(4096, normalizedMaxTokens)
+      : normalizedMaxTokens;
+    const nextProfile = provider === 'vertex'
+      ? {
+        ...profile,
+        apiKey: '',
+        apiKeys: [],
+        serviceAccountJson: vertexServiceAccountJson.trim(),
+        location: vertexLocation.trim() || 'global',
+        serviceTier: vertexServiceTier.trim() || 'auto',
+        tokenBridgeUrl: vertexTokenBridgeUrl.trim(),
+        corsProxyUrl: vertexCorsProxyUrl.trim(),
+        proxyAccessToken: vertexProxyAccessToken.trim(),
+        directMode: vertexDirectMode,
+        fetchModels: vertexFetchModels,
+        apiEndpoint: endpoint.trim(),
+        apiModel: normalizedModel,
+        thinkingLevel: vertexThinkingLevel.trim() || 'off',
+        thinkingBudgetTokens: Math.max(0, Math.round(Number(vertexThinkingBudget) || 0)),
+        maxTokens: safeMaxTokens,
+        temperature: Number.isFinite(Number(temperature)) ? Number(temperature) : 0.85
+      }
+      : {
+        ...profile,
+        apiKey: keys[0] || '',
+        apiKeys: keys,
+        apiEndpoint: endpoint.trim(),
+        apiModel: normalizedModel,
+        maxTokens: safeMaxTokens,
+        temperature: Number.isFinite(Number(temperature)) ? Number(temperature) : 0.85
+      };
     const next: SNSGodState = {
       ...state,
       config: {
@@ -161,19 +289,11 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
         apiType: provider,
         apiProfiles: {
           ...state.config.apiProfiles,
-          [provider]: {
-            ...profile,
-            apiKey: keys[0] || '',
-            apiKeys: keys,
-            apiEndpoint: endpoint.trim(),
-            apiModel: model.trim(),
-            maxTokens: Math.max(32, Math.round(Number(maxTokens) || 700)),
-            temperature: Number.isFinite(Number(temperature)) ? Number(temperature) : 0.85
-          }
+          [provider]: nextProfile
         }
       }
     };
-    return { next, keyCount: keys.length };
+    return { next, keyCount: provider === 'vertex' ? (vertexServiceAccountJson.trim() ? 1 : 0) : keys.length };
   }
 
   async function saveApi() {
@@ -182,7 +302,9 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     setSaving(true);
     try {
       await onChange(next);
-      setStatus(`API 저장 완료: ${provider} · ${model.trim() || '(모델 없음)'} · 키 ${keyCount}개`);
+      setStatus(provider === 'vertex'
+        ? `API 저장 완료: Vertex · ${model.trim() || 'gemini-3-flash-preview'} · ${vertexLocation.trim() || 'global'} · 서비스 계정 ${keyCount ? '입력됨' : '비어 있음'}`
+        : `API 저장 완료: ${provider} · ${model.trim() || '(모델 없음)'} · 키 ${keyCount}개`);
     } catch (error) {
       setStatus(`API 저장 실패: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -194,7 +316,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     if (testingApi) return;
     const { next, keyCount } = buildApiState();
     if (!keyCount) {
-      setStatus('API 테스트 실패: API 키를 먼저 입력하세요.');
+      setStatus(provider === 'vertex' ? 'API 테스트 실패: Vertex Service Account JSON을 먼저 입력하세요.' : 'API 테스트 실패: API 키를 먼저 입력하세요.');
       return;
     }
     setTestingApi(true);
@@ -339,10 +461,13 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           imageGeneration: {
             ...(state.config.imageGeneration || {}),
             enabled: imageEnabled,
-            provider: 'openai',
+            provider: imageProvider === 'grok-local' ? 'grok-local' : 'openai',
             apiKey: imageApiKey.trim(),
             apiEndpoint: imageEndpoint.trim() || 'https://api.openai.com/v1/responses',
             apiModel: imageModel.trim() || 'gpt-5',
+            grokBaseUrl: grokLocalBaseUrl.trim() || 'http://127.0.0.1:5000',
+            grokResolution: grokResolution.trim() || '1k',
+            grokAspectRatio: grokAspectRatio.trim() || 'auto',
             size: imageSize.trim() || '1024x1024',
             quality: imageQuality.trim() || 'auto',
             promptPrefix: imagePrefix,
@@ -360,32 +485,159 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     }
   }
 
+  async function refreshGrokLocal() {
+    const baseUrl = grokLocalBaseUrl.trim() || 'http://127.0.0.1:5000';
+    try {
+      const [nextStatus, nextBilling, nextAccounts] = await Promise.all([
+        fetchGrokStatus(baseUrl),
+        fetchGrokBilling(baseUrl).catch(error => ({ remaining_percent: 0, error: String(error instanceof Error ? error.message : error) } as GrokBilling)),
+        fetchGrokAccounts(baseUrl).catch(() => [])
+      ]);
+      setGrokStatus(nextStatus);
+      setGrokBilling(nextBilling);
+      setGrokAccounts(nextAccounts);
+      setStatus(`Grok 상태 확인 완료: ${nextStatus.tokenLabel || '상태 확인됨'} · CREDIT ${Math.round(Number(nextBilling.remaining_percent || 0))}%`);
+      Alert.alert('Grok 상태 확인', `${nextStatus.tokenLabel || '상태 확인됨'}\nCREDIT ${Math.round(Number(nextBilling.remaining_percent || 0))}%`);
+    } catch (error) {
+      const message = `Grok 상태 확인 실패: ${error instanceof Error ? error.message : String(error)}`;
+      setStatus(message);
+      Alert.alert('Grok 상태 확인 실패', `${message}\nTermux에서 서버가 실행 중인지 먼저 확인하세요.`);
+    }
+  }
+
+  async function startGrokOAuthLoginInTermux() {
+    try {
+      const baseUrl = grokLocalBaseUrl.trim() || 'http://127.0.0.1:5000';
+      const currentStatus = await fetchGrokStatus(baseUrl).catch(() => undefined);
+      if (currentStatus?.hermesAuthenticated) {
+        setGrokStatus(currentStatus);
+        const message = currentStatus.tokenMessage || '현재 복사된 Hermes OAuth 토큰이 정상으로 확인되었습니다.';
+        setStatus(`Grok 계정 추가 불필요: ${currentStatus.tokenLabel || 'API 정상'}`);
+        Alert.alert('Grok OAuth', `이미 로그인되어 있습니다.\n${message}`);
+        return;
+      }
+      if (!TermuxBridge) throw new Error('Termux 네이티브 브릿지가 준비되지 않았습니다. 앱을 재설치해 주세요.');
+      const granted = await requestTermuxRunPermission();
+      if (!granted) throw new Error('Termux 실행 권한이 허용되지 않았습니다.');
+      await TermuxBridge.copyText(TERMUX_GROK_LOGIN_COMMAND);
+      const message = await TermuxBridge.runCommand(TERMUX_GROK_LOGIN_COMMAND);
+      setStatus(`${message} Termux 화면에서 X 로그인 안내를 진행하세요.`);
+      Alert.alert('Grok 계정 추가', `${message}\nTermux 화면에 표시되는 X 로그인 안내를 진행하세요. 명령도 클립보드에 복사해 두었습니다.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      try {
+        await TermuxBridge?.copyText(TERMUX_GROK_LOGIN_COMMAND);
+      } catch {
+        // Ignore clipboard fallback errors; the visible command below is still selectable.
+      }
+      setStatus(`Grok 계정 추가는 Termux에서 직접 실행해야 합니다: ${message}`);
+      Alert.alert('Grok 계정 추가', `Termux를 열고 아래 명령을 붙여넣어 주세요.\n\n${TERMUX_GROK_LOGIN_COMMAND}`);
+    }
+  }
+
+  async function runGrokAction(action: 'login' | 'select' | 'logout') {
+    const baseUrl = grokLocalBaseUrl.trim() || 'http://127.0.0.1:5000';
+    try {
+      if (action === 'login') {
+        await startGrokOAuthLoginInTermux();
+        return;
+      }
+      if (action === 'select') {
+        try {
+          await selectGrokOAuth(baseUrl);
+        } catch (selectError) {
+          const currentStatus = await fetchGrokStatus(baseUrl).catch(() => undefined);
+          if (currentStatus?.hermesAuthenticated) {
+            setGrokStatus(currentStatus);
+            setStatus(`Grok OAuth 선택 완료: ${currentStatus.tokenLabel || 'API 정상'}`);
+            Alert.alert('Grok OAuth', `현재 OAuth가 이미 정상 선택되어 있습니다.\n${currentStatus.tokenMessage || ''}`.trim());
+            return;
+          }
+          throw selectError;
+        }
+      }
+      if (action === 'logout') await logoutGrokOAuth(baseUrl);
+      await refreshGrokLocal();
+    } catch (error) {
+      const message = `Grok OAuth 작업 실패: ${error instanceof Error ? error.message : String(error)}`;
+      setStatus(message);
+      Alert.alert('Grok OAuth 작업 실패', `${message}\n서버가 실행 중인지 확인해 주세요.`);
+    }
+  }
+
+  async function openTermuxForGrok() {
+    try {
+      if (!TermuxBridge) throw new Error('Termux 네이티브 브릿지가 준비되지 않았습니다. 앱을 재설치해 주세요.');
+      const message = await TermuxBridge.openTermux();
+      setStatus(`${message} 아래 명령을 Termux에 붙여넣으면 Grok 서버가 실행됩니다.`);
+      Alert.alert('Termux', `${message}\n자동 실행이 안 되면 화면의 수동 실행 명령을 붙여넣어 주세요.`);
+    } catch (error) {
+      const message = `Termux 열기 실패: ${error instanceof Error ? error.message : String(error)}`;
+      setStatus(message);
+      Alert.alert('Termux 열기 실패', message);
+    }
+  }
+
+  async function runGrokServerInTermux() {
+    try {
+      if (!TermuxBridge) throw new Error('Termux 네이티브 브릿지가 준비되지 않았습니다. 앱을 재설치해 주세요.');
+      const granted = await requestTermuxRunPermission();
+      if (!granted) throw new Error('Termux 실행 권한이 허용되지 않았습니다.');
+      const message = await TermuxBridge.runCommand(TERMUX_GROK_COMMAND);
+      setStatus(`${message} Termux에서 서버 실행 로그를 확인하세요.`);
+      Alert.alert('Grok 서버 실행', `${message}\n잠시 후 상태 확인을 눌러 주세요.`);
+    } catch (error) {
+      const message = `Termux 자동 실행 실패: ${error instanceof Error ? error.message : String(error)}`;
+      setStatus(message);
+      Alert.alert('Termux 자동 실행 실패', `${message}\nTermux 열기 후 수동 실행 명령을 붙여넣어 주세요.`);
+    }
+  }
+
+  async function copyGrokServerCommand() {
+    try {
+      if (!TermuxBridge) throw new Error('클립보드 브릿지가 준비되지 않았습니다. 앱을 재설치해 주세요.');
+      const message = await TermuxBridge.copyText(TERMUX_GROK_COMMAND);
+      setStatus(`${message} Termux에 붙여넣고 Enter를 누르면 서버가 실행됩니다.`);
+      Alert.alert('복사 완료', '서버 실행 명령을 복사했습니다. Termux에 붙여넣고 Enter를 누르세요.');
+    } catch (error) {
+      const message = `복사 실패: ${error instanceof Error ? error.message : String(error)}`;
+      setStatus(message);
+      Alert.alert('복사 실패', message);
+    }
+  }
+
   async function saveSnsOptions() {
     if (saving) return;
     setSaving(true);
     try {
+      const base = state.config.sns || {};
+      const platformOptions = {
+        ...(base.platformOptions || {}),
+        [snsDefaultPlatform]: {
+          anonymous: snsAnonymous,
+          nsfw: snsNsfw,
+          textOnly: snsTextOnly,
+          noDM: snsNoDM,
+          thirdPartyDM: snsThirdPartyDM,
+          autoComments: snsAutoComments,
+          commentQty: snsCommentQty.trim() || '2-4',
+          subject: snsSubject,
+          mood: snsMood,
+          autoImage: snsAutoImage
+        }
+      };
       await onChange({
         ...state,
         config: {
           ...state.config,
           sns: {
-            ...(state.config.sns || {}),
-            platform: snsDefaultPlatform === 'twitter' || snsDefaultPlatform === 'instagram' ? snsDefaultPlatform : 'hybrid',
-            commentQty: snsCommentQty.trim() || '2-4',
-            subject: snsSubject,
-            mood: snsMood,
-            anonymous: snsAnonymous,
-            nsfw: snsNsfw,
-            hybridNsfwSplit: snsHybridNsfwSplit,
-            textOnly: snsTextOnly,
-            noDM: snsNoDM,
-            thirdPartyDM: snsThirdPartyDM,
-            autoComments: snsAutoComments,
-            autoImage: snsAutoImage
+            ...base,
+            platform: snsDefaultPlatform,
+            platformOptions
           }
         }
       });
-      setStatus('SNS 옵션 저장 완료');
+      setStatus(`${snsDefaultPlatform === 'instagram' ? 'Instagram' : 'X'} SNS 옵션 저장 완료`);
     } catch (error) {
       setStatus(`SNS 옵션 저장 실패: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -487,6 +739,8 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     }
   }
 
+  const visibleCharacters = state.characters.filter(character => character.randomTemporary !== true);
+
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
@@ -507,9 +761,9 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
         <View style={[styles.card, activeSection !== 'characters' && styles.hidden]}>
           <Text style={styles.cardTitle}>캐릭터별 설정</Text>
           <Text style={styles.help}>캐릭터, 능동 채팅, 삼화 태그, 로어북은 캐릭터 편집 화면에서 관리합니다.</Text>
-          {state.characters.map(character => (
+          {visibleCharacters.map(character => (
             <Pressable key={character.id} onPress={() => onOpenCharacterSettings?.(character.id)} style={styles.listRow}>
-              <View style={[styles.avatarDot, { backgroundColor: character.color || colors.accent }]}><Text style={styles.avatarDotText}>{character.avatarText || character.name.slice(0, 1)}</Text></View>
+              <Avatar character={character} size={42} />
               <View style={styles.listBody}>
                 <Text style={styles.listTitle}>{character.name}</Text>
                 <Text style={styles.listSub}>@{character.handle || character.id} · 로어북 {(character.memories || []).length}개 · 스티커 {(character.stickers || []).length}개</Text>
@@ -546,9 +800,9 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           }) : <Text style={styles.emptyText}>스티커를 추가하세요.</Text>}
           <Text style={styles.cardTitle}>캐릭터 스티커</Text>
           <Text style={styles.help}>캐릭터 스티커는 캐릭터 답장에 사용할 수 있는 스티커입니다. 캐릭터별 설정에서 관리합니다.</Text>
-          {state.characters.map(character => (
+          {visibleCharacters.map(character => (
             <Pressable key={character.id} onPress={() => onOpenCharacterSettings?.(character.id)} style={styles.listRow}>
-              <View style={[styles.avatarDot, { backgroundColor: character.color || colors.accent }]}><Text style={styles.avatarDotText}>{character.avatarText || character.name.slice(0, 1)}</Text></View>
+              <Avatar character={character} size={42} />
               <View style={styles.listBody}>
                 <Text style={styles.listTitle}>{character.name} 스티커</Text>
                 <Text style={styles.listSub}>{(character.stickers || []).length}개</Text>
@@ -627,7 +881,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
             ))}
           </View>
           <Text style={styles.label}>Endpoint</Text>
-          <TextInput value={endpoint} onChangeText={setEndpoint} style={styles.input} autoCapitalize="none" />
+          <TextInput value={endpoint} onChangeText={setEndpoint} style={styles.input} autoCapitalize="none" placeholder={provider === 'vertex' ? '비워두면 location 기반 Vertex endpoint 자동 사용' : ''} placeholderTextColor="#9a9387" />
           <Text style={styles.label}>모델</Text>
           <TextInput value={model} onChangeText={setModel} style={styles.input} autoCapitalize="none" />
           {PROVIDER_PRESETS[provider]?.length ? (
@@ -639,13 +893,61 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
               ))}
             </View>
           ) : null}
-          <Pressable onPress={() => setShowKeys(!showKeys)} style={styles.keyToggle}><Text style={styles.keyToggleText}>{showKeys ? 'API 키 숨기기' : 'API 키 보기'}</Text></Pressable>
-          <Text style={styles.label}>API 키 1</Text>
-          <TextInput value={apiKey1} onChangeText={setApiKey1} style={styles.input} secureTextEntry={!showKeys} autoCapitalize="none" />
-          <Text style={styles.label}>API 키 2</Text>
-          <TextInput value={apiKey2} onChangeText={setApiKey2} style={styles.input} secureTextEntry={!showKeys} autoCapitalize="none" />
-          <Text style={styles.label}>API 키 3</Text>
-          <TextInput value={apiKey3} onChangeText={setApiKey3} style={styles.input} secureTextEntry={!showKeys} autoCapitalize="none" />
+          <Pressable onPress={() => setShowKeys(!showKeys)} style={styles.keyToggle}><Text style={styles.keyToggleText}>{showKeys ? '인증 정보 숨기기' : '인증 정보 보기'}</Text></Pressable>
+          {provider === 'vertex' ? (
+            <>
+              <Text style={styles.label}>Service Account JSON Key</Text>
+              <TextInput
+                value={showKeys ? vertexServiceAccountJson : (vertexServiceAccountJson ? '저장된 서비스 계정 JSON이 있습니다.' : '')}
+                onChangeText={setVertexServiceAccountJson}
+                editable={showKeys}
+                style={[styles.input, styles.vertexJsonBox]}
+                multiline
+                textAlignVertical="top"
+                autoCapitalize="none"
+                placeholder="Google Cloud 서비스 계정 JSON 본문을 그대로 붙여넣기"
+                placeholderTextColor="#9a9387"
+              />
+              <Text style={styles.help}>키 파일 경로가 아니라 JSON 본문 전체를 붙여넣습니다. 이 값은 앱 저장소에만 저장되고 소스코드에는 넣지 않습니다.</Text>
+              <View style={styles.twoCols}>
+                <View style={styles.col}>
+                  <Text style={styles.label}>Location Endpoint</Text>
+                  <TextInput value={vertexLocation} onChangeText={setVertexLocation} style={styles.input} autoCapitalize="none" placeholder="global 또는 us-central1" placeholderTextColor="#9a9387" />
+                </View>
+                <View style={styles.col}>
+                  <Text style={styles.label}>Service Tier</Text>
+                  <TextInput value={vertexServiceTier} onChangeText={setVertexServiceTier} style={styles.input} autoCapitalize="none" placeholder="auto / standard / flex" placeholderTextColor="#9a9387" />
+                </View>
+              </View>
+              <Text style={styles.label}>Token Bridge URL</Text>
+              <TextInput value={vertexTokenBridgeUrl} onChangeText={setVertexTokenBridgeUrl} style={styles.input} autoCapitalize="none" placeholder="선택사항" placeholderTextColor="#9a9387" />
+              <Text style={styles.label}>CORS Proxy URL</Text>
+              <TextInput value={vertexCorsProxyUrl} onChangeText={setVertexCorsProxyUrl} style={styles.input} autoCapitalize="none" placeholder="선택사항, RN 직접 호출에서는 보통 비워둠" placeholderTextColor="#9a9387" />
+              <Text style={styles.label}>Proxy Access Token</Text>
+              <TextInput value={vertexProxyAccessToken} onChangeText={setVertexProxyAccessToken} style={styles.input} secureTextEntry={!showKeys} autoCapitalize="none" placeholder="선택사항" placeholderTextColor="#9a9387" />
+              <View style={styles.twoCols}>
+                <View style={styles.col}>
+                  <Text style={styles.label}>Thinking Level</Text>
+                  <TextInput value={vertexThinkingLevel} onChangeText={setVertexThinkingLevel} style={styles.input} autoCapitalize="characters" placeholder="off / MINIMAL / LOW / MEDIUM / HIGH" placeholderTextColor="#9a9387" />
+                </View>
+                <View style={styles.col}>
+                  <Text style={styles.label}>Thinking Budget Tokens</Text>
+                  <TextInput value={vertexThinkingBudget} onChangeText={setVertexThinkingBudget} style={styles.input} keyboardType="number-pad" />
+                </View>
+              </View>
+              <SwitchLine label="Direct 모드" value={vertexDirectMode} onChange={setVertexDirectMode} />
+              <SwitchLine label="서버에서 모델 목록 불러오기" value={vertexFetchModels} onChange={setVertexFetchModels} />
+            </>
+          ) : (
+            <>
+              <Text style={styles.label}>API 키 1</Text>
+              <TextInput value={apiKey1} onChangeText={setApiKey1} style={styles.input} secureTextEntry={!showKeys} autoCapitalize="none" />
+              <Text style={styles.label}>API 키 2</Text>
+              <TextInput value={apiKey2} onChangeText={setApiKey2} style={styles.input} secureTextEntry={!showKeys} autoCapitalize="none" />
+              <Text style={styles.label}>API 키 3</Text>
+              <TextInput value={apiKey3} onChangeText={setApiKey3} style={styles.input} secureTextEntry={!showKeys} autoCapitalize="none" />
+            </>
+          )}
           <View style={styles.twoCols}>
             <View style={styles.col}>
               <Text style={styles.label}>최대 응답 크기</Text>
@@ -656,7 +958,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
               <TextInput value={temperature} onChangeText={setTemperature} style={styles.input} keyboardType="decimal-pad" />
             </View>
           </View>
-          <Text style={styles.help}>키 1번 실패 시 2번, 3번 순서로 자동 재시도합니다. 성공한 키 번호는 다음 호출의 시작점으로 저장됩니다.</Text>
+          <Text style={styles.help}>{provider === 'vertex' ? 'Vertex는 서비스 계정 JSON으로 OAuth 토큰을 발급받아 호출합니다. 키 1/2/3 회전은 사용하지 않습니다.' : '키 1번 실패 시 2번, 3번 순서로 자동 재시도합니다. 성공한 키 번호는 다음 호출의 시작점으로 저장됩니다.'}</Text>
           <View style={styles.buttonRow}>
             <Pressable onPress={saveApi} disabled={saving} style={[styles.primary, styles.rowButton, saving && styles.disabled]}><Text style={styles.primaryText}>API 저장</Text></Pressable>
             <Pressable onPress={testApi} disabled={testingApi || saving} style={[styles.secondaryInline, styles.rowButton, (testingApi || saving) && styles.disabled]}><Text style={styles.secondaryText}>{testingApi ? '테스트 중' : 'API 테스트'}</Text></Pressable>
@@ -682,35 +984,110 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           <SwitchLine label="AI 이미지 생성 사용" value={imageEnabled} onChange={setImageEnabled} />
           <SwitchLine label="삽화/태그 모드" value={imageIllustration} onChange={setImageIllustration} />
           <SwitchLine label="NSFW 프롬프트 허용" value={imageNsfw} onChange={setImageNsfw} />
-          <Text style={styles.label}>Endpoint</Text>
-          <TextInput value={imageEndpoint} onChangeText={setImageEndpoint} style={styles.input} autoCapitalize="none" />
-          <Text style={styles.label}>모델</Text>
-          <TextInput value={imageModel} onChangeText={setImageModel} style={styles.input} autoCapitalize="none" />
-          <Text style={styles.label}>이미지 API 키</Text>
-          <TextInput value={imageApiKey} onChangeText={setImageApiKey} style={styles.input} secureTextEntry={!showKeys} autoCapitalize="none" />
-          <View style={styles.twoCols}>
-            <View style={styles.col}>
-              <Text style={styles.label}>크기</Text>
-              <TextInput value={imageSize} onChangeText={setImageSize} style={styles.input} autoCapitalize="none" />
-            </View>
-            <View style={styles.col}>
-              <Text style={styles.label}>품질</Text>
-              <TextInput value={imageQuality} onChangeText={setImageQuality} style={styles.input} autoCapitalize="none" />
-            </View>
+          <Text style={styles.label}>이미지 Provider</Text>
+          <View style={styles.segmentRow}>
+            {[
+              ['grok-local', 'Grok OAuth'],
+              ['openai', 'OpenAI 호환']
+            ].map(([value, label]) => (
+              <Pressable key={value} onPress={() => setImageProvider(value)} style={[styles.segment, imageProvider === value && styles.segmentActive]}>
+                <Text style={[styles.segmentText, imageProvider === value && styles.segmentTextActive]}>{label}</Text>
+              </Pressable>
+            ))}
           </View>
+          {imageProvider === 'grok-local' ? (
+            <View style={styles.subPanel}>
+              <Text style={styles.label}>Grok Local Studio 서버</Text>
+              <TextInput value={grokLocalBaseUrl} onChangeText={setGrokLocalBaseUrl} style={styles.input} autoCapitalize="none" placeholder="http://192.168.0.x:5000" placeholderTextColor="#9a9387" />
+              <View style={styles.termuxPanel}>
+                <Text style={styles.listTitle}>Termux 서버 도우미</Text>
+                <Text style={styles.listSub}>현재 폰에 설치된 ~/grok 서버를 실행합니다. 상태 확인은 서버 접속, OAuth 상태, CREDIT 정보를 함께 확인합니다.</Text>
+                <View style={styles.buttonRow}>
+                  <Pressable onPress={openTermuxForGrok} style={[styles.secondaryInline, styles.rowButton]}><Text style={styles.secondaryText}>Termux 열기</Text></Pressable>
+                  <Pressable onPress={runGrokServerInTermux} style={[styles.primaryInline, styles.rowButton]}><Text style={styles.primaryText}>서버 실행 시도</Text></Pressable>
+                </View>
+                <View style={styles.sectionHeaderRow}>
+                  <Text style={styles.label}>서버 실행 명령</Text>
+                  <Pressable onPress={copyGrokServerCommand} style={styles.smallInline}><Text style={styles.secondaryText}>복사</Text></Pressable>
+                </View>
+                <TextInput
+                  value={TERMUX_GROK_COMMAND}
+                  editable={false}
+                  selectTextOnFocus
+                  multiline
+                  style={[styles.input, styles.commandBox]}
+                  textAlignVertical="top"
+                />
+                <Text style={styles.help}>자동 실행은 Termux의 외부 명령 허용이 켜져 있을 때만 동작합니다. 실패하면 복사 버튼을 누른 뒤 Termux에 붙여넣고 Enter를 누르세요.</Text>
+              </View>
+              <View style={styles.buttonRow}>
+                <Pressable onPress={refreshGrokLocal} style={[styles.secondaryInline, styles.rowButton]}><Text style={styles.secondaryText}>상태 확인</Text></Pressable>
+                <Pressable onPress={() => runGrokAction('login')} style={[styles.secondaryInline, styles.rowButton]}><Text style={styles.secondaryText}>계정 추가</Text></Pressable>
+              </View>
+              <View style={styles.buttonRow}>
+                <Pressable onPress={() => runGrokAction('select')} style={[styles.secondaryInline, styles.rowButton]}><Text style={styles.secondaryText}>OAuth 선택</Text></Pressable>
+                <Pressable onPress={() => runGrokAction('logout')} style={[styles.dangerInline, styles.rowButton]}><Text style={styles.dangerText}>삭제</Text></Pressable>
+              </View>
+              <View style={styles.statusBox}>
+                <Text style={styles.listTitle}>Grok OAuth 상태: {grokStatus?.tokenLabel || '확인 전'}</Text>
+                <Text style={styles.listSub}>{grokStatus?.tokenMessage || 'Grok Local Studio가 실행 중이면 상태 확인을 눌러주세요.'}</Text>
+                <Text style={styles.listSub}>계정 {grokAccounts.length}개 · CREDIT {grokBilling?.remaining_percent ?? '--'}%</Text>
+                <View style={styles.creditTrack}><View style={[styles.creditFill, { width: `${Math.max(0, Math.min(100, Number(grokBilling?.remaining_percent || 0)))}%` }]} /></View>
+              </View>
+              {grokAccounts.length ? grokAccounts.map((account, index) => (
+                <View key={`${account.id || account.provider || 'account'}-${index}`} style={styles.eventRow}>
+                  <View style={styles.listBody}>
+                    <Text style={styles.listTitle}>{account.name || account.label || 'xAI Grok OAuth'}</Text>
+                    <Text style={styles.listSub}>{account.provider || 'xai-oauth'}{account.current ? ' · 현재 선택' : ''}</Text>
+                  </View>
+                </View>
+              )) : null}
+              <View style={styles.twoCols}>
+                <View style={styles.col}>
+                  <Text style={styles.label}>해상도</Text>
+                  <TextInput value={grokResolution} onChangeText={setGrokResolution} style={styles.input} autoCapitalize="none" />
+                </View>
+                <View style={styles.col}>
+                  <Text style={styles.label}>비율</Text>
+                  <TextInput value={grokAspectRatio} onChangeText={setGrokAspectRatio} style={styles.input} autoCapitalize="none" />
+                </View>
+              </View>
+              <Text style={styles.help}>기본값은 저용량 1k, 비율 auto입니다. 프로필 레퍼런스 이미지가 있는 경우 /api/i2i, 없는 경우 /api/t2i로 생성합니다.</Text>
+            </View>
+          ) : null}
+          {imageProvider !== 'grok-local' ? (
+            <>
+              <Text style={styles.label}>Endpoint</Text>
+              <TextInput value={imageEndpoint} onChangeText={setImageEndpoint} style={styles.input} autoCapitalize="none" />
+              <Text style={styles.label}>모델</Text>
+              <TextInput value={imageModel} onChangeText={setImageModel} style={styles.input} autoCapitalize="none" />
+              <Text style={styles.label}>이미지 API 키</Text>
+              <TextInput value={imageApiKey} onChangeText={setImageApiKey} style={styles.input} secureTextEntry={!showKeys} autoCapitalize="none" />
+              <View style={styles.twoCols}>
+                <View style={styles.col}>
+                  <Text style={styles.label}>크기</Text>
+                  <TextInput value={imageSize} onChangeText={setImageSize} style={styles.input} autoCapitalize="none" />
+                </View>
+                <View style={styles.col}>
+                  <Text style={styles.label}>품질</Text>
+                  <TextInput value={imageQuality} onChangeText={setImageQuality} style={styles.input} autoCapitalize="none" />
+                </View>
+              </View>
+            </>
+          ) : null}
           <Text style={styles.label}>프롬프트 접두 지시</Text>
           <TextInput value={imagePrefix} onChangeText={setImagePrefix} style={[styles.input, styles.textarea]} multiline textAlignVertical="top" />
           <Text style={styles.label}>네거티브 프롬프트</Text>
           <TextInput value={imageNegative} onChangeText={setImageNegative} style={[styles.input, styles.textareaSmall]} multiline textAlignVertical="top" />
-          <Text style={styles.help}>OpenAI Responses image_generation 또는 /images/generations 호환 endpoint를 사용할 수 있습니다. 비워두면 OpenAI 텍스트 API 키를 대체 사용합니다.</Text>
+          <Text style={styles.help}>Grok OAuth는 PC의 Grok Local Studio 서버를 통해 Hermes xAI OAuth를 사용합니다. 휴대폰에서는 PC IP:5000 주소를 입력하세요.</Text>
           <Pressable onPress={saveImageGeneration} style={styles.primary}><Text style={styles.primaryText}>이미지 설정 저장</Text></Pressable>
         </View>
 
         <View style={[styles.card, activeSection !== 'prompts' && styles.hidden]}>
           <Text style={styles.cardTitle}>SNS 생성 옵션</Text>
-          <Text style={styles.label}>기본 플랫폼</Text>
+          <Text style={styles.label}>설정할 플랫폼</Text>
           <View style={styles.segmentRow}>
-            {['hybrid', 'instagram', 'twitter'].map(item => (
+            {(['instagram', 'twitter'] as SnsSettingsPlatform[]).map(item => (
               <Pressable key={item} onPress={() => setSnsDefaultPlatform(item)} style={[styles.segment, snsDefaultPlatform === item && styles.segmentActive]}>
                 <Text style={[styles.segmentText, snsDefaultPlatform === item && styles.segmentTextActive]}>{item}</Text>
               </Pressable>
@@ -730,13 +1107,12 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           <TextInput value={snsSubject} onChangeText={setSnsSubject} style={styles.input} />
           <SwitchLine label="익명계" value={snsAnonymous} onChange={setSnsAnonymous} />
           <SwitchLine label="NSFW 뒷계" value={snsNsfw} onChange={setSnsNsfw} />
-          <SwitchLine label="하이브리드 NSFW 분리" value={snsHybridNsfwSplit} onChange={setSnsHybridNsfwSplit} />
           <SwitchLine label="글만 생성" value={snsTextOnly} onChange={setSnsTextOnly} />
           <SwitchLine label="AI 댓글 자동 생성" value={snsAutoComments} onChange={setSnsAutoComments} />
           <SwitchLine label="SNS DM 생성 안함" value={snsNoDM} onChange={setSnsNoDM} />
           <SwitchLine label="제3자 DM 허용" value={snsThirdPartyDM} onChange={setSnsThirdPartyDM} />
           <SwitchLine label="이미지 자동 생성" value={snsAutoImage} onChange={setSnsAutoImage} />
-          <Text style={styles.help}>NSFW 뒷계는 성인 캐릭터의 비공개 계정 분위기 지시입니다. 하이브리드 분리는 Instagram은 공개용 SFW, X는 뒷계 톤으로 나누도록 지시합니다.</Text>
+          <Text style={styles.help}>이 값은 선택한 플랫폼에만 저장됩니다. 인스타그램과 X의 생성/댓글/DM/이미지 옵션은 서로 분리됩니다.</Text>
           <Pressable onPress={saveSnsOptions} style={styles.primary}><Text style={styles.primaryText}>SNS 옵션 저장</Text></Pressable>
         </View>
 
@@ -817,6 +1193,7 @@ const styles = StyleSheet.create({
   profileTextarea: { height: 112, paddingVertical: 10 },
   textarea: { minHeight: 128, paddingVertical: 10 },
   textareaSmall: { minHeight: 86, paddingVertical: 10 },
+  vertexJsonBox: { minHeight: 150, maxHeight: 230, paddingVertical: 10, fontSize: 12, lineHeight: 18 },
   segmentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   segment: { minHeight: 36, paddingHorizontal: 12, borderRadius: 18, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fffefa' },
   segmentActive: { backgroundColor: colors.accent, borderColor: '#b89117' },
@@ -831,13 +1208,22 @@ const styles = StyleSheet.create({
   col: { flex: 1 },
   primary: { marginTop: 14, height: 44, borderRadius: 7, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
   primaryText: { color: '#241a00', fontWeight: '900' },
+  primaryInline: { marginTop: 14, height: 44, borderRadius: 7, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
   primarySmall: { minHeight: 36, paddingHorizontal: 12, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
   primarySmallText: { color: '#241a00', fontWeight: '900' },
   secondary: { marginTop: 12, height: 42, borderRadius: 7, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
   secondaryInline: { marginTop: 14, height: 44, borderRadius: 7, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
+  dangerInline: { marginTop: 14, height: 44, borderRadius: 7, borderWidth: 1, borderColor: '#f0b7b7', backgroundColor: '#fff1f1', alignItems: 'center', justifyContent: 'center' },
   secondaryText: { color: colors.text, fontWeight: '900' },
+  sectionHeaderRow: { marginTop: 10, marginBottom: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  smallInline: { minHeight: 34, paddingHorizontal: 12, borderRadius: 7, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
   buttonRow: { flexDirection: 'row', gap: 10 },
   rowButton: { flex: 1 },
+  subPanel: { marginTop: 12, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#f7f3ea' },
+  termuxPanel: { marginTop: 12, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#d6c48f', backgroundColor: '#fff8dd' },
+  commandBox: { minHeight: 118, marginTop: 4, paddingVertical: 10, fontSize: 12, lineHeight: 18 },
+  creditTrack: { marginTop: 8, height: 12, borderRadius: 6, overflow: 'hidden', backgroundColor: '#e1d8c8', borderWidth: 1, borderColor: colors.border },
+  creditFill: { height: '100%', backgroundColor: '#0f766e' },
   disabled: { opacity: 0.55 },
   switchLine: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
   switchLineText: { color: colors.text, fontWeight: '900' },
@@ -848,8 +1234,6 @@ const styles = StyleSheet.create({
   statusBox: { backgroundColor: '#fff3c4', borderWidth: 1, borderColor: '#d6b84c', borderRadius: 8, padding: 12 },
   statusText: { color: '#3a2a00', fontWeight: '900', lineHeight: 20 },
   listRow: { minHeight: 64, marginTop: 10, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', flexDirection: 'row', alignItems: 'center', gap: 10 },
-  avatarDot: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
-  avatarDotText: { color: colors.text, fontWeight: '900' },
   listBody: { flex: 1 },
   listTitle: { color: colors.text, fontWeight: '900', fontSize: 15 },
   listSub: { marginTop: 3, color: colors.sub, fontSize: 12, fontWeight: '700' },

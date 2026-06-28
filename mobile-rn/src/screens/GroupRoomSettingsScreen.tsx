@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors } from '../theme';
 import { SNSGodState } from '../types';
 
@@ -21,6 +21,30 @@ export function GroupRoomSettingsScreen({ state, roomId, onBack, onChange }: {
     };
     await onChange(next);
     onBack();
+  }
+
+  function confirmDelete() {
+    Alert.alert('단톡방 삭제', '이 단톡방의 메시지와 안읽음 기록을 삭제할까요?', [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '삭제',
+        style: 'destructive',
+        onPress: async () => {
+          const messages = { ...state.messages };
+          const unreadCounts = { ...state.unreadCounts };
+          delete messages[roomId];
+          delete unreadCounts[roomId];
+          await onChange({
+            ...state,
+            groupRooms: (state.groupRooms || []).filter(item => item.id !== roomId),
+            messages,
+            unreadCounts,
+            selectedRoomId: state.selectedRoomId === roomId ? undefined : state.selectedRoomId
+          });
+          onBack();
+        }
+      }
+    ]);
   }
 
   if (!room) {
@@ -47,6 +71,8 @@ export function GroupRoomSettingsScreen({ state, roomId, onBack, onChange }: {
           <TextInput value={note} onChangeText={setNote} style={[styles.input, styles.textarea]} multiline textAlignVertical="top" />
           <Text style={styles.help}>단톡 답장 생성 때 이 방에서만 쓰는 추가 맥락입니다. 기본 프로필을 대체하지 않습니다.</Text>
         </View>
+        <Pressable onPress={save} style={styles.primary}><Text style={styles.primaryText}>단톡 설정 저장</Text></Pressable>
+        <Pressable onPress={confirmDelete} style={styles.danger}><Text style={styles.dangerText}>단톡방 삭제</Text></Pressable>
       </ScrollView>
     </View>
   );
@@ -60,7 +86,7 @@ const styles = StyleSheet.create({
   title: { flex: 1, fontSize: 21, color: colors.text, fontWeight: '900' },
   save: { minHeight: 38, paddingHorizontal: 14, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
   saveText: { color: '#241a00', fontWeight: '900' },
-  content: { padding: 14 },
+  content: { padding: 14, gap: 12 },
   card: { padding: 14, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panel, gap: 10 },
   label: { color: colors.sub, fontWeight: '900', fontSize: 12 },
   input: { minHeight: 44, borderWidth: 1, borderColor: colors.border, borderRadius: 7, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: '#fffefa', color: colors.text },
@@ -69,5 +95,7 @@ const styles = StyleSheet.create({
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: colors.bg },
   emptyText: { color: colors.text, fontWeight: '900' },
   primary: { marginTop: 12, height: 42, paddingHorizontal: 16, borderRadius: 8, backgroundColor: colors.accent, justifyContent: 'center' },
-  primaryText: { color: '#241a00', fontWeight: '900' }
+  primaryText: { color: '#241a00', fontWeight: '900', textAlign: 'center' },
+  danger: { minHeight: 44, borderRadius: 8, borderWidth: 1, borderColor: '#f0b7b7', backgroundColor: '#fff1f1', alignItems: 'center', justifyContent: 'center' },
+  dangerText: { color: colors.danger, fontWeight: '900' }
 });

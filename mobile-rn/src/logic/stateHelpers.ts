@@ -51,13 +51,16 @@ export function appendMessage(state: SNSGodState, roomId: string, message: SNSGo
   const room = findRoom(state, roomId);
   const messages = { ...state.messages, [roomId]: [...(state.messages[roomId] || []), message].slice(-160) };
   const chatRooms = { ...state.chatRooms };
+  const randomChats = Array.isArray(state.randomChats)
+    ? state.randomChats.map(item => item.id === roomId ? { ...item, lastActivity: message.createdAt } : item)
+    : state.randomChats;
   if (room) {
     const rooms = [...(chatRooms[room.characterId] || [])];
     const index = rooms.findIndex(item => item.id === roomId);
     if (index >= 0) rooms[index] = { ...rooms[index], lastActivity: message.createdAt };
     chatRooms[room.characterId] = rooms;
   }
-  return { ...state, messages, chatRooms, selectedRoomId: roomId };
+  return { ...state, messages, chatRooms, randomChats, selectedRoomId: roomId };
 }
 
 export function updateRoom(state: SNSGodState, roomId: string, patch: Partial<SNSGodRoom>): SNSGodState {
@@ -68,7 +71,63 @@ export function updateRoom(state: SNSGodState, roomId: string, patch: Partial<SN
   return { ...state, chatRooms };
 }
 
+export function deleteRoom(state: SNSGodState, roomId: string): SNSGodState {
+  const room = findRoom(state, roomId);
+  if (!room) return state;
+  const chatRooms = { ...state.chatRooms };
+  const messages = { ...state.messages };
+  const unreadCounts = { ...state.unreadCounts };
+  chatRooms[room.characterId] = (chatRooms[room.characterId] || []).filter(item => item.id !== roomId);
+  delete messages[roomId];
+  delete unreadCounts[roomId];
+  return {
+    ...state,
+    chatRooms,
+    messages,
+    unreadCounts,
+    selectedRoomId: state.selectedRoomId === roomId ? undefined : state.selectedRoomId
+  };
+}
+
 export function updateCharacter(state: SNSGodState, characterId: string, patch: Partial<SNSGodCharacter>): SNSGodState {
   return { ...state, characters: state.characters.map(character => character.id === characterId ? { ...character, ...patch } : character) };
 }
 
+export function deleteCharacter(state: SNSGodState, characterId: string): SNSGodState {
+  const removedRooms = state.chatRooms[characterId] || [];
+  const removedRoomIds = new Set(removedRooms.map(room => room.id));
+  const removedPostIds = new Set((state.snsPosts || []).filter(post => post.characterId === characterId).map(post => post.id));
+  const chatRooms = { ...state.chatRooms };
+  const messages = { ...state.messages };
+  const unreadCounts = { ...state.unreadCounts };
+  delete chatRooms[characterId];
+  for (const roomId of removedRoomIds) {
+    delete messages[roomId];
+    delete unreadCounts[roomId];
+  }
+
+  const groupRooms = (state.groupRooms || []).flatMap(room => {
+    const participantIds = (room.participantIds || []).filter(id => id !== characterId);
+    if (participantIds.length < 2) {
+      delete messages[room.id];
+      delete unreadCounts[room.id];
+      removedRoomIds.add(room.id);
+      return [];
+    }
+    return [{ ...room, participantIds }];
+  });
+
+  return {
+    ...state,
+    characters: state.characters.filter(character => character.id !== characterId),
+    chatRooms,
+    messages,
+    unreadCounts,
+    groupRooms,
+    loreEntries: (state.loreEntries || []).filter(entry => entry.characterId !== characterId),
+    snsPosts: (state.snsPosts || []).filter(post => post.characterId !== characterId),
+    snsDmThreads: (state.snsDmThreads || []).filter(thread => thread.characterId !== characterId && !removedPostIds.has(String(thread.postId || ''))),
+    notifications: (state.notifications || []).filter(item => item.characterId !== characterId && !removedRoomIds.has(String(item.roomId || ''))),
+    selectedRoomId: state.selectedRoomId && removedRoomIds.has(state.selectedRoomId) ? undefined : state.selectedRoomId
+  };
+}

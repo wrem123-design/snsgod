@@ -7,6 +7,17 @@ import { makeId } from '../logic/ids';
 import { DEFAULT_PROMPTS } from '../logic/prompts';
 import { createRoom } from '../logic/stateHelpers';
 
+type GeneratedCharacterProfile = {
+  name?: string;
+  prompt?: string;
+  persona?: string;
+  profile?: string;
+  description?: string;
+  firstMessage?: string;
+  first_message?: string;
+  greeting?: string;
+};
+
 export function NewCharacterScreen({ state, onBack, onCreate }: {
   state: SNSGodState;
   onBack: () => void;
@@ -26,14 +37,15 @@ export function NewCharacterScreen({ state, onBack, onCreate }: {
           state.config.prompts?.profileCreation || DEFAULT_PROMPTS.profileCreation,
           `User name: ${state.config.userName}`,
           `User profile: ${state.config.userDescription || '(empty)'}`,
-          'Return only JSON.'
+          '반드시 JSON 객체 하나만 출력하세요. 마크다운 코드블록, 설명문, 주석은 쓰지 마세요.',
+          '필수 스키마: {"name":"character name","prompt":"full character persona/profile prompt","firstMessage":"short opening message"}',
+          'persona, profile, description 같은 정보가 있다면 prompt 필드 안에 합쳐서 넣으세요.'
         ].join('\n')
       }]);
-      const parsed = parseJsonObject<{ name?: string; prompt?: string; firstMessage?: string }>(text);
-      if (!parsed) throw new Error('AI 응답에서 캐릭터 JSON을 찾지 못했습니다.');
-      setName(parsed.name || name);
-      setPrompt(parsed.prompt || prompt);
-      setFirstMessage(parsed.firstMessage || firstMessage);
+      const parsed = normalizeGeneratedCharacter(text, name, prompt, firstMessage);
+      setName(parsed.name);
+      setPrompt(parsed.prompt);
+      setFirstMessage(parsed.firstMessage);
     } catch (error) {
       Alert.alert('AI 생성 실패', error instanceof Error ? error.message : String(error));
     } finally {
@@ -94,6 +106,33 @@ export function NewCharacterScreen({ state, onBack, onCreate }: {
       </ScrollView>
     </View>
   );
+}
+
+function normalizeGeneratedCharacter(text: string, fallbackName: string, fallbackPrompt: string, fallbackFirstMessage: string) {
+  const parsed = parseJsonObject<GeneratedCharacterProfile>(text);
+  if (parsed) {
+    const nextName = safeText(parsed.name) || fallbackName;
+    const nextPrompt = safeText(parsed.prompt || parsed.persona || parsed.profile || parsed.description) || fallbackPrompt;
+    const nextFirstMessage = safeText(parsed.firstMessage || parsed.first_message || parsed.greeting) || fallbackFirstMessage;
+    if (nextName || nextPrompt || nextFirstMessage) {
+      return { name: nextName, prompt: nextPrompt, firstMessage: nextFirstMessage };
+    }
+  }
+  const nextName = regexField(text, 'name') || fallbackName;
+  const nextPrompt = regexField(text, 'prompt') || regexField(text, 'persona') || regexField(text, 'profile') || regexField(text, 'description') || fallbackPrompt;
+  const nextFirstMessage = regexField(text, 'firstMessage') || regexField(text, 'first_message') || regexField(text, 'greeting') || fallbackFirstMessage;
+  if (!nextName && !nextPrompt && !nextFirstMessage) throw new Error('AI 응답에서 캐릭터 JSON을 찾지 못했습니다.');
+  return { name: nextName, prompt: nextPrompt, firstMessage: nextFirstMessage };
+}
+
+function safeText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function regexField(text: string, key: string): string {
+  const pattern = new RegExp(`["']?${key}["']?\\s*[:=]\\s*(?:"([^"]+)"|'([^']+)'|\`([^\`]+)\`)`, 'i');
+  const match = pattern.exec(text);
+  return (match?.[1] || match?.[2] || match?.[3] || '').trim();
 }
 
 function Field({ label, value, onChangeText, multiline }: { label: string; value: string; onChangeText: (value: string) => void; multiline?: boolean }) {

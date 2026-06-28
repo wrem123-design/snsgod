@@ -6,8 +6,24 @@ export function createDefaultState(): SNSGodState {
   const roomId = `mika_${now.toString(36)}`;
   return {
     config: {
-      apiType: 'gemini',
+      apiType: 'vertex',
       apiProfiles: {
+        vertex: {
+          serviceAccountJson: '',
+          location: 'global',
+          serviceTier: 'auto',
+          tokenBridgeUrl: '',
+          corsProxyUrl: '',
+          proxyAccessToken: '',
+          directMode: false,
+          fetchModels: false,
+          apiEndpoint: '',
+          apiModel: 'gemini-3-flash-preview',
+          thinkingLevel: 'off',
+          thinkingBudgetTokens: 0,
+          maxTokens: 4096,
+          temperature: 0.85
+        },
         gemini: {
           apiEndpoint: 'https://generativelanguage.googleapis.com/v1beta',
           apiModel: 'gemini-2.5-flash',
@@ -32,10 +48,13 @@ export function createDefaultState(): SNSGodState {
       ,
       imageGeneration: {
         enabled: false,
-        provider: 'openai',
+        provider: 'grok-local',
         apiKey: '',
         apiEndpoint: 'https://api.openai.com/v1/responses',
         apiModel: 'gpt-5',
+        grokBaseUrl: 'http://127.0.0.1:5000',
+        grokResolution: '1k',
+        grokAspectRatio: 'auto',
         size: '1024x1024',
         quality: 'auto',
         promptPrefix: 'Create a realistic in-character phone photo. Natural lighting, casual composition, no text overlay, no watermark.',
@@ -44,10 +63,9 @@ export function createDefaultState(): SNSGodState {
         illustrationMode: false
       },
       sns: {
-        platform: 'hybrid',
+        platform: 'instagram',
         anonymous: false,
         nsfw: false,
-        hybridNsfwSplit: true,
         textOnly: false,
         noDM: false,
         thirdPartyDM: false,
@@ -55,7 +73,33 @@ export function createDefaultState(): SNSGodState {
         commentQty: '2-4',
         subject: '',
         mood: '',
-        autoImage: true
+        autoImage: true,
+        platformOptions: {
+          instagram: {
+            anonymous: false,
+            nsfw: false,
+            textOnly: false,
+            noDM: false,
+            thirdPartyDM: false,
+            autoComments: true,
+            commentQty: '2-4',
+            subject: '',
+            mood: '',
+            autoImage: true
+          },
+          twitter: {
+            anonymous: false,
+            nsfw: false,
+            textOnly: false,
+            noDM: false,
+            thirdPartyDM: false,
+            autoComments: true,
+            commentQty: '2-4',
+            subject: '',
+            mood: '',
+            autoImage: true
+          }
+        }
       }
     },
     characters: [

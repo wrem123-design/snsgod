@@ -18,11 +18,9 @@ function imageUri(value: unknown): string | undefined {
 function collectGalleryItems(state: SNSGodState): GalleryItem[] {
   const items: GalleryItem[] = [];
   for (const character of state.characters) {
-    const avatar = imageUri(character.avatar);
-    const profile = imageUri(character.profileImage);
+    const profile = imageUri(character.avatar || character.profileImage);
     const cover = imageUri(character.coverImage);
-    if (avatar) items.push({ id: `${character.id}:avatar`, title: character.name, subtitle: '아바타', uri: avatar });
-    if (profile) items.push({ id: `${character.id}:profile`, title: character.name, subtitle: '프로필 사진', uri: profile });
+    if (profile) items.push({ id: `${character.id}:profile`, title: character.name, subtitle: '프로필/목록 사진', uri: profile });
     if (cover) items.push({ id: `${character.id}:cover`, title: character.name, subtitle: '배경 사진', uri: cover });
   }
   for (const post of state.snsPosts || []) {

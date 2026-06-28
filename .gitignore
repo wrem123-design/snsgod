@@ -1,0 +1,16 @@
+android-app/build/
+mobile-rn/node_modules/
+mobile-rn/.expo/
+mobile-rn/android/.gradle/
+mobile-rn/android/build/
+mobile-rn/android/app/build/
+mobile-rn/android/app/.cxx/
+mobile-rn/android/app/release/
+*.apk
+*.idsig
+snsgod-*.png
+snsgod-ui.xml
+window.xml
+backup/
+android-app/app/src/main/assets/www/bootstrap-backup.json
+android-app/app/src/main/assets/www/bootstrap-backup.js

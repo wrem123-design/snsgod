@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "SNSGod",
+    "slug": "snsgod-mobile-rn",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "snsgod",
+    "assetBundlePatterns": [
+      "assets/**/*"
+    ],
+    "android": {
+      "package": "com.snsgod.rn",
+      "permissions": []
+    }
+  }
+}

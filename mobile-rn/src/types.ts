@@ -1,0 +1,242 @@
+export type ApiProvider = 'gemini' | 'openai' | 'anthropic' | 'custom' | 'vertex' | 'risuai';
+
+export type ApiProfile = {
+  apiKey?: string;
+  apiKeys?: string[];
+  apiEndpoint?: string;
+  apiModel?: string;
+  staticModel?: string;
+  maxTokens?: number;
+  temperature?: number;
+  contextMessageLimit?: number;
+  snsContextMessageLimit?: number;
+  phoneContextMessageLimit?: number;
+  [key: string]: unknown;
+};
+
+export type ImageGenerationConfig = {
+  enabled?: boolean;
+  provider?: 'openai' | 'custom';
+  apiKey?: string;
+  apiEndpoint?: string;
+  apiModel?: string;
+  size?: string;
+  quality?: string;
+  promptPrefix?: string;
+  negativePrompt?: string;
+  nsfw?: boolean;
+  illustrationMode?: boolean;
+};
+
+export type PromptSet = {
+  systemRules: string;
+  roleObjective: string;
+  characterActing: string;
+  jsonFormat: string;
+  memoryRules: string;
+  stickerRules: string;
+  language: string;
+  snsPosting: string;
+  profileCreation: string;
+};
+
+export type SNSGodConfig = {
+  apiType: ApiProvider;
+  apiProfiles: Partial<Record<ApiProvider, ApiProfile>>;
+  userName: string;
+  userDescription: string;
+  roomName: string;
+  language: string;
+  snsTheme?: 'default' | 'kakao';
+  lastSettingsSection?: 'user' | 'characters' | 'stickers' | 'prompts' | 'lorebook' | 'screen' | 'api' | 'image';
+  prompts?: Partial<PromptSet>;
+  autoEnabled?: boolean;
+  snsAutoChance?: number;
+  snsStartCount?: number;
+  privateFirst?: boolean;
+  groupFirst?: boolean;
+  randomDmEnabled?: boolean;
+  snsAutoPostEnabled?: boolean;
+  characterPhoneCallEnabled?: boolean;
+  imageGeneration?: ImageGenerationConfig;
+  sns?: {
+    platform?: 'instagram' | 'twitter' | 'hybrid';
+    anonymous?: boolean;
+    nsfw?: boolean;
+    hybridNsfwSplit?: boolean;
+    textOnly?: boolean;
+    noDM?: boolean;
+    thirdPartyDM?: boolean;
+    autoComments?: boolean;
+    commentQty?: string;
+    subject?: string;
+    mood?: string;
+    autoImage?: boolean;
+  };
+  [key: string]: unknown;
+};
+
+export type SNSGodCharacter = {
+  id: string;
+  name: string;
+  handle?: string;
+  avatar?: string;
+  avatarText?: string;
+  color?: string;
+  prompt?: string;
+  userName?: string;
+  userDescription?: string;
+  firstMessage?: string;
+  messageStyle?: 'balanced' | 'long' | 'burst';
+  responseDelayMin?: number;
+  responseDelayMax?: number;
+  messageGapMin?: number;
+  messageGapMax?: number;
+  responseTime?: number;
+  thinkingTime?: number;
+  reactivity?: number;
+  tone?: number;
+  frequencyMinutes?: number;
+  initiative?: number;
+  proactiveStyle?: string;
+  proactivePatience?: number;
+  statusMessage?: string;
+  profileMessage?: string;
+  profileImage?: string;
+  coverImage?: string;
+  profileAvatarPrompt?: string;
+  profileCoverPrompt?: string;
+  calendarEvents?: CalendarEvent[];
+  memories?: string[];
+  stickers?: Sticker[];
+  enabled?: boolean;
+  proactiveEnabled?: boolean;
+  timeContextEnabled?: boolean;
+  weatherEnabled?: boolean;
+  [key: string]: unknown;
+};
+
+export type SNSGodRoom = {
+  id: string;
+  characterId: string;
+  name: string;
+  createdAt?: number;
+  lastActivity?: number;
+  relationshipNote?: string;
+  userAlias?: string;
+  roomPrompt?: string;
+  pinned?: boolean;
+  [key: string]: unknown;
+};
+
+export type SNSGodMessage = {
+  id: string;
+  role: 'user' | 'character' | 'system';
+  characterId?: string;
+  content: string;
+  createdAt: number;
+  pending?: boolean;
+  failed?: boolean;
+  sticker?: string;
+  imagePrompt?: string;
+  imageCaption?: string;
+  mediaData?: string;
+  [key: string]: unknown;
+};
+
+export type Sticker = {
+  id: string;
+  name: string;
+  description?: string;
+  data?: string;
+  mediaData?: string;
+  type?: string;
+};
+
+export type CalendarEvent = {
+  id: string;
+  title: string;
+  date: string;
+  type?: string;
+  prompt?: string;
+};
+
+export type LoreEntry = {
+  id: string;
+  title: string;
+  keys: string[];
+  content: string;
+  enabled?: boolean;
+  characterId?: string;
+  roomId?: string;
+};
+
+export type SNSPost = {
+  id: string;
+  characterId: string;
+  platform: 'instagram' | 'twitter';
+  displayName?: string;
+  handle?: string;
+  content: string;
+  hashtags?: string[];
+  image?: string;
+  imagePrompt?: string;
+  imageCaption?: string;
+  createdAt: number;
+  likes?: number;
+  replies?: number;
+  reposts?: number;
+  bookmarks?: number;
+  views?: number;
+  comments?: { id: string; author: string; handle?: string; content: string; createdAt: number; likes?: number; ai?: boolean }[];
+};
+
+export type SNSDmThread = {
+  id: string;
+  postId?: string;
+  characterId: string;
+  title: string;
+  messages: { id: string; from: 'user' | 'character' | 'thirdParty'; author?: string; body: string; createdAt: number }[];
+  createdAt: number;
+  updatedAt?: number;
+  unread?: number;
+};
+
+export type GroupRoom = {
+  id: string;
+  name: string;
+  participantIds: string[];
+  createdAt: number;
+  lastActivity?: number;
+  relationshipNote?: string;
+};
+
+export type NotificationItem = {
+  id: string;
+  type: 'chat' | 'sns' | 'system';
+  title: string;
+  body?: string;
+  roomId?: string;
+  characterId?: string;
+  createdAt: number;
+  read?: boolean;
+};
+
+export type SNSGodState = {
+  config: SNSGodConfig;
+  characters: SNSGodCharacter[];
+  chatRooms: Record<string, SNSGodRoom[]>;
+  messages: Record<string, SNSGodMessage[]>;
+  unreadCounts: Record<string, number>;
+  snsPosts: SNSPost[];
+  snsDmThreads: SNSDmThread[];
+  groupRooms?: GroupRoom[];
+  loreEntries?: LoreEntry[];
+  loreFolders?: unknown[];
+  userStickers?: Sticker[];
+  notifications?: NotificationItem[];
+  selectedRoomId?: string;
+  __importedAt?: number;
+  __savedAt?: number;
+  [key: string]: unknown;
+};

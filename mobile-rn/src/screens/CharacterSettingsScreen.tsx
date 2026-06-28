@@ -1,0 +1,625 @@
+import React, { useMemo, useState } from 'react';
+import { Alert, Image, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { colors } from '../theme';
+import { CalendarEvent, LoreEntry, SNSGodCharacter, SNSGodRoom, SNSGodState } from '../types';
+import { clampNumber, makeId } from '../logic/ids';
+import { findCharacter, updateCharacter } from '../logic/stateHelpers';
+import { pickImageDataUri } from '../logic/media';
+import { generateImageDataUri } from '../logic/api';
+
+type CharacterSection = 'basic' | 'reply' | 'profile' | 'time' | 'calendar' | 'lore' | 'stickers' | 'prompt';
+
+const SECTION_TABS: { key: CharacterSection; label: string }[] = [
+  { key: 'basic', label: '기본' },
+  { key: 'reply', label: '답장/능동' },
+  { key: 'profile', label: '프로필/이미지' },
+  { key: 'time', label: '시간/날씨' },
+  { key: 'calendar', label: '기념일' },
+  { key: 'lore', label: '로어북' },
+  { key: 'stickers', label: '스티커' },
+  { key: 'prompt', label: '프롬프트' }
+];
+
+const LANGUAGE_OPTIONS = [
+  ['inherit', '전체 설정 따름'],
+  ['Korean', 'Korean'],
+  ['Japanese', 'Japanese'],
+  ['English', 'English'],
+  ['Chinese', 'Chinese'],
+  ['French', 'French'],
+  ['Spanish', 'Spanish'],
+  ['German', 'German']
+];
+
+const MESSAGE_STYLE_OPTIONS = [
+  ['balanced', '균형'],
+  ['long', '긴 문단'],
+  ['burst', '짧게 여러 번']
+];
+
+const PROACTIVE_STYLE_OPTIONS = [
+  ['auto', '프롬프트 기준'],
+  ['reserved', '무뚝뚝/절제'],
+  ['steady', '담백/가끔'],
+  ['attached', '외로움/애착'],
+  ['obsessive', '집착/끈질김']
+];
+
+const CALENDAR_PRESETS = [
+  {
+    title: '첫 생일',
+    type: 'birthday',
+    prompt: 'Event type: this character birthday. The user remembered it and may mention it warmly.'
+  },
+  {
+    title: '연인',
+    type: 'relationship',
+    prompt: 'Event type: relationship anniversary. Let the character remember it naturally if appropriate.'
+  },
+  {
+    title: '결혼기념일',
+    type: 'wedding',
+    prompt: 'Event type: wedding anniversary. Use the relationship tone from the character profile.'
+  },
+  {
+    title: '기념일',
+    type: 'anniversary',
+    prompt: 'Event type: special anniversary. Mention it only when it feels natural.'
+  },
+  {
+    title: '약속',
+    type: 'promise',
+    prompt: 'Event type: promise or appointment. The character may remember it first.'
+  }
+];
+
+export function CharacterSettingsScreen({ state, characterId, onBack, onChange }: {
+  state: SNSGodState;
+  characterId: string;
+  onBack: () => void;
+  onChange: (next: SNSGodState) => Promise<void> | void;
+}) {
+  const character = findCharacter(state, characterId);
+  const [draft, setDraft] = useState<SNSGodCharacter | null>(character ? normalizeDraft(character) : null);
+  const [activeSection, setActiveSection] = useState<CharacterSection>('basic');
+  const [memoryText, setMemoryText] = useState((character?.memories || []).join('\n'));
+  const [stickerText, setStickerText] = useState((character?.stickers || []).map(item => `${item.id}|${item.name}|${item.description || ''}|${item.data || item.mediaData || ''}`).join('\n'));
+  const [eventTitle, setEventTitle] = useState('');
+  const [eventDate, setEventDate] = useState('');
+  const [eventType, setEventType] = useState('anniversary');
+  const [eventPrompt, setEventPrompt] = useState('');
+  const [loreScope, setLoreScope] = useState<'character' | 'room'>('character');
+  const rooms = useMemo(() => state.chatRooms[characterId] || [], [state.chatRooms, characterId]);
+  const [loreRoomId, setLoreRoomId] = useState(rooms[0]?.id || '');
+  const [loreTitle, setLoreTitle] = useState('');
+  const [loreKeys, setLoreKeys] = useState('');
+  const [loreContent, setLoreContent] = useState('');
+  const [inlineStatus, setInlineStatus] = useState('');
+
+  if (!character || !draft) {
+    return (
+      <View style={styles.empty}>
+        <Text style={styles.emptyText}>캐릭터를 찾을 수 없습니다.</Text>
+        <Pressable onPress={onBack} style={styles.primary}><Text style={styles.primaryText}>돌아가기</Text></Pressable>
+      </View>
+    );
+  }
+
+  const characterLore = (state.loreEntries || []).filter(entry => entry.characterId === characterId && !entry.roomId);
+  const roomLore = (state.loreEntries || []).filter(entry => entry.characterId === characterId && entry.roomId);
+
+  async function save(close = true) {
+    if (!draft || !character) return;
+    const minDelay = clampNumber(draft.responseDelayMin, 1, 120, 1);
+    const minGap = clampNumber(draft.messageGapMin, 1, 10, 1);
+    const next = updateCharacter(state, characterId, {
+      ...draft,
+      name: draft.name.trim() || character.name,
+      handle: String(draft.handle || '').trim(),
+      avatarText: String(draft.avatarText || draft.name || '').slice(0, 2),
+      language: String(draft.language || 'inherit'),
+      color: String(draft.color || '#8bd3dd'),
+      messageStyle: validChoice(String(draft.messageStyle || 'balanced'), MESSAGE_STYLE_OPTIONS, 'balanced') as SNSGodCharacter['messageStyle'],
+      proactiveStyle: validChoice(String(draft.proactiveStyle || 'auto'), PROACTIVE_STYLE_OPTIONS, 'auto'),
+      proactivePatience: clampNumber(draft.proactivePatience, 0, 8, 2),
+      responseDelayMin: minDelay,
+      responseDelayMax: Math.max(clampNumber(draft.responseDelayMax, 1, 120, 8), minDelay),
+      messageGapMin: minGap,
+      messageGapMax: Math.max(clampNumber(draft.messageGapMax, 1, 10, 3), minGap),
+      responseTime: clampNumber(draft.responseTime, 1, 10, 6),
+      thinkingTime: clampNumber(draft.thinkingTime, 1, 10, 6),
+      reactivity: clampNumber(draft.reactivity, 1, 10, 8),
+      tone: clampNumber(draft.tone, 1, 10, 8),
+      frequencyMinutes: Math.max(1, Number(draft.frequencyMinutes) || 10),
+      initiative: clampNumber(draft.initiative, 0, 100, 40),
+      locationName: String(draft.locationName || 'Seoul'),
+      timeZone: String(draft.timeZone || 'Asia/Seoul'),
+      latitude: Number(draft.latitude) || 37.5665,
+      longitude: Number(draft.longitude) || 126.978,
+      statusMessageChangeChance: clampNumber(draft.statusMessageChangeChance, 0, 100, 40),
+      profilePhotoChangeChance: clampNumber(draft.profilePhotoChangeChance, 0, 100, 5),
+      coverPhotoChangeChance: clampNumber(draft.coverPhotoChangeChance, 0, 100, 5),
+      calendarEvents: (draft.calendarEvents || []).map(normalizeCalendarEvent).filter(item => item.title || item.date),
+      memories: memoryText.split('\n').map(item => item.trim()).filter(Boolean).slice(-80),
+      stickers: parseStickers(stickerText)
+    });
+    await onChange(next);
+    setInlineStatus('캐릭터 설정을 저장했습니다.');
+    if (close) onBack();
+  }
+
+  function set<K extends keyof SNSGodCharacter>(key: K, value: SNSGodCharacter[K]) {
+    setDraft(prev => prev ? { ...prev, [key]: value } : prev);
+  }
+
+  async function chooseImage(key: 'avatar' | 'profileImage' | 'coverImage') {
+    try {
+      const image = await pickImageDataUri();
+      if (image) set(key, image);
+    } catch (error) {
+      Alert.alert('사진 선택 실패', error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function addStickerImage() {
+    try {
+      const image = await pickImageDataUri();
+      if (!image || !draft) return;
+      const id = `sticker_${Date.now().toString(36)}`;
+      const line = `${id}|${draft.name} 스티커|직접 추가한 이미지 스티커|${image}`;
+      setStickerText(prev => prev.trim() ? `${prev.trim()}\n${line}` : line);
+    } catch (error) {
+      Alert.alert('스티커 선택 실패', error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function generateProfileImage(kind: 'profileImage' | 'coverImage') {
+    if (!draft) return;
+    try {
+      const prompt = kind === 'profileImage'
+        ? String(draft.profileAvatarPrompt || `portrait profile photo, clear face, casual expression, messenger profile picture, ${draft.name}`)
+        : String(draft.profileCoverPrompt || `quiet mood cover background for ${draft.name}, no people, no text`);
+      const image = await generateImageDataUri(state, prompt, draft);
+      set(kind, image);
+    } catch (error) {
+      Alert.alert('AI 이미지 생성 실패', error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function applyCalendarPreset(preset: typeof CALENDAR_PRESETS[number]) {
+    setEventTitle(preset.title);
+    setEventType(preset.type);
+    setEventPrompt(preset.prompt);
+  }
+
+  function addCalendarEvent() {
+    if (!draft) return;
+    const event = normalizeCalendarEvent({
+      id: makeId('event'),
+      title: eventTitle || '새 기념일',
+      date: eventDate || 'MM-DD',
+      type: eventType || 'anniversary',
+      prompt: eventPrompt
+    });
+    set('calendarEvents', [event, ...(draft.calendarEvents || [])]);
+    setEventTitle('');
+    setEventDate('');
+    setEventType('anniversary');
+    setEventPrompt('');
+  }
+
+  function removeCalendarEvent(id: string) {
+    if (!draft) return;
+    set('calendarEvents', (draft.calendarEvents || []).filter(item => item.id !== id));
+  }
+
+  async function addLoreEntry() {
+    const keys = loreKeys.split(',').map(item => item.trim()).filter(Boolean);
+    if (!loreTitle.trim() && !keys.length && !loreContent.trim()) {
+      setInlineStatus('로어북 제목, 트리거, 내용 중 하나는 입력해야 합니다.');
+      return;
+    }
+    const entry: LoreEntry = {
+      id: makeId('lore'),
+      title: loreTitle.trim() || '새 로어북 블록',
+      keys,
+      content: loreContent.trim(),
+      enabled: true,
+      characterId,
+      roomId: loreScope === 'room' ? loreRoomId || rooms[0]?.id : undefined
+    };
+    await onChange({ ...state, loreEntries: [entry, ...(state.loreEntries || [])] });
+    setLoreTitle('');
+    setLoreKeys('');
+    setLoreContent('');
+    setInlineStatus('로어북 블록을 추가했습니다.');
+  }
+
+  async function removeLoreEntry(id: string) {
+    await onChange({ ...state, loreEntries: (state.loreEntries || []).filter(entry => entry.id !== id) });
+    setInlineStatus('로어북 블록을 삭제했습니다.');
+  }
+
+  return (
+    <View style={styles.screen}>
+      <View style={styles.header}>
+        <Pressable onPress={onBack} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable>
+        <Text style={styles.title}>{character.name} 설정</Text>
+        <Pressable onPress={() => save(false)} style={styles.saveTop}><Text style={styles.saveTopText}>저장</Text></Pressable>
+      </View>
+      <View style={styles.tabsWrap}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs}>
+          {SECTION_TABS.map(tab => (
+            <Pressable key={tab.key} onPress={() => setActiveSection(tab.key)} style={[styles.tab, activeSection === tab.key && styles.tabActive]}>
+              <Text style={[styles.tabText, activeSection === tab.key && styles.tabTextActive]}>{tab.label}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      </View>
+      <ScrollView contentContainerStyle={styles.content}>
+        {inlineStatus ? <Text style={styles.status}>{inlineStatus}</Text> : null}
+
+        {activeSection === 'basic' ? (
+          <Section title="캐릭터 기본 설정">
+            <ChoiceRow label="캐릭터 언어" value={String(draft.language || 'inherit')} options={LANGUAGE_OPTIONS} onChange={value => set('language', value)} help="비워 두면 전체 설정 출력 언어를 따릅니다." />
+            <Field label="이름" value={draft.name} onChangeText={value => set('name', value)} />
+            <Field label="핸들" value={String(draft.handle || '')} onChangeText={value => set('handle', value)} help="SNS/검색에서 보이는 짧은 아이디입니다." />
+            <Field label="아바타 글자" value={String(draft.avatarText || '')} onChangeText={value => set('avatarText', value)} />
+            <Field label="이 캐릭터에게 보일 내 이름" value={String(draft.userName || '')} onChangeText={value => set('userName', value)} help="빈칸이면 기본 내 프로필 이름을 사용합니다. 방 설정의 호칭 지시가 있으면 방 설정이 최우선입니다." />
+            <Field label="색상" value={String(draft.color || '#8bd3dd')} onChangeText={value => set('color', value)} help="HEX 직접 입력. 예: #8bd3dd" />
+            <Palette value={String(draft.color || '#8bd3dd')} onChange={value => set('color', value)} />
+            <ChoiceRow label="메시지 스타일" value={String(draft.messageStyle || 'balanced')} options={MESSAGE_STYLE_OPTIONS} onChange={value => set('messageStyle', value as SNSGodCharacter['messageStyle'])} />
+            <SwitchRow label="활성화" value={draft.enabled !== false} onValueChange={value => set('enabled', value)} />
+            <SwitchRow label="먼저 말하기" value={draft.proactiveEnabled === true} onValueChange={value => set('proactiveEnabled', value)} />
+          </Section>
+        ) : null}
+
+        {activeSection === 'reply' ? (
+          <Section title="답장/능동 성향">
+            <ChoiceRow label="선톡 성향" value={String(draft.proactiveStyle || 'auto')} options={PROACTIVE_STYLE_OPTIONS} onChange={value => set('proactiveStyle', value)} />
+            <NumberField label="무응답 인내도(0-8)" value={draft.proactivePatience} onChange={value => set('proactivePatience', value)} help="0은 답이 없으면 빨리 멈춤, 8은 오래 기다리거나 여러 번 이어갑니다." />
+            <NumberField label="읽음/답장 최소 지연(초)" value={draft.responseDelayMin} onChange={value => set('responseDelayMin', value)} />
+            <NumberField label="답장 최대 지연(초)" value={draft.responseDelayMax} onChange={value => set('responseDelayMax', value)} help="원본 기준 최대 120초까지 허용합니다." />
+            <NumberField label="연속 메시지 간격 최소(초)" value={draft.messageGapMin} onChange={value => set('messageGapMin', value)} />
+            <NumberField label="연속 메시지 간격 최대(초)" value={draft.messageGapMax} onChange={value => set('messageGapMax', value)} />
+            <NumberField label="확인 속도(1-10)" value={draft.responseTime} onChange={value => set('responseTime', value)} />
+            <NumberField label="생각 깊이(1-10)" value={draft.thinkingTime} onChange={value => set('thinkingTime', value)} />
+            <NumberField label="반응성(1-10)" value={draft.reactivity} onChange={value => set('reactivity', value)} />
+            <NumberField label="말투 강도(1-10)" value={draft.tone} onChange={value => set('tone', value)} />
+            <NumberField label="능동 발화 간격(분)" value={draft.frequencyMinutes} onChange={value => set('frequencyMinutes', value)} help="작을수록 먼저 말을 걸 기회가 자주 옵니다." />
+            <NumberField label="능동 발화 확률(0-100)" value={draft.initiative} onChange={value => set('initiative', value)} />
+          </Section>
+        ) : null}
+
+        {activeSection === 'profile' ? (
+          <Section title="프로필 / 상태 / 이미지">
+            <Field label="상태 메시지" value={String(draft.statusMessage || '')} onChangeText={value => set('statusMessage', value)} />
+            <Field label="프로필 소개" value={String(draft.profileMessage || '')} onChangeText={value => set('profileMessage', value)} multiline help="캐릭터 사진을 눌렀을 때 보이는 프로필 문구입니다." />
+            <ImageField label="아바타/목록 사진" value={draft.avatar} onChoose={() => chooseImage('avatar')} onClear={() => set('avatar', '')} />
+            <ImageField label="프로필 큰 사진" value={draft.profileImage} onChoose={() => chooseImage('profileImage')} onClear={() => set('profileImage', '')} onGenerate={() => generateProfileImage('profileImage')} />
+            <ImageField label="프로필 배경 사진" value={draft.coverImage} onChoose={() => chooseImage('coverImage')} onClear={() => set('coverImage', '')} onGenerate={() => generateProfileImage('coverImage')} wide />
+            <Field label="프로필사진 프롬프트" value={String(draft.profileAvatarPrompt || '')} onChangeText={value => set('profileAvatarPrompt', value)} multiline />
+            <Field label="배경사진 프롬프트" value={String(draft.profileCoverPrompt || '')} onChangeText={value => set('profileCoverPrompt', value)} multiline />
+            <SwitchRow label="상태메시지 자동 변경" value={draft.statusMessageAutoChange !== false} onValueChange={value => set('statusMessageAutoChange', value)} />
+            <SwitchRow label="프로필사진 자동 변경" value={draft.profilePhotoAutoChange === true} onValueChange={value => set('profilePhotoAutoChange', value)} />
+            <SwitchRow label="배경사진 자동 변경" value={draft.coverPhotoAutoChange === true} onValueChange={value => set('coverPhotoAutoChange', value)} />
+            <NumberField label="상태메시지 변경 확률(%)" value={draft.statusMessageChangeChance} onChange={value => set('statusMessageChangeChance', value)} />
+            <NumberField label="프로필사진 변경 확률(%)" value={draft.profilePhotoChangeChance} onChange={value => set('profilePhotoChangeChance', value)} />
+            <NumberField label="배경사진 변경 확률(%)" value={draft.coverPhotoChangeChance} onChange={value => set('coverPhotoChangeChance', value)} />
+          </Section>
+        ) : null}
+
+        {activeSection === 'time' ? (
+          <Section title="시간 / 날씨">
+            <Field label="위치 이름" value={String(draft.locationName || '')} onChangeText={value => set('locationName', value)} />
+            <Field label="타임존" value={String(draft.timeZone || '')} onChangeText={value => set('timeZone', value)} />
+            <NumberField label="위도" value={draft.latitude} onChange={value => set('latitude', value)} />
+            <NumberField label="경도" value={draft.longitude} onChange={value => set('longitude', value)} />
+            <SwitchRow label="현재 시각 알려주기" value={draft.timeContextEnabled !== false} onValueChange={value => set('timeContextEnabled', value)} />
+            <SwitchRow label="현재 날씨 알려주기" value={draft.weatherEnabled !== false} onValueChange={value => set('weatherEnabled', value)} />
+            <Text style={styles.help}>답마다 강제로 말하지 않고, 필요할 때 자연스럽게 참고합니다.</Text>
+          </Section>
+        ) : null}
+
+        {activeSection === 'calendar' ? (
+          <Section title="캐릭터 기념일">
+            <Text style={styles.help}>MM-DD는 매년 반복, YYYY-MM-DD는 한 번만 적용됩니다.</Text>
+            <View style={styles.chips}>
+              {CALENDAR_PRESETS.map(preset => (
+                <Pressable key={preset.type} onPress={() => applyCalendarPreset(preset)} style={styles.chip}>
+                  <Text style={styles.chipText}>{preset.title}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <Field label="제목" value={eventTitle} onChangeText={setEventTitle} />
+            <Field label="날짜" value={eventDate} onChangeText={setEventDate} help="예: 05-12 또는 2026-05-12" />
+            <Field label="종류" value={eventType} onChangeText={setEventType} />
+            <Field label="이벤트 지시문" value={eventPrompt} onChangeText={setEventPrompt} multiline />
+            <Pressable onPress={addCalendarEvent} style={styles.secondary}><Text style={styles.secondaryText}>기념일 추가</Text></Pressable>
+            {(draft.calendarEvents || []).length ? (draft.calendarEvents || []).map(event => (
+              <ListCard key={event.id} title={event.title || '기념일'} subtitle={`${event.date || '날짜 없음'} · ${event.type || 'event'}`} body={event.prompt} onDelete={() => removeCalendarEvent(event.id)} />
+            )) : <Text style={styles.help}>아직 캐릭터 기념일이 없습니다.</Text>}
+          </Section>
+        ) : null}
+
+        {activeSection === 'lore' ? (
+          <Section title={`${character.name} 로어북`}>
+            <Text style={styles.help}>트리거 단어가 대화에 등장할 때만 프롬프트에 들어갑니다. 캐릭터 범위는 모든 채팅방, 채팅방 범위는 선택한 방에서만 적용됩니다.</Text>
+            <ChoiceRow label="적용 범위" value={loreScope} options={[['character', '캐릭터 전체'], ['room', '채팅방 전용']]} onChange={value => setLoreScope(value as 'character' | 'room')} />
+            {loreScope === 'room' ? <ChoiceRow label="대상 채팅방" value={loreRoomId || rooms[0]?.id || ''} options={rooms.map(room => [room.id, room.name || '새 채팅'])} onChange={setLoreRoomId} /> : null}
+            <Field label="제목" value={loreTitle} onChangeText={setLoreTitle} />
+            <Field label="트리거 단어" value={loreKeys} onChangeText={setLoreKeys} help="쉼표로 구분합니다. 예: 학교, 첫사랑, 약속" />
+            <Field label="내용" value={loreContent} onChangeText={setLoreContent} multiline />
+            <Pressable onPress={addLoreEntry} style={styles.secondary}><Text style={styles.secondaryText}>새 블록</Text></Pressable>
+            <Text style={styles.subhead}>캐릭터 로어북</Text>
+            {characterLore.length ? characterLore.map(entry => <LoreCard key={entry.id} entry={entry} rooms={rooms} onDelete={() => removeLoreEntry(entry.id)} />) : <Text style={styles.help}>이 캐릭터 전체에 적용되는 로어북 블록이 아직 없습니다.</Text>}
+            <Text style={styles.subhead}>채팅방 로어북</Text>
+            {roomLore.length ? roomLore.map(entry => <LoreCard key={entry.id} entry={entry} rooms={rooms} onDelete={() => removeLoreEntry(entry.id)} />) : <Text style={styles.help}>채팅방 전용 로어북 블록이 아직 없습니다.</Text>}
+          </Section>
+        ) : null}
+
+        {activeSection === 'stickers' ? (
+          <Section title="캐릭터 스티커">
+            <StickerPreview text={stickerText} />
+            <Pressable onPress={addStickerImage} style={styles.imageButton}><Text style={styles.imageButtonText}>이미지 스티커 추가</Text></Pressable>
+            <Field
+              label="캐릭터 스티커"
+              value={stickerText}
+              onChangeText={setStickerText}
+              multiline
+              help="한 줄에 id|이름|설명|이미지dataURI 형식입니다. AI가 답변 JSON의 sticker 값으로 id를 반환하면 실제 이미지가 표시됩니다."
+            />
+          </Section>
+        ) : null}
+
+        {activeSection === 'prompt' ? (
+          <Section title="프롬프트 / 메모리">
+            <Field
+              label="이 캐릭터에게 보일 내 프로필"
+              value={String(draft.userDescription || '')}
+              onChangeText={value => set('userDescription', value)}
+              multiline
+              help="값이 들어가면 기본 유저 프로필 내용을 대체합니다. 간단한 관계 추가는 방 설정의 관계/호칭 메모를 쓰는 편이 좋습니다."
+            />
+            <Field label="캐릭터 프롬프트" value={String(draft.prompt || '')} onChangeText={value => set('prompt', value)} multiline />
+            <Field label="삽화 외형 태그" value={String(draft.illustrationTags || '')} onChangeText={value => set('illustrationTags', value)} multiline help="AI 이미지 생성 시 캐릭터 외형 태그로 참고합니다." />
+            <Field label="첫 메시지" value={String(draft.firstMessage || '')} onChangeText={value => set('firstMessage', value)} multiline />
+            <Field
+              label="캐릭터 장기 메모리"
+              value={memoryText}
+              onChangeText={setMemoryText}
+              multiline
+              help="한 줄에 하나씩 저장됩니다. 답장 프롬프트에 항상 참고 정보로 들어갑니다."
+            />
+          </Section>
+        ) : null}
+
+        <Pressable onPress={() => save(true)} style={styles.primary}><Text style={styles.primaryText}>캐릭터 저장</Text></Pressable>
+      </ScrollView>
+    </View>
+  );
+}
+
+function normalizeDraft(character: SNSGodCharacter): SNSGodCharacter {
+  return {
+    ...character,
+    language: String(character.language || 'inherit'),
+    color: String(character.color || '#8bd3dd'),
+    messageStyle: character.messageStyle || 'balanced',
+    proactiveStyle: String(character.proactiveStyle || 'auto'),
+    proactivePatience: Number(character.proactivePatience ?? 2),
+    responseDelayMin: Number(character.responseDelayMin ?? 1),
+    responseDelayMax: Number(character.responseDelayMax ?? 8),
+    messageGapMin: Number(character.messageGapMin ?? 1),
+    messageGapMax: Number(character.messageGapMax ?? 3),
+    responseTime: Number(character.responseTime ?? 6),
+    thinkingTime: Number(character.thinkingTime ?? 6),
+    reactivity: Number(character.reactivity ?? 8),
+    tone: Number(character.tone ?? 8),
+    frequencyMinutes: Number(character.frequencyMinutes ?? 10),
+    initiative: Number(character.initiative ?? 40),
+    statusMessage: String(character.statusMessage || '접속 중'),
+    locationName: String(character.locationName || 'Seoul'),
+    timeZone: String(character.timeZone || 'Asia/Seoul'),
+    latitude: Number(character.latitude ?? 37.5665),
+    longitude: Number(character.longitude ?? 126.978),
+    statusMessageAutoChange: character.statusMessageAutoChange !== false,
+    profilePhotoAutoChange: character.profilePhotoAutoChange === true,
+    coverPhotoAutoChange: character.coverPhotoAutoChange === true,
+    statusMessageChangeChance: Number(character.statusMessageChangeChance ?? 40),
+    profilePhotoChangeChance: Number(character.profilePhotoChangeChance ?? 5),
+    coverPhotoChangeChance: Number(character.coverPhotoChangeChance ?? 5),
+    weatherEnabled: character.weatherEnabled !== false,
+    timeContextEnabled: character.timeContextEnabled !== false,
+    calendarEvents: (character.calendarEvents || []).map(normalizeCalendarEvent)
+  };
+}
+
+function normalizeCalendarEvent(event: Partial<CalendarEvent>): CalendarEvent {
+  return {
+    id: String(event.id || makeId('event')),
+    title: String(event.title || ''),
+    date: String(event.date || ''),
+    type: String(event.type || 'anniversary'),
+    prompt: String(event.prompt || '')
+  };
+}
+
+function validChoice(value: string, options: string[][], fallback: string) {
+  return options.some(([key]) => key === value) ? value : fallback;
+}
+
+function parseStickers(text: string) {
+  return text.split('\n').map(item => item.trim()).filter(Boolean).map((line, index) => {
+    const [id, name, description, data] = line.split('|').map(part => part.trim());
+    return { id: id || `sticker_${index + 1}`, name: name || id || `스티커 ${index + 1}`, description: description || undefined, data: data || undefined, mediaData: data || undefined };
+  }).slice(0, 80);
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return <View style={styles.card}><Text style={styles.cardTitle}>{title}</Text>{children}</View>;
+}
+
+function Field({ label, value, onChangeText, help, multiline }: { label: string; value: string; onChangeText: (value: string) => void; help?: string; multiline?: boolean }) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.label}>{label}</Text>
+      <TextInput value={value} onChangeText={onChangeText} style={[styles.input, multiline && styles.textarea]} multiline={multiline} textAlignVertical={multiline ? 'top' : 'center'} />
+      {help ? <Text style={styles.help}>{help}</Text> : null}
+    </View>
+  );
+}
+
+function NumberField({ label, value, onChange, help }: { label: string; value: unknown; onChange: (value: number) => void; help?: string }) {
+  return <Field label={label} value={String(value ?? '')} onChangeText={text => onChange(Number(text) || 0)} help={help} />;
+}
+
+function ChoiceRow({ label, value, options, onChange, help }: { label: string; value: string; options: string[][]; onChange: (value: string) => void; help?: string }) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.label}>{label}</Text>
+      <View style={styles.chips}>
+        {options.length ? options.map(([key, text]) => (
+          <Pressable key={key} onPress={() => onChange(key)} style={[styles.chip, value === key && styles.chipActive]}>
+            <Text style={[styles.chipText, value === key && styles.chipTextActive]}>{text}</Text>
+          </Pressable>
+        )) : <Text style={styles.help}>선택 가능한 항목이 없습니다.</Text>}
+      </View>
+      {help ? <Text style={styles.help}>{help}</Text> : null}
+    </View>
+  );
+}
+
+function Palette({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const palette = ['#8bd3dd', '#79c2f2', '#5aa8e8', '#7686f4', '#9b75df', '#b66eed', '#eda1c7', '#ff7896', '#e95f72', '#f28ba7', '#ff9f43', '#ffc878', '#ffe66d', '#d8edb7', '#97d5b5', '#52b788', '#2ec4b6', '#94d2e9', '#b7c5f4', '#c7b5dc', '#ffb3c6', '#ffd6a5', '#fdffb6', '#caffbf', '#a0c4ff', '#bdb2ff', '#f7f7f2', '#d5d8dc', '#34495e', '#0b1320'];
+  return (
+    <View style={styles.palette}>
+      {palette.map(color => (
+        <Pressable key={color} onPress={() => onChange(color)} style={[styles.swatch, { backgroundColor: color }, value.toLowerCase() === color.toLowerCase() && styles.swatchActive]} />
+      ))}
+    </View>
+  );
+}
+
+function ImageField({ label, value, onChoose, onClear, onGenerate, wide }: { label: string; value?: string; onChoose: () => void; onClear: () => void; onGenerate?: () => void; wide?: boolean }) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.label}>{label}</Text>
+      <View style={styles.imageRow}>
+        {value ? <Image source={{ uri: value }} style={[styles.preview, wide && styles.previewWide]} /> : <View style={[styles.preview, styles.emptyPreview, wide && styles.previewWide]}><Text style={styles.emptyPreviewText}>사진 없음</Text></View>}
+        <View style={styles.imageButtons}>
+          <Pressable onPress={onChoose} style={styles.imageButton}><Text style={styles.imageButtonText}>직접 넣기</Text></Pressable>
+          {onGenerate ? <Pressable onPress={onGenerate} style={styles.imageButton}><Text style={styles.imageButtonText}>사진 직접 AI 생성</Text></Pressable> : null}
+          <Pressable onPress={onClear} style={styles.imageButton}><Text style={styles.imageButtonText}>비우기</Text></Pressable>
+        </View>
+      </View>
+      <Text style={styles.help}>휴대폰 갤러리에서 직접 선택합니다. 백업에는 이미지 데이터가 함께 저장됩니다.</Text>
+    </View>
+  );
+}
+
+function StickerPreview({ text }: { text: string }) {
+  const stickers = parseStickers(text).slice(0, 12);
+  if (!stickers.length) return <Text style={styles.help}>등록된 스티커가 없습니다.</Text>;
+  return (
+    <View style={styles.stickerGrid}>
+      {stickers.map((item, index) => (
+        <View key={`${item.id}-${index}`} style={styles.stickerTile}>
+          {item.data?.startsWith('data:') ? <Image source={{ uri: item.data }} style={styles.stickerImage} /> : <Text style={styles.stickerFallback}>ID</Text>}
+          <Text style={styles.stickerName} numberOfLines={1}>{item.name || item.id}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function SwitchRow({ label, value, onValueChange }: { label: string; value: boolean; onValueChange: (value: boolean) => void }) {
+  return (
+    <View style={styles.switchRow}>
+      <Text style={styles.switchLabel}>{label}</Text>
+      <Switch value={value} onValueChange={onValueChange} />
+    </View>
+  );
+}
+
+function ListCard({ title, subtitle, body, onDelete }: { title: string; subtitle?: string; body?: string; onDelete: () => void }) {
+  return (
+    <View style={styles.listCard}>
+      <View style={styles.listHeader}>
+        <View style={styles.listText}>
+          <Text style={styles.listTitle}>{title}</Text>
+          {subtitle ? <Text style={styles.help}>{subtitle}</Text> : null}
+        </View>
+        <Pressable onPress={onDelete} style={styles.danger}><Text style={styles.dangerText}>삭제</Text></Pressable>
+      </View>
+      {body ? <Text style={styles.listBody}>{body}</Text> : null}
+    </View>
+  );
+}
+
+function LoreCard({ entry, rooms, onDelete }: { entry: LoreEntry; rooms: SNSGodRoom[]; onDelete: () => void }) {
+  const roomName = entry.roomId ? rooms.find(room => room.id === entry.roomId)?.name || '채팅방' : '캐릭터 전체';
+  return <ListCard title={entry.title || '로어북 블록'} subtitle={`${roomName} · ${(entry.keys || []).join(', ') || '트리거 없음'}`} body={entry.content} onDelete={onDelete} />;
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.bg },
+  header: { minHeight: 72, paddingTop: 10, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.panel, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  back: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 21, backgroundColor: '#eee8dc' },
+  backText: { fontSize: 34, lineHeight: 36, color: colors.text },
+  title: { flex: 1, fontSize: 20, fontWeight: '900', color: colors.text },
+  saveTop: { minHeight: 38, paddingHorizontal: 14, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  saveTopText: { color: '#241a00', fontWeight: '900' },
+  tabsWrap: { backgroundColor: colors.panel, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  tabs: { paddingHorizontal: 10, paddingVertical: 8, gap: 8 },
+  tab: { minHeight: 36, paddingHorizontal: 12, borderRadius: 18, borderWidth: 1, borderColor: colors.border, backgroundColor: '#eee8dc', alignItems: 'center', justifyContent: 'center' },
+  tabActive: { backgroundColor: '#111111', borderColor: '#111111' },
+  tabText: { color: colors.text, fontWeight: '900', fontSize: 13 },
+  tabTextActive: { color: '#ffffff' },
+  content: { padding: 14, gap: 14, paddingBottom: 32 },
+  status: { color: '#5e4d16', backgroundColor: '#fff1bf', borderWidth: 1, borderColor: '#e3c65f', padding: 10, borderRadius: 8, fontWeight: '900' },
+  card: { backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 14, gap: 10 },
+  cardTitle: { fontSize: 17, fontWeight: '900', color: colors.text },
+  subhead: { marginTop: 8, color: colors.text, fontSize: 15, fontWeight: '900' },
+  field: { gap: 6 },
+  label: { fontSize: 12, color: colors.sub, fontWeight: '900' },
+  input: { minHeight: 44, borderWidth: 1, borderColor: colors.border, borderRadius: 7, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: '#fffefa', color: colors.text, fontSize: 15 },
+  textarea: { minHeight: 116, maxHeight: 220 },
+  help: { color: colors.sub, fontSize: 12, lineHeight: 18 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { minHeight: 36, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#eee8dc', alignItems: 'center', justifyContent: 'center' },
+  chipActive: { backgroundColor: colors.accent, borderColor: '#b79427' },
+  chipText: { color: colors.text, fontWeight: '900' },
+  chipTextActive: { color: '#241a00' },
+  palette: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 },
+  swatch: { width: 26, height: 26, borderRadius: 13, borderWidth: 1, borderColor: '#8b867b' },
+  swatchActive: { borderWidth: 3, borderColor: '#222222' },
+  switchRow: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  switchLabel: { color: colors.text, fontWeight: '900' },
+  imageRow: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  preview: { width: 74, height: 74, borderRadius: 12, backgroundColor: '#eee8dc' },
+  previewWide: { width: 132 },
+  emptyPreview: { alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border },
+  emptyPreviewText: { color: colors.sub, fontSize: 12, fontWeight: '800' },
+  imageButtons: { flex: 1, gap: 8 },
+  imageButton: { minHeight: 38, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
+  imageButtonText: { color: colors.text, fontWeight: '900' },
+  stickerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  stickerTile: { width: 74, padding: 6, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center' },
+  stickerImage: { width: 48, height: 48, borderRadius: 8 },
+  stickerFallback: { width: 48, height: 48, borderRadius: 8, overflow: 'hidden', lineHeight: 48, textAlign: 'center', backgroundColor: '#eee8dc', color: colors.sub, fontWeight: '900' },
+  stickerName: { marginTop: 5, fontSize: 11, color: colors.text, fontWeight: '800' },
+  listCard: { borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#f4f1ea', padding: 12, gap: 8 },
+  listHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  listText: { flex: 1 },
+  listTitle: { color: colors.text, fontWeight: '900' },
+  listBody: { color: colors.text, fontSize: 13, lineHeight: 19 },
+  secondary: { minHeight: 44, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
+  secondaryText: { color: colors.text, fontWeight: '900' },
+  danger: { minHeight: 34, paddingHorizontal: 12, borderRadius: 7, borderWidth: 1, borderColor: '#f2a9a9', alignItems: 'center', justifyContent: 'center' },
+  dangerText: { color: colors.danger, fontWeight: '900' },
+  primary: { minHeight: 48, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  primaryText: { color: '#241a00', fontWeight: '900', fontSize: 16 },
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg, padding: 24 },
+  emptyText: { color: colors.text, fontWeight: '900', marginBottom: 14 }
+});

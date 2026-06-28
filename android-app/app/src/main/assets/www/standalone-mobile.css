@@ -1,0 +1,633 @@
+html.snsgod-android-shell,
+html.snsgod-android-shell body {
+    min-width: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #050b16;
+}
+
+html.snsgod-android-shell * {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+}
+
+html.snsgod-android-shell input,
+html.snsgod-android-shell select,
+html.snsgod-android-shell textarea {
+    font-size: 16px;
+}
+
+html.snsgod-android-shell .mg-btn,
+html.snsgod-android-shell .mg-icon,
+html.snsgod-android-shell button {
+    touch-action: manipulation;
+}
+
+html.snsgod-android-shell .standalone-boot {
+    min-height: 100dvh;
+}
+
+html.snsgod-android-shell .mg-shell,
+html.snsgod-android-shell .mg-phone-shell,
+html.snsgod-android-shell .mg-sumgod-shell,
+html.snsgod-android-shell .mg-random-phone-app,
+html.snsgod-android-shell .mg-phone-social-app {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    overflow: hidden !important;
+}
+
+html.snsgod-android-shell .mg-main,
+html.snsgod-android-shell .mg-panel,
+html.snsgod-android-shell .mg-settings,
+html.snsgod-android-shell .mg-social,
+html.snsgod-android-shell .mg-home {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow-x: hidden !important;
+    -webkit-overflow-scrolling: touch;
+}
+
+html.snsgod-android-shell .mg-top {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 1000 !important;
+    min-width: 0 !important;
+    padding-top: max(8px, env(safe-area-inset-top)) !important;
+}
+
+html.snsgod-android-shell .mg-title {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+}
+
+html.snsgod-android-shell .mg-title strong,
+html.snsgod-android-shell .mg-title span {
+    max-width: 100% !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+
+html.snsgod-android-shell .mg-phone-app-open > .mg-top .mg-title {
+    display: none !important;
+}
+
+html.snsgod-android-shell .mg-phone-app-open > .mg-top .mg-actions {
+    margin-left: auto !important;
+    max-width: calc(100vw - 72px) !important;
+}
+
+html.snsgod-android-shell .mg-actions {
+    flex: 0 1 auto !important;
+    min-width: 0 !important;
+    max-width: 62vw !important;
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    justify-content: flex-end !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scrollbar-width: none !important;
+}
+
+html.snsgod-android-shell .mg-actions::-webkit-scrollbar,
+html.snsgod-android-shell .mg-phone-social-rail::-webkit-scrollbar,
+html.snsgod-android-shell .mg-character-list::-webkit-scrollbar {
+    display: none;
+}
+
+    html.snsgod-android-shell .mg-actions .mg-btn,
+    html.snsgod-android-shell .mg-actions .mg-icon,
+    html.snsgod-android-shell .mg-top > .mg-icon {
+        flex: 0 0 auto !important;
+        min-height: 34px !important;
+        height: 34px !important;
+        padding-left: 10px !important;
+        padding-right: 10px !important;
+        font-size: 12px !important;
+        line-height: 1 !important;
+        white-space: nowrap !important;
+        border-radius: 9px !important;
+    }
+
+html.snsgod-android-shell [data-action="close"] {
+    display: none !important;
+}
+
+html.snsgod-android-shell .mg-field,
+html.snsgod-android-shell .mg-select,
+html.snsgod-android-shell .mg-input,
+html.snsgod-android-shell .mg-textarea {
+    min-width: 0 !important;
+    max-width: 100% !important;
+}
+
+html.snsgod-android-shell .mg-textarea,
+html.snsgod-android-shell textarea {
+    overflow-wrap: anywhere;
+}
+
+html.snsgod-android-shell .mg-section,
+html.snsgod-android-shell .mg-post,
+html.snsgod-android-shell .mg-sns-card,
+html.snsgod-android-shell .mg-lore-card {
+    max-width: 100% !important;
+}
+
+html.snsgod-android-shell .mg-grid,
+html.snsgod-android-shell .mg-sns-tools,
+html.snsgod-android-shell .mg-gallery-actions,
+html.snsgod-android-shell .mg-profile-media-grid,
+html.snsgod-android-shell .mg-profile-auto-grid {
+    min-width: 0 !important;
+}
+
+html.snsgod-android-shell .mg-save-dock,
+html.snsgod-android-shell .mg-settings-save-dock {
+    left: 10px !important;
+    right: 10px !important;
+    bottom: max(10px, env(safe-area-inset-bottom)) !important;
+    width: auto !important;
+    max-width: none !important;
+    transform: none !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+}
+
+html.snsgod-android-shell .mg-save-dock span,
+html.snsgod-android-shell .mg-settings-save-dock span {
+    min-width: 0 !important;
+}
+
+html.snsgod-android-shell .mg-notification-banner {
+    top: calc(58px + env(safe-area-inset-top)) !important;
+    right: 8px !important;
+    width: min(330px, calc(100vw - 28px)) !important;
+}
+
+html.snsgod-android-shell .mg-notification-center-wrap,
+html.snsgod-android-shell .mg-notification-center-backdrop {
+    inset: 0 !important;
+    padding: max(12px, env(safe-area-inset-top)) 10px max(12px, env(safe-area-inset-bottom)) !important;
+}
+
+html.snsgod-android-shell .mg-notification-center {
+    width: 100% !important;
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)) !important;
+    border-radius: 18px !important;
+}
+
+@media (max-width: 780px) {
+    html.snsgod-android-shell .mg-settings {
+        padding: 10px 10px calc(18px + env(safe-area-inset-bottom)) !important;
+        gap: 10px !important;
+    }
+
+    html.snsgod-android-shell .mg-section {
+        padding: 12px !important;
+        border-radius: 10px !important;
+    }
+
+    html.snsgod-android-shell .mg-inline {
+        min-width: 0 !important;
+    }
+
+    html.snsgod-android-shell .mg-inline[style*="space-between"] {
+        align-items: flex-start !important;
+    }
+
+    html.snsgod-android-shell .mg-inline[style*="flex-end"] {
+        justify-content: stretch !important;
+    }
+
+    html.snsgod-android-shell .mg-inline[style*="flex-end"] > .mg-btn,
+    html.snsgod-android-shell .mg-inline[style*="space-between"] > .mg-btn {
+        flex: 1 1 auto !important;
+    }
+
+    html.snsgod-android-shell .mg-grid,
+    html.snsgod-android-shell .mg-sns-tools,
+    html.snsgod-android-shell .mg-profile-auto-grid {
+        grid-template-columns: 1fr !important;
+    }
+
+    html.snsgod-android-shell .mg-field-wrap {
+        min-width: 0 !important;
+    }
+
+    html.snsgod-android-shell .mg-character-settings {
+        display: flex !important;
+        flex-direction: column !important;
+        overflow-y: auto !important;
+    }
+
+    html.snsgod-android-shell .mg-character-layout {
+        display: grid !important;
+        grid-template-columns: 1fr !important;
+        gap: 10px !important;
+        min-width: 0 !important;
+    }
+
+    html.snsgod-android-shell .mg-character-list {
+        position: sticky !important;
+        top: 0 !important;
+        z-index: 20 !important;
+        display: flex !important;
+        flex-direction: row !important;
+        gap: 8px !important;
+        padding: 9px !important;
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        background: var(--panel) !important;
+        border-radius: 10px !important;
+        scrollbar-width: none !important;
+    }
+
+    html.snsgod-android-shell .mg-character-setting {
+        flex: 0 0 min(248px, 76vw) !important;
+        display: grid !important;
+        grid-template-columns: 38px minmax(0, 1fr) auto !important;
+        gap: 9px !important;
+        align-items: center !important;
+        padding: 9px !important;
+    }
+
+    html.snsgod-android-shell .mg-character-setting span {
+        min-width: 0 !important;
+    }
+
+    html.snsgod-android-shell .mg-character-setting strong,
+    html.snsgod-android-shell .mg-character-setting small {
+        display: block !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+    }
+
+    html.snsgod-android-shell .mg-character-editor {
+        min-width: 0 !important;
+        display: grid !important;
+        gap: 10px !important;
+    }
+
+    html.snsgod-android-shell .mg-character-color-palette {
+        grid-template-columns: repeat(auto-fill, minmax(26px, 26px)) !important;
+        gap: 8px !important;
+    }
+
+    html.snsgod-android-shell .mg-character-color-swatch {
+        width: 26px !important;
+        height: 26px !important;
+    }
+
+    html.snsgod-android-shell .mg-profile-media-grid,
+    html.snsgod-android-shell .mg-profile-photo-grid,
+    html.snsgod-android-shell .mg-profile-state-grid {
+        display: grid !important;
+        grid-template-columns: 1fr !important;
+        gap: 10px !important;
+    }
+
+    html.snsgod-android-shell .mg-lore-card > summary {
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) auto !important;
+        gap: 8px !important;
+        align-items: start !important;
+    }
+
+    html.snsgod-android-shell .mg-lore-card summary span:first-child,
+    html.snsgod-android-shell .mg-lore-card summary strong,
+    html.snsgod-android-shell .mg-lore-card summary em {
+        min-width: 0 !important;
+        max-width: 100% !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-wallpaper {
+        min-height: 100dvh !important;
+        padding: max(12px, env(safe-area-inset-top)) 16px max(18px, env(safe-area-inset-bottom)) !important;
+        grid-template-rows: auto auto minmax(0, 1fr) auto !important;
+        gap: 14px !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-clock {
+        font-size: clamp(48px, 19vw, 74px) !important;
+        line-height: .95 !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-date {
+        font-size: clamp(17px, 5.6vw, 24px) !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-app-grid {
+        grid-template-columns: repeat(3, minmax(66px, 1fr)) !important;
+        gap: 18px 10px !important;
+        width: 100% !important;
+        max-width: 360px !important;
+        justify-self: center !important;
+        align-content: start !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-app-icon {
+        min-width: 0 !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-icon,
+    html.snsgod-android-shell .mg-phone-icon-glyph {
+        width: 58px !important;
+        height: 58px !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-app-label {
+        max-width: 72px !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-dock {
+        padding: 10px !important;
+        border-radius: 24px !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-app-open .mg-top,
+    html.snsgod-android-shell .mg-phone-social-app .mg-top,
+    html.snsgod-android-shell .mg-sumgod-shell .mg-top,
+    html.snsgod-android-shell .mg-random-phone-app .mg-top {
+        min-height: 56px !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-social-app .mg-main {
+        height: calc(100dvh - 58px - env(safe-area-inset-top)) !important;
+        overflow: hidden !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-social-layout {
+        display: grid !important;
+        grid-template-columns: 1fr !important;
+        grid-template-rows: auto minmax(0, 1fr) !important;
+        height: 100% !important;
+        overflow: hidden !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-social-rail {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-height: 86px !important;
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        gap: 10px !important;
+        padding: 12px !important;
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        border-right: 0 !important;
+        border-bottom: 1px solid var(--border) !important;
+        scrollbar-width: none !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-social-avatar {
+        flex: 0 0 62px !important;
+        width: 62px !important;
+        gap: 5px !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-social-avatar .mg-avatar,
+    html.snsgod-android-shell .mg-phone-social-all {
+        width: 48px !important;
+        height: 48px !important;
+        min-width: 48px !important;
+        min-height: 48px !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-social-content {
+        min-height: 0 !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        padding: 12px 0 calc(22px + env(safe-area-inset-bottom)) !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-social-toolbar {
+        width: auto !important;
+        margin: 0 10px 12px !important;
+        padding: 12px !important;
+        align-items: flex-start !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-social-heading-row > strong,
+    html.snsgod-android-shell .mg-phone-social-toolbar strong {
+        font-size: clamp(22px, 8vw, 30px) !important;
+        line-height: 1.12 !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-social-settings-panel {
+        margin: 0 10px 12px !important;
+        padding: 12px !important;
+        border-radius: 14px !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-social-app .mg-platform-feed {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        display: grid !important;
+        grid-template-columns: 1fr !important;
+        gap: 12px !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-social-app .mg-platform-post-wrap,
+    html.snsgod-android-shell .mg-phone-social-app .mg-platform-x,
+    html.snsgod-android-shell .mg-phone-social-app .mg-platform-ig {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        border-left: 0 !important;
+        border-right: 0 !important;
+        border-radius: 0 !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-social-app .mg-platform-x {
+        grid-template-columns: 40px minmax(0, 1fr) !important;
+        gap: 10px !important;
+        padding: 14px 12px !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-social-app .mg-x-post-text,
+    html.snsgod-android-shell .mg-phone-social-app .mg-ig-main-text,
+    html.snsgod-android-shell .mg-phone-social-app .mg-ig-caption {
+        font-size: 15px !important;
+        line-height: 1.55 !important;
+        overflow-wrap: anywhere !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-social-app .mg-x-media,
+    html.snsgod-android-shell .mg-phone-social-app .mg-ig-media {
+        width: 100% !important;
+        max-width: 100% !important;
+        max-height: 72vh !important;
+        object-fit: cover !important;
+    }
+
+    html.snsgod-android-shell .mg-sumgod-main {
+        min-height: 0 !important;
+        height: calc(100dvh - 58px - env(safe-area-inset-top)) !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        padding: 18px 0 calc(24px + env(safe-area-inset-bottom)) !important;
+    }
+
+    html.snsgod-android-shell .mg-sumgod-hero,
+    html.snsgod-android-shell .mg-sumgod-hero-title-picker {
+        padding: 20px 16px 8px !important;
+        display: block !important;
+    }
+
+    html.snsgod-android-shell .mg-sumgod-couple-title {
+        font-size: clamp(31px, 12vw, 44px) !important;
+        line-height: 1.08 !important;
+        gap: 8px !important;
+    }
+
+    html.snsgod-android-shell .mg-sumgod-egg {
+        width: min(280px, 86vw) !important;
+        margin: 8px auto 12px !important;
+    }
+
+    html.snsgod-android-shell .mg-sumgod-egg svg {
+        width: min(130px, 36vw) !important;
+    }
+
+    html.snsgod-android-shell .mg-sumgod-card,
+    html.snsgod-android-shell .mg-sumgod-question {
+        width: calc(100% - 28px) !important;
+        margin-left: 14px !important;
+        margin-right: 14px !important;
+        padding: 18px 16px !important;
+        border-radius: 22px !important;
+    }
+
+    html.snsgod-android-shell .mg-sumgod-question h2 {
+        font-size: clamp(20px, 6.8vw, 26px) !important;
+        line-height: 1.34 !important;
+    }
+
+    html.snsgod-android-shell .mg-random-phone-app .mg-main {
+        height: calc(100dvh - 58px - env(safe-area-inset-top)) !important;
+        min-height: 0 !important;
+    }
+
+    html.snsgod-android-shell .mg-random-phone-app .mg-random-home,
+    html.snsgod-android-shell .mg-random-phone-app .mg-random-panel,
+    html.snsgod-android-shell .mg-random-phone-app .mg-random-room-chat {
+        height: 100% !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        padding-left: 12px !important;
+        padding-right: 12px !important;
+        padding-bottom: calc(22px + env(safe-area-inset-bottom)) !important;
+    }
+
+    html.snsgod-android-shell .mg-random-room-card,
+    html.snsgod-android-shell .mg-random-room-row {
+        width: 100% !important;
+        max-width: 100% !important;
+        grid-template-columns: minmax(0, 1fr) !important;
+    }
+
+    html.snsgod-android-shell .mg-feed,
+    html.snsgod-android-shell .mg-post-compose,
+    html.snsgod-android-shell .mg-social .mg-feed,
+    html.snsgod-android-shell .mg-social .mg-post-compose {
+        width: 100% !important;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+    }
+
+    html.snsgod-android-shell .mg-social-head,
+    html.snsgod-android-shell .mg-room-head {
+        gap: 8px !important;
+        min-height: 58px !important;
+        padding-top: 8px !important;
+        padding-bottom: 8px !important;
+        align-items: center !important;
+    }
+
+    html.snsgod-android-shell .mg-room-head .mg-actions,
+    html.snsgod-android-shell .mg-social-head .mg-actions,
+    html.snsgod-android-shell .mg-random-app-top .mg-actions {
+        max-width: 56vw !important;
+        display: flex !important;
+        flex-wrap: nowrap !important;
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        gap: 6px !important;
+        scrollbar-width: none !important;
+    }
+
+    html.snsgod-android-shell .mg-room-head .mg-actions::-webkit-scrollbar,
+    html.snsgod-android-shell .mg-social-head .mg-actions::-webkit-scrollbar,
+    html.snsgod-android-shell .mg-random-app-top .mg-actions::-webkit-scrollbar {
+        display: none !important;
+    }
+
+    html.snsgod-android-shell .mg-room-head .mg-actions .mg-btn,
+    html.snsgod-android-shell .mg-social-head .mg-actions .mg-btn,
+    html.snsgod-android-shell .mg-random-app-top .mg-actions .mg-btn {
+        min-height: 34px !important;
+        height: 34px !important;
+        padding: 0 10px !important;
+        font-size: 12px !important;
+        white-space: nowrap !important;
+    }
+
+    html.snsgod-android-shell .mg-post,
+    html.snsgod-android-shell .mg-sns-card {
+        border-left: 0 !important;
+        border-right: 0 !important;
+        border-radius: 0 !important;
+    }
+
+    html.snsgod-android-shell .mg-modal {
+        padding: max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom)) !important;
+        grid-template-columns: 1fr !important;
+        gap: 8px !important;
+        align-content: start !important;
+    }
+
+    html.snsgod-android-shell .mg-modal-img {
+        width: 100% !important;
+        height: 58dvh !important;
+        min-height: 0 !important;
+    }
+
+    html.snsgod-android-shell .mg-modal-side {
+        position: static !important;
+        width: auto !important;
+        max-height: calc(42dvh - env(safe-area-inset-bottom)) !important;
+        overflow: auto !important;
+    }
+}
+
+@media (max-width: 390px) {
+    html.snsgod-android-shell .mg-actions {
+        max-width: 56vw !important;
+    }
+
+    html.snsgod-android-shell .mg-actions .mg-btn {
+        padding-left: 9px !important;
+        padding-right: 9px !important;
+        font-size: 12px !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-app-grid {
+        grid-template-columns: repeat(3, minmax(58px, 1fr)) !important;
+        gap: 16px 6px !important;
+    }
+
+    html.snsgod-android-shell .mg-phone-icon,
+    html.snsgod-android-shell .mg-phone-icon-glyph {
+        width: 54px !important;
+        height: 54px !important;
+    }
+}

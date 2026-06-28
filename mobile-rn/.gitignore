@@ -1,0 +1,20 @@
+node_modules/
+.expo/
+dist/
+coverage/
+
+# Local device/user data. These files may contain API keys or private character data.
+assets/import/*.json
+
+# Native build products and local SDK paths.
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties
+
+# Logs and editor files.
+*.log
+.DS_Store
+.idea/
+.vscode/

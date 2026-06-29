@@ -32,7 +32,8 @@ import { findRandomChat, promoteRandomChatRoom, removeRandomChatRoom } from './l
 import { deleteCharacter } from './logic/stateHelpers';
 import { roomRouteKind } from './logic/roomStore';
 import { IncomingPhoneCall, markPhoneCardStatus, missIncomingPhoneCall, newestPendingPhoneCandidate, rejectIncomingPhoneCall } from './logic/phone';
-import { markRoomRead } from './logic/notifications';
+import { markRoomRead, pushNotification } from './logic/notifications';
+import { startReplyJob } from './logic/replyEngine';
 
 type Route =
   | { name: 'chatList' }
@@ -65,8 +66,13 @@ export default function App() {
   const [incomingCall, setIncomingCall] = useState<IncomingPhoneCall | null>(null);
   const [runtimeReloadNonce, setRuntimeReloadNonce] = useState(0);
   const stateRef = useRef<SNSGodState | null>(null);
+  const routeRef = useRef<Route>(route);
   const routeHistoryRef = useRef<Route[]>([]);
   const incomingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function clearRuntimeOnlyState(next: SNSGodState): SNSGodState {
+    return { ...next, pendingReplies: {} };
+  }
 
   function sameRoute(a: Route, b: Route): boolean {
     return JSON.stringify(a) === JSON.stringify(b);
@@ -88,7 +94,9 @@ export default function App() {
 
   useEffect(() => {
     loadState().then(next => {
-      setState(next);
+      const ready = clearRuntimeOnlyState(next);
+      setState(ready);
+      stateRef.current = ready;
       void appendDebugLog('app', `state loaded: characters=${next.characters.length}, rooms=${Object.values(next.chatRooms).flat().length}`);
     }).catch(error => {
       void appendDebugLog('app', `start failed: ${String(error?.message || error)}`, 'error');
@@ -99,6 +107,10 @@ export default function App() {
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  useEffect(() => {
+    routeRef.current = route;
+  }, [route]);
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -252,10 +264,10 @@ export default function App() {
     const unreadCounts = { ...(next.unreadCounts || {}) };
     let changed = false;
     for (const [roomId, messages] of Object.entries(next.messages || {})) {
-      const beforeLength = previous.messages?.[roomId]?.length || 0;
-      if (messages.length <= beforeLength) continue;
-      const incoming = messages.slice(beforeLength).filter(message =>
-        message.role === 'character'
+      const previousIds = new Set((previous.messages?.[roomId] || []).map(message => message.id));
+      const incoming = messages.filter(message =>
+        !previousIds.has(message.id)
+        && message.role === 'character'
         && (message.content?.trim() || message.mediaData || message.sticker || message.callInvite || message.phoneLog)
       );
       if (!incoming.length) continue;
@@ -272,22 +284,54 @@ export default function App() {
         unreadCounts[roomId] = minimum;
         changed = true;
       }
+      const latestIncoming = incoming[incoming.length - 1];
+      const character = next.characters.find(item => item.id === latestIncoming.characterId);
+      const isRandomRoom = (next.randomChats || []).some(room => room.id === roomId);
+      result = pushNotification(result, {
+        type: isRandomRoom ? 'randomchat' : 'chat',
+        title: character?.name || '새 메시지',
+        body: latestIncoming.content || latestIncoming.imageCaption || (latestIncoming.mediaData ? '사진' : latestIncoming.sticker ? '스티커' : '새 메시지'),
+        app: isRandomRoom ? 'randomchat' : 'messenger',
+        roomId,
+        characterId: latestIncoming.characterId,
+        target: { app: isRandomRoom ? 'randomchat' : 'messenger', roomId, characterId: latestIncoming.characterId },
+        collapseKey: `room:${roomId}`
+      });
+      changed = true;
     }
     return changed ? { ...result, unreadCounts } : result;
   }
 
   async function commit(next: SNSGodState) {
-    const committed = withUnreadForNewMessages(stateRef.current, next, visibleRoomIdForRoute(route));
+    const committed = withUnreadForNewMessages(stateRef.current, next, visibleRoomIdForRoute(routeRef.current));
     setState(committed);
     stateRef.current = committed;
     saveStateDebounced(committed);
     void appendDebugLog('storage', `state saved: characters=${committed.characters.length}, notifications=${(committed.notifications || []).length}`);
   }
 
+  async function commitCurrent(patch: (current: SNSGodState) => SNSGodState) {
+    const current = stateRef.current;
+    if (!current) return;
+    const next = patch(current);
+    await commit(next);
+  }
+
+  function requestReply(roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean }) {
+    void startReplyJob({
+      roomId,
+      characterId,
+      latestUserInput,
+      randomMode: options?.randomMode,
+      getState: () => stateRef.current,
+      commitCurrent
+    });
+  }
+
   async function reloadSavedState() {
     const current = stateRef.current;
     if (current) await flushSaveState(current);
-    const next = await loadState();
+    const next = clearRuntimeOnlyState(await loadState());
     setState(next);
     stateRef.current = next;
     void appendDebugLog('debug', `saved state reloaded: characters=${next.characters.length}`);
@@ -302,7 +346,7 @@ export default function App() {
     } catch (error) {
       void appendDebugLog('debug', `DevSettings reload unavailable: ${error instanceof Error ? error.message : String(error)}`, 'warn');
     }
-    const next = await loadState();
+    const next = clearRuntimeOnlyState(await loadState());
     routeHistoryRef.current = [];
     setIncomingCall(null);
     setRoute({ name: 'chatList' });
@@ -489,6 +533,7 @@ export default function App() {
           onOpenCharacterSettings={characterId => navigate({ name: 'characterSettings', characterId, returnRoomId: route.roomId })}
           onOpenProfile={characterId => navigate({ name: 'profile', characterId, returnRoomId: route.roomId })}
           onOpenCall={(characterId, callRoomId, sourceMessageId) => navigate({ name: 'call', characterId, roomId: callRoomId, sourceMessageId, returnRoute: route })}
+          onRequestReply={requestReply}
         />
       ) : route.name === 'randomChatRoom' ? (
         <ChatRoomScreen
@@ -503,6 +548,7 @@ export default function App() {
           onLeaveRandomRoom={leaveRandomRoom}
           onPromoteRandomRoom={promoteRandomRoom}
           onOpenCall={(characterId, callRoomId, sourceMessageId) => navigate({ name: 'call', characterId, roomId: callRoomId, sourceMessageId, returnRoute: route })}
+          onRequestReply={requestReply}
         />
       ) : (
         <ChatListScreen

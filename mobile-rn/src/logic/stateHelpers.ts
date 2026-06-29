@@ -75,8 +75,7 @@ export function appendMessage(state: SNSGodState, roomId: string, message: SNSGo
       return {
         ...state,
         messages,
-        randomChats: (state.randomChats || []).map(item => item.id === roomId ? { ...item, lastActivity: message.createdAt } : item),
-        selectedRoomId: roomId
+        randomChats: (state.randomChats || []).map(item => item.id === roomId ? { ...item, lastActivity: message.createdAt } : item)
       };
     } else {
       const rooms = [...(chatRooms[room.characterId] || [])];
@@ -85,7 +84,7 @@ export function appendMessage(state: SNSGodState, roomId: string, message: SNSGo
       chatRooms[room.characterId] = rooms;
     }
   }
-  return { ...state, messages, chatRooms, randomChats, selectedRoomId: roomId };
+  return { ...state, messages, chatRooms, randomChats };
 }
 
 export function updateRoom(state: SNSGodState, roomId: string, patch: Partial<SNSGodRoom>): SNSGodState {

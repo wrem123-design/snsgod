@@ -10,7 +10,7 @@ import { callLLMText } from '../logic/api';
 import { makeId } from '../logic/ids';
 import { isRenderableMediaUri, pickStickerDataUri } from '../logic/media';
 import { Avatar } from '../components/Avatar';
-import { fetchGrokAccounts, fetchGrokBilling, fetchGrokStatus, GrokBilling, GrokLocalAccount, GrokLocalStatus, grokBaseUrl, logoutGrokOAuth, selectGrokOAuth } from '../logic/grokLocal';
+import { fetchGrokAccounts, fetchGrokBilling, fetchGrokStatus, GrokBilling, GrokLocalAccount, GrokLocalStatus, grokBaseUrl, grokCloudBaseUrl, logoutGrokOAuth, selectGrokOAuth } from '../logic/grokLocal';
 import { createBackupPayload } from '../logic/backup';
 
 const PROVIDERS: ApiProvider[] = ['vertex', 'gemini', 'openai', 'anthropic', 'custom'];
@@ -33,6 +33,8 @@ const PROVIDER_PRESETS: Partial<Record<ApiProvider, { endpoint: string; model: s
     { endpoint: 'https://api.anthropic.com/v1/messages', model: 'claude-haiku-4-5' }
   ]
 };
+
+type ImageProvider = 'grok-local' | 'grok-cloud' | 'openai';
 
 type SettingsSection = 'user' | 'characters' | 'stickers' | 'prompts' | 'lorebook' | 'screen' | 'api' | 'image';
 
@@ -152,10 +154,11 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   const imageConfig = state.config.imageGeneration || {};
   const snsConfig = state.config.sns || {};
   const [imageEnabled, setImageEnabled] = useState(imageConfig.enabled === true);
-  const [imageProvider, setImageProvider] = useState(String(imageConfig.provider || 'openai'));
+  const [imageProvider, setImageProvider] = useState<ImageProvider>(imageConfig.provider === 'grok-local' || imageConfig.provider === 'grok-cloud' ? imageConfig.provider : 'openai');
   const [imageApiKey, setImageApiKey] = useState(String(imageConfig.apiKey || ''));
   const [imageEndpoint, setImageEndpoint] = useState(String(imageConfig.apiEndpoint || 'https://api.openai.com/v1/responses'));
   const [grokLocalBaseUrl, setGrokLocalBaseUrl] = useState(grokBaseUrl(imageConfig));
+  const [grokCloudUrl, setGrokCloudUrl] = useState(grokCloudBaseUrl(imageConfig));
   const [imageModel, setImageModel] = useState(String(imageConfig.apiModel || 'gpt-5'));
   const [imageSize, setImageSize] = useState(String(imageConfig.size || '1024x1024'));
   const [imageQuality, setImageQuality] = useState(String(imageConfig.quality || 'auto'));
@@ -462,11 +465,12 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           imageGeneration: {
             ...(state.config.imageGeneration || {}),
             enabled: imageEnabled,
-            provider: imageProvider === 'grok-local' ? 'grok-local' : 'openai',
+            provider: imageProvider,
             apiKey: imageApiKey.trim(),
             apiEndpoint: imageEndpoint.trim() || 'https://api.openai.com/v1/responses',
             apiModel: imageModel.trim() || 'gpt-5',
             grokBaseUrl: grokLocalBaseUrl.trim() || 'http://127.0.0.1:5000',
+            grokCloudBaseUrl: grokCloudUrl.trim() || 'http://168.110.122.66',
             grokResolution: grokResolution.trim() || '1k',
             grokAspectRatio: grokAspectRatio.trim() || 'auto',
             size: imageSize.trim() || '1024x1024',
@@ -487,7 +491,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   }
 
   async function refreshGrokLocal() {
-    const baseUrl = grokLocalBaseUrl.trim() || 'http://127.0.0.1:5000';
+    const baseUrl = imageProvider === 'grok-cloud' ? (grokCloudUrl.trim() || 'http://168.110.122.66') : (grokLocalBaseUrl.trim() || 'http://127.0.0.1:5000');
     try {
       const [nextStatus, nextBilling, nextAccounts] = await Promise.all([
         fetchGrokStatus(baseUrl),
@@ -537,7 +541,13 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   }
 
   async function runGrokAction(action: 'login' | 'select' | 'logout') {
-    const baseUrl = grokLocalBaseUrl.trim() || 'http://127.0.0.1:5000';
+    if (imageProvider === 'grok-cloud' && action === 'login') {
+      const message = '클라우드 서버 로그인은 서버 SSH에서 Hermes OAuth를 진행해야 합니다. 앱에서는 상태 확인, OAuth 선택, 삭제만 원격 API로 시도합니다.';
+      setStatus(message);
+      Alert.alert('Cloud Grok OAuth', message);
+      return;
+    }
+    const baseUrl = imageProvider === 'grok-cloud' ? (grokCloudUrl.trim() || 'http://168.110.122.66') : (grokLocalBaseUrl.trim() || 'http://127.0.0.1:5000');
     try {
       if (action === 'login') {
         await startGrokOAuthLoginInTermux();
@@ -988,10 +998,11 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           <Text style={styles.label}>이미지 Provider</Text>
           <View style={styles.segmentRow}>
             {[
-              ['grok-local', 'Grok OAuth'],
+              ['grok-local', 'Grok 로컬'],
+              ['grok-cloud', '클라우드'],
               ['openai', 'OpenAI 호환']
             ].map(([value, label]) => (
-              <Pressable key={value} onPress={() => setImageProvider(value)} style={[styles.segment, imageProvider === value && styles.segmentActive]}>
+              <Pressable key={value} onPress={() => setImageProvider(value as ImageProvider)} style={[styles.segment, imageProvider === value && styles.segmentActive]}>
                 <Text style={[styles.segmentText, imageProvider === value && styles.segmentTextActive]}>{label}</Text>
               </Pressable>
             ))}
@@ -1056,7 +1067,34 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
               <Text style={styles.help}>기본값은 저용량 1k, 비율 auto입니다. 프로필 레퍼런스 이미지가 있는 경우 /api/i2i, 없는 경우 /api/t2i로 생성합니다.</Text>
             </View>
           ) : null}
-          {imageProvider !== 'grok-local' ? (
+          {imageProvider === 'grok-cloud' ? (
+            <View style={styles.subPanel}>
+              <Text style={styles.label}>Cloud Grok 서버</Text>
+              <TextInput value={grokCloudUrl} onChangeText={setGrokCloudUrl} style={styles.input} autoCapitalize="none" placeholder="http://168.110.122.66" placeholderTextColor="#9a9387" />
+              <View style={styles.buttonRow}>
+                <Pressable onPress={refreshGrokLocal} style={[styles.secondaryInline, styles.rowButton]}><Text style={styles.secondaryText}>상태 확인</Text></Pressable>
+                <Pressable onPress={() => runGrokAction('select')} style={[styles.secondaryInline, styles.rowButton]}><Text style={styles.secondaryText}>OAuth 선택</Text></Pressable>
+              </View>
+              <View style={styles.statusBox}>
+                <Text style={styles.listTitle}>Cloud Grok 상태: {grokStatus?.tokenLabel || '확인 전'}</Text>
+                <Text style={styles.listSub}>{grokStatus?.tokenMessage || 'Oracle 서버의 /api/settings, CREDIT, OAuth 상태를 확인합니다.'}</Text>
+                <Text style={styles.listSub}>계정 {grokAccounts.length}개 · CREDIT {grokBilling?.remaining_percent ?? '--'}%</Text>
+                <View style={styles.creditTrack}><View style={[styles.creditFill, { width: `${Math.max(0, Math.min(100, Number(grokBilling?.remaining_percent || 0)))}%` }]} /></View>
+              </View>
+              <View style={styles.twoCols}>
+                <View style={styles.col}>
+                  <Text style={styles.label}>해상도</Text>
+                  <TextInput value={grokResolution} onChangeText={setGrokResolution} style={styles.input} autoCapitalize="none" />
+                </View>
+                <View style={styles.col}>
+                  <Text style={styles.label}>비율</Text>
+                  <TextInput value={grokAspectRatio} onChangeText={setGrokAspectRatio} style={styles.input} autoCapitalize="none" />
+                </View>
+              </View>
+              <Text style={styles.help}>로컬 폰 서버 주소는 보존됩니다. 클라우드를 선택하고 저장하면 이미지 생성만 이 주소의 /api/t2i, /api/i2i로 요청합니다.</Text>
+            </View>
+          ) : null}
+          {imageProvider === 'openai' ? (
             <>
               <Text style={styles.label}>Endpoint</Text>
               <TextInput value={imageEndpoint} onChangeText={setImageEndpoint} style={styles.input} autoCapitalize="none" />

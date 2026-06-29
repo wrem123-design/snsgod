@@ -15,7 +15,18 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
   onChange: (next: SNSGodState) => Promise<void> | void;
 }) {
   const availableCharacters = state.characters.filter(character => character.randomTemporary !== true);
-  const [selectedCharacterId, setSelectedCharacterId] = useState(availableCharacters[0]?.id || '');
+  const recentPostAtByCharacter = new Map<string, number>();
+  (state.snsPosts || [])
+    .filter(post => post.platform === platform)
+    .forEach(post => {
+      const previous = recentPostAtByCharacter.get(post.characterId) || 0;
+      recentPostAtByCharacter.set(post.characterId, Math.max(previous, Number(post.createdAt || 0)));
+    });
+  const sortedCharacters = availableCharacters
+    .map((character, index) => ({ character, index, recentAt: recentPostAtByCharacter.get(character.id) || 0 }))
+    .sort((a, b) => (b.recentAt - a.recentAt) || (a.index - b.index))
+    .map(item => item.character);
+  const [selectedCharacterId, setSelectedCharacterId] = useState('');
   const [loading, setLoading] = useState(false);
   const [imageData, setImageData] = useState('');
   const [activeDmId, setActiveDmId] = useState('');
@@ -23,7 +34,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
   const [dmText, setDmText] = useState('');
   const [showGenerator, setShowGenerator] = useState(false);
   const [showDmList, setShowDmList] = useState(false);
-  const selectedCharacter = availableCharacters.find(character => character.id === selectedCharacterId) || availableCharacters[0];
+  const selectedCharacter = selectedCharacterId ? availableCharacters.find(character => character.id === selectedCharacterId) : undefined;
   const activeSnsOptions = snsOptionsFor(state, platform, selectedCharacter);
   const [snsAutoEnabled, setSnsAutoEnabled] = useState(selectedCharacter?.snsAutoEnabled !== false);
   const [draftAnonymous, setDraftAnonymous] = useState(activeSnsOptions.anonymous === true);
@@ -36,13 +47,16 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
   const [draftCommentQty, setDraftCommentQty] = useState(String(activeSnsOptions.commentQty || '2-4'));
   const [draftSubject, setDraftSubject] = useState(String(activeSnsOptions.subject || ''));
   const [draftMood, setDraftMood] = useState(String(activeSnsOptions.mood || ''));
-  const posts = selectedCharacter?.id ? (state.snsPosts || []).filter(post => post.platform === platform && post.characterId === selectedCharacter.id) : [];
-  const dmThreads = selectedCharacter?.id ? (state.snsDmThreads || []).filter(thread => thread.characterId === selectedCharacter.id) : [];
+  const posts = (state.snsPosts || [])
+    .filter(post => post.platform === platform && (!selectedCharacterId || post.characterId === selectedCharacterId))
+    .slice()
+    .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+  const dmThreads = (state.snsDmThreads || []).filter(thread => !selectedCharacterId || thread.characterId === selectedCharacterId);
   const unreadNotifications = (state.notifications || []).filter(item => !item.read).length;
 
   useEffect(() => {
-    if (availableCharacters.length && !availableCharacters.some(character => character.id === selectedCharacterId)) {
-      setSelectedCharacterId(availableCharacters[0].id);
+    if (selectedCharacterId && !availableCharacters.some(character => character.id === selectedCharacterId)) {
+      setSelectedCharacterId('');
     }
   }, [availableCharacters, selectedCharacterId]);
 
@@ -90,6 +104,10 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
   }
 
   async function saveSnsOptions() {
+    if (!selectedCharacter) {
+      Alert.alert('SNS', 'SNS 설정을 저장할 캐릭터를 먼저 선택하세요.');
+      return;
+    }
     await onChange(stateWithDraftOptions());
     Alert.alert('저장 완료', `${selectedCharacter?.name || '선택 캐릭터'}의 ${platform === 'instagram' ? 'Instagram' : 'X'} SNS 옵션을 저장했습니다.`);
   }
@@ -313,10 +331,11 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
       <View style={[styles.characterRail, platform === 'twitter' && styles.xCharacterRail]}>
         <FlatList
           horizontal
-          data={availableCharacters}
+          data={sortedCharacters}
           keyExtractor={item => item.id}
           contentContainerStyle={styles.characterRailContent}
-          renderItem={({ item }) => <CharacterChip character={item} active={item.id === selectedCharacterId} platform={platform} onPress={() => setSelectedCharacterId(item.id)} />}
+          ListHeaderComponent={<AllCharacterChip active={!selectedCharacterId} platform={platform} onPress={() => setSelectedCharacterId('')} />}
+          renderItem={({ item }) => <CharacterChip character={item} active={item.id === selectedCharacterId} platform={platform} onPress={() => setSelectedCharacterId(item.id === selectedCharacterId ? '' : item.id)} />}
         />
       </View>
 
@@ -389,6 +408,17 @@ function TogglePill({ label, value, onPress }: { label: string; value: boolean; 
   return (
     <Pressable onPress={onPress} style={[styles.togglePill, value && styles.togglePillOn]}>
       <Text style={[styles.toggleText, value && styles.toggleTextOn]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function AllCharacterChip({ active, platform, onPress }: { active: boolean; platform: SNSPost['platform']; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} style={[styles.characterChip, active && styles.characterChipActive, platform === 'twitter' && styles.xCharacterChip, platform === 'twitter' && active && styles.xCharacterChipActive]}>
+      <View style={[styles.allCharacterAvatar, platform === 'twitter' && styles.xAllCharacterAvatar]}>
+        <Text style={[styles.allCharacterAvatarText, platform === 'twitter' && styles.xPanelText]}>ALL</Text>
+      </View>
+      <Text style={[styles.characterName, platform === 'twitter' && styles.xPanelText]} numberOfLines={1}>전체</Text>
     </Pressable>
   );
 }
@@ -624,6 +654,9 @@ const styles = StyleSheet.create({
   characterChipActive: { backgroundColor: '#fff1b8' },
   xCharacterChip: { borderRadius: 0 },
   xCharacterChipActive: { backgroundColor: '#101214' },
+  allCharacterAvatar: { width: 52, height: 52, borderRadius: 26, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
+  xAllCharacterAvatar: { borderColor: '#2f3336', backgroundColor: '#000000' },
+  allCharacterAvatarText: { color: colors.text, fontSize: 12, fontWeight: '900' },
   characterName: { fontSize: 12, color: colors.text, fontWeight: '900' },
   generator: { margin: 12, padding: 14, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fff' },
   xGenerator: { backgroundColor: '#080808', borderColor: '#2f3336' },

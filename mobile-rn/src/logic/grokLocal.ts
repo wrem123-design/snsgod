@@ -31,6 +31,10 @@ export function grokBaseUrl(config?: ImageGenerationConfig): string {
   return String(config?.grokBaseUrl || 'http://127.0.0.1:5000').replace(/\/$/, '');
 }
 
+export function grokCloudBaseUrl(config?: ImageGenerationConfig): string {
+  return String(config?.grokCloudBaseUrl || 'http://168.110.122.66').replace(/\/$/, '');
+}
+
 async function readJson(response: Response) {
   const text = await response.text();
   try {

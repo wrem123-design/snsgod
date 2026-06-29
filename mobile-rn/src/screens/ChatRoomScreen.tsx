@@ -3,52 +3,13 @@ import { Alert, FlatList, Image, KeyboardAvoidingView, Platform, Pressable, Styl
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
 import { SNSGodMessage, SNSGodState, Sticker } from '../types';
-import { callLLM, generateImageDataUri } from '../logic/api';
 import { makeId } from '../logic/ids';
-import { appendMessage, findCharacter, findRoom, roomMessages, updateCharacter } from '../logic/stateHelpers';
-import { buildChatPrompt, normalizeReplyMessagesForStyle } from '../logic/prompts';
+import { appendMessage, findCharacter, findRoom, roomMessages } from '../logic/stateHelpers';
 import { isRenderableMediaUri, pickImageDataUri } from '../logic/media';
-import { maybeCreateAutoSNSPost } from '../logic/sns';
 import { formatMessageTime } from '../logic/time';
-import { beginChatJob, endChatJob, isCurrentChatJob, tryLockGeneratingRoom } from '../logic/chatJobs';
 import { markRoomRead } from '../logic/notifications';
-import { phoneCardFromReply } from '../logic/phone';
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-function clampDelay(value: unknown, fallback: number) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return fallback;
-  return Math.max(0, Math.min(120, number));
-}
-
-function characterDelayMs(character: NonNullable<ReturnType<typeof findCharacter>>) {
-  const min = clampDelay(character.responseDelayMin, 1);
-  const max = Math.max(min, clampDelay(character.responseDelayMax, 8));
-  const speed = Math.max(1, Math.min(10, Number(character.responseTime || 6)));
-  const randomSeconds = min + Math.random() * Math.max(0, max - min);
-  const speedFactor = 1.15 - speed * 0.07;
-  return Math.max(350, Math.round(randomSeconds * speedFactor * 1000));
-}
-
-function bubbleDelayMs(character: NonNullable<ReturnType<typeof findCharacter>>, delay?: number) {
-  const thinking = Math.max(1, Math.min(10, Number(character.thinkingTime || 6)));
-  const base = Number.isFinite(Number(delay)) && Number(delay) > 0 ? Number(delay) * 1000 : 650 + thinking * 130;
-  return Math.max(450, Math.min(8000, base));
-}
-
-function markUserMessagesRead(state: SNSGodState, roomId: string) {
-  const now = Date.now();
-  return {
-    ...state,
-    messages: {
-      ...state.messages,
-      [roomId]: (state.messages[roomId] || []).map(message => message.role === 'user' && !message.readAt ? { ...message, readAt: now } : message)
-    }
-  };
-}
-
-export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSettings, onOpenCharacterSettings, onOpenProfile, randomMode, onLeaveRandomRoom, onPromoteRandomRoom, onOpenCall }: {
+export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSettings, onOpenCharacterSettings, onOpenProfile, randomMode, onLeaveRandomRoom, onPromoteRandomRoom, onOpenCall, onRequestReply }: {
   state: SNSGodState;
   roomId: string;
   onBack: () => void;
@@ -60,18 +21,18 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
   onLeaveRandomRoom?: (roomId: string) => void;
   onPromoteRandomRoom?: (roomId: string) => void;
   onOpenCall?: (characterId: string, roomId?: string, messageId?: string) => void;
+  onRequestReply: (roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean }) => void;
 }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [showStickers, setShowStickers] = useState(false);
-  const [typing, setTyping] = useState(false);
   const listRef = useRef<FlatList<SNSGodMessage>>(null);
-  const currentStateRef = useRef(state);
-  currentStateRef.current = state;
   const room = findRoom(state, roomId);
   const character = findCharacter(state, room?.characterId);
   const isRandomRoom = randomMode || room?.type === 'random';
   const messages = useMemo(() => roomMessages(state, roomId), [state, roomId]);
+  const pendingReplyPhase = state.pendingReplies?.[roomId]?.phase;
+  const typing = pendingReplyPhase === 'typing' || pendingReplyPhase === 'generating';
 
   function scrollToLatest(animated = true) {
     requestAnimationFrame(() => {
@@ -81,9 +42,8 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
 
   useEffect(() => {
     scrollToLatest(false);
-    const current = currentStateRef.current;
-    if ((current.unreadCounts[roomId] || 0) > 0 || (current.notifications || []).some(item => !item.read && (item.roomId === roomId || item.target?.roomId === roomId))) {
-      void commit(markRoomRead(current, roomId));
+    if ((state.unreadCounts[roomId] || 0) > 0 || (state.notifications || []).some(item => !item.read && (item.roomId === roomId || item.target?.roomId === roomId))) {
+      void commit(markRoomRead(state, roomId));
     }
   }, [roomId]);
 
@@ -92,102 +52,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
   }, [messages.length, typing]);
 
   async function commit(next: SNSGodState) {
-    currentStateRef.current = next;
     await onChange(next);
-  }
-
-  async function markReadLater(targetRoomId: string, targetCharacter: NonNullable<ReturnType<typeof findCharacter>>) {
-    await sleep(characterDelayMs(targetCharacter));
-    await commit(markUserMessagesRead(currentStateRef.current, targetRoomId));
-  }
-
-  async function requestCharacterReply(
-    baseState: SNSGodState,
-    targetRoom: NonNullable<typeof room>,
-    targetCharacter: NonNullable<typeof character>,
-    latestUserInput: string
-  ) {
-    const jobId = beginChatJob(targetRoom.id);
-    try {
-      const replyDelayMs = characterDelayMs(targetCharacter);
-      const promptMessages = buildChatPrompt(baseState, targetCharacter, targetRoom, latestUserInput, { mode: 'reply', replyDelaySeconds: replyDelayMs / 1000 });
-      await sleep(replyDelayMs);
-      if (!isCurrentChatJob(targetRoom.id, jobId)) return;
-      let next = markUserMessagesRead(currentStateRef.current, targetRoom.id);
-      await commit(next);
-      setTyping(true);
-      if (!tryLockGeneratingRoom(targetRoom.id, jobId)) return;
-      const { reply, keyIndex } = await callLLM(next, promptMessages);
-      if (!isCurrentChatJob(targetRoom.id, jobId)) return;
-      const activeProfile = next.config.apiProfiles[next.config.apiType] || {};
-      next = {
-        ...next,
-        config: {
-          ...next.config,
-          apiProfiles: {
-            ...next.config.apiProfiles,
-            [next.config.apiType]: { ...activeProfile, apiKeyIndex: keyIndex }
-          }
-        }
-      };
-      if (!reply.messages.length) throw new Error('모델 응답에서 표시할 메시지를 찾지 못했습니다. ETC > 디버그에서 llm.response 원문을 확인하세요.');
-      const bubbles = normalizeReplyMessagesForStyle(reply.messages, targetCharacter);
-      for (const bubble of bubbles) {
-        await sleep(bubbleDelayMs(targetCharacter, bubble.delay ?? reply.reactionDelay));
-        if (!isCurrentChatJob(targetRoom.id, jobId)) return;
-        const phone = phoneCardFromReply(next, targetCharacter, bubble, 'reply');
-        let mediaData = '';
-        if (bubble.imagePrompt && next.config.imageGeneration?.enabled !== false) {
-          try {
-            mediaData = await generateImageDataUri(next, bubble.imagePrompt, targetCharacter);
-            if (!isCurrentChatJob(targetRoom.id, jobId)) return;
-          } catch (error) {
-            bubble.imageCaption = `${bubble.imageCaption || ''}\n이미지 생성 실패: ${error instanceof Error ? error.message : String(error)}`.trim();
-          }
-        }
-        if (phone.textContent || bubble.sticker || bubble.imagePrompt || bubble.imageCaption || mediaData) {
-          next = appendMessage(next, targetRoom.id, {
-            id: makeId('msg'),
-            role: 'character',
-            characterId: targetCharacter.id,
-            content: phone.textContent || '',
-            createdAt: Date.now(),
-            sticker: bubble.sticker,
-            imagePrompt: bubble.imagePrompt,
-            imageCaption: bubble.imageCaption,
-            mediaData: mediaData || undefined,
-            mediaType: mediaData ? 'image' : undefined
-          });
-        }
-        if (phone.card) next = appendMessage(next, targetRoom.id, phone.card);
-      }
-      if (!isCurrentChatJob(targetRoom.id, jobId)) return;
-      if (reply.newMemory?.trim()) {
-        const updated = findCharacter(next, targetCharacter.id);
-        next = updateCharacter(next, targetCharacter.id, { memories: [...(updated?.memories || []), reply.newMemory.trim()].slice(-80) });
-      }
-      if (!isRandomRoom) {
-        const snsCharacter = findCharacter(next, targetCharacter.id) || targetCharacter;
-        next = await maybeCreateAutoSNSPost(next, snsCharacter, targetRoom.id);
-      }
-      if (!isCurrentChatJob(targetRoom.id, jobId)) return;
-      await commit(next);
-    } catch (error) {
-      setTyping(false);
-      const failed = appendMessage(currentStateRef.current, targetRoom.id, {
-        id: makeId('msg'),
-        role: 'system',
-        content: `답장 생성 실패: ${error instanceof Error ? error.message : String(error)}`,
-        createdAt: Date.now(),
-        failed: true
-      });
-      await commit(failed);
-      Alert.alert('답장 생성 실패', error instanceof Error ? error.message : String(error));
-    } finally {
-      endChatJob(targetRoom.id, jobId);
-      setTyping(false);
-      setSending(false);
-    }
   }
 
   async function send() {
@@ -196,10 +61,11 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
     setText('');
     setSending(true);
     const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content, createdAt: Date.now() };
-    let next = appendMessage(currentStateRef.current, room.id, userMessage);
+    let next = appendMessage(state, room.id, userMessage);
     next = { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
     await commit(next);
-    await requestCharacterReply(next, room, character, content);
+    setSending(false);
+    onRequestReply(room.id, character.id, content, { randomMode: isRandomRoom });
   }
 
   async function attachImage() {
@@ -210,14 +76,14 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
       const content = text.trim() || '사진을 보냈습니다.';
       setText('');
       const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content, createdAt: Date.now(), mediaData: image };
-      let next = appendMessage(currentStateRef.current, room.id, userMessage);
+      let next = appendMessage(state, room.id, userMessage);
       next = { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
       await commit(next);
-      setSending(true);
-      await requestCharacterReply(next, room, character, `${content}\n[사용자가 사진을 보냈습니다.]`);
+      onRequestReply(room.id, character.id, `${content}\n[사용자가 사진을 보냈습니다.]`, { randomMode: isRandomRoom });
     } catch (error) {
-      setSending(false);
       Alert.alert('사진 첨부 실패', error instanceof Error ? error.message : String(error));
+    } finally {
+      setSending(false);
     }
   }
 
@@ -226,19 +92,20 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
     setShowStickers(false);
     setSending(true);
     const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content: '', createdAt: Date.now(), sticker: sticker.id };
-    let next = appendMessage(currentStateRef.current, room.id, userMessage);
+    let next = appendMessage(state, room.id, userMessage);
     next = { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
     await commit(next);
-    await requestCharacterReply(next, room, character, `[스티커: ${sticker.name || sticker.id}]`);
+    setSending(false);
+    onRequestReply(room.id, character.id, `[스티커: ${sticker.name || sticker.id}]`, { randomMode: isRandomRoom });
   }
 
   async function rejectCall(message: SNSGodMessage) {
     if (!room || !character) return;
     let next = {
-      ...currentStateRef.current,
+      ...state,
       messages: {
-        ...currentStateRef.current.messages,
-        [room.id]: (currentStateRef.current.messages[room.id] || []).map(item => item.id === message.id ? {
+        ...state.messages,
+        [room.id]: (state.messages[room.id] || []).map(item => item.id === message.id ? {
           ...item,
           callStatus: 'rejected',
           callHandledAt: Date.now()

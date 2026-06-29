@@ -26,11 +26,12 @@ export type ApiProfile = {
 
 export type ImageGenerationConfig = {
   enabled?: boolean;
-  provider?: 'openai' | 'custom' | 'grok-local';
+  provider?: 'openai' | 'custom' | 'grok-local' | 'grok-cloud';
   apiKey?: string;
   apiEndpoint?: string;
   apiModel?: string;
   grokBaseUrl?: string;
+  grokCloudBaseUrl?: string;
   grokResolution?: string;
   grokAspectRatio?: string;
   size?: string;
@@ -307,6 +308,7 @@ export type SNSGodState = {
   notifications?: NotificationItem[];
   randomChats?: RandomChatRoom[];
   randomCharacters?: SNSGodCharacter[];
+  pendingReplies?: Record<string, { jobId: string; startedAt: number; phase?: 'delay' | 'typing' | 'generating' }>;
   selectedRoomId?: string;
   __importedAt?: number;
   __savedAt?: number;

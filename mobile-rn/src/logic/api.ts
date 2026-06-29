@@ -784,7 +784,7 @@ async function appendReferenceImage(form: FormData, field: string, uri: string) 
 
 async function generateGrokLocalImage(state: SNSGodState, prompt: string, character?: SNSGodCharacter, options?: { referenceImage?: string; kind?: 'profile' | 'cover' | 'general' }): Promise<string> {
   const config = state.config.imageGeneration || {};
-  const baseUrl = normalizeGrokBaseUrl(config.grokBaseUrl);
+  const baseUrl = normalizeGrokBaseUrl(config.provider === 'grok-cloud' ? config.grokCloudBaseUrl : config.grokBaseUrl);
   const finalPrompt = imagePromptFor(config, character, prompt);
   const resolution = String(config.grokResolution || config.quality || '1k').includes('1k') ? '1k' : String(config.grokResolution || '1k');
   const aspectRatio = String(config.grokAspectRatio || 'auto');
@@ -816,7 +816,7 @@ async function generateGrokLocalImage(state: SNSGodState, prompt: string, charac
 export async function generateImageDataUri(state: SNSGodState, prompt: string, character?: SNSGodCharacter, options?: { referenceImage?: string; kind?: 'profile' | 'cover' | 'general' }): Promise<string> {
   const config = state.config.imageGeneration || {};
   if (config.enabled === false) throw new Error('이미지 생성 설정이 꺼져 있습니다.');
-  if (config.provider === 'grok-local') return generateGrokLocalImage(state, prompt, character, options);
+  if (config.provider === 'grok-local' || config.provider === 'grok-cloud') return generateGrokLocalImage(state, prompt, character, options);
   const openAiProfile = state.config.apiProfiles.openai || {};
   const apiKey = String(config.apiKey || openAiProfile.apiKey || '').trim();
   if (!apiKey) throw new Error('이미지 생성 API 키가 비어 있습니다. 설정 > 이미지 생성에서 키를 입력하세요.');

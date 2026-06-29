@@ -55,6 +55,7 @@ export function createDefaultState(): SNSGodState {
         apiEndpoint: 'https://api.openai.com/v1/responses',
         apiModel: 'gpt-5',
         grokBaseUrl: 'http://127.0.0.1:5000',
+        grokCloudBaseUrl: 'http://168.110.122.66',
         grokResolution: '1k',
         grokAspectRatio: 'auto',
         size: '1024x1024',

@@ -452,7 +452,6 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
         </View>
         <Animated.View style={[styles.turnCard, { opacity: cardFade }]}>
           <Text style={styles.turnText}>{displayText || currentFullText}</Text>
-          {phase === 'character_typing' ? <Text style={styles.cursor}>▌</Text> : null}
         </Animated.View>
         <View style={styles.actionArea}>
           {phase === 'listening' || phase === 'user_sending' ? (
@@ -536,7 +535,6 @@ const styles = StyleSheet.create({
   duration: { marginTop: 8, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999, overflow: 'hidden', color: 'rgba(255,255,255,0.78)', backgroundColor: 'rgba(255,255,255,0.1)', fontSize: 12, fontWeight: '800' },
   turnCard: { alignSelf: 'center', width: '88%', minHeight: 132, borderRadius: 20, paddingHorizontal: 22, paddingVertical: 20, backgroundColor: 'rgba(0,0,0,0.52)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.09)', justifyContent: 'center' },
   turnText: { color: '#ffffff', fontSize: 19, lineHeight: 29, fontWeight: '800' },
-  cursor: { position: 'absolute', right: 18, bottom: 14, color: '#f3dd72', fontSize: 16, fontWeight: '900' },
   actionArea: { flex: 1, justifyContent: 'flex-end', gap: 8, paddingTop: 14, paddingBottom: 10 },
   choiceButton: { minHeight: 48, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#edf2f6' },
   choiceText: { color: '#26313c', fontWeight: '900', fontSize: 15, textAlign: 'center', lineHeight: 20 },

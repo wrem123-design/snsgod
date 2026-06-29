@@ -1,6 +1,7 @@
 import { PromptSet, SNSGodCharacter, SNSGodRoom, SNSGodState } from '../types';
 import { MAX_CONTEXT_MESSAGES } from './limits';
 import { lorePromptBlock, resolveActiveLore } from './loreEngine';
+import { buildTimeRealityInstruction } from './timeReality';
 
 export type ChatPromptMode = 'reply' | 'proactive' | 'reroll';
 
@@ -187,6 +188,7 @@ export function proactiveInstruction(state: SNSGodState, character: SNSGodCharac
     `Unanswered proactive messages since the user's last reply: ${unanswered}. Character patience setting: ${patience}.`,
     'Do not repeat the same topic, wording, greeting, or emotional beat from recent proactive messages.',
     'Respect the current real-time context exactly. Never send a morning/good-morning/commute-start greeting during afternoon, evening, night, or late night unless the user explicitly said it is morning.',
+    'For proactive messages, do not invent a completed external event unless it is extremely plausible for the current time and recent context. At early morning or late night, prefer small realistic states: waking up, getting ready, commuting, checking messages, remembering something, planning to go somewhere later, or asking about the user.',
     styleLine,
     unanswered > patience ? 'The user has not answered beyond the patience setting. React in a way that fits the character instead of pretending nothing happened.' : ''
   ].filter(Boolean).join('\n');
@@ -259,6 +261,7 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
     messageStyleInstruction(character),
     `Reply timing: this reply is delivered after about ${Math.round(options.replyDelaySeconds || 0)} seconds. If the delay is noticeably long, you may briefly imply a natural reason, but do not over-explain.`,
     modeInstruction(state, character, room, options.mode || 'reply'),
+    buildTimeRealityInstruction(state, character, options.mode === 'proactive' ? 'proactive' : 'reply'),
     imageInstruction,
     roomNote ? `Room-only relationship/context note:\n${roomNote}` : '',
     memoryText ? `Character memories:\n${memoryText}` : '',

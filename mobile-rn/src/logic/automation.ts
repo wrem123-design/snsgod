@@ -1,6 +1,8 @@
 import { callLLM, callLLMText, generateImageDataUri, parseJsonObject } from './api';
+import { appendDebugLog } from './debugLog';
 import { makeId } from './ids';
 import { DEFAULT_COVER_BACKGROUND_DIRECTION, DEFAULT_PROMPTS, proactiveInstruction, userNameFor, userProfileFor } from './prompts';
+import { buildTimeRealityInstruction, chatNowContext, isImplausibleCompletedActivity, repairTimeRealityInstruction, softenImplausibleCompletedActivity } from './timeReality';
 import { appendMessage, findCharacter } from './stateHelpers';
 import { MAX_GROUP_ROOM_MESSAGES, MAX_SNS_DM_CONTEXT_MESSAGES } from './limits';
 import { GroupRoom, SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
@@ -337,9 +339,28 @@ async function runPrivateFirstMessage(state: SNSGodState, firstMessageOnly: bool
     `Character profile: ${character.prompt || '(empty)'}`,
     `Recent chat:\n${transcript || '(empty)'}`,
     firstMessageOnly ? '' : proactiveInstruction(state, character, room.id),
+    buildTimeRealityInstruction(state, character, 'proactive'),
     'Return only JSON: {"reactionDelay":0,"messages":[{"content":"short natural Korean message"}]}.'
   ].join('\n\n');
-  const { reply, keyIndex } = await callLLM(state, [{ role: 'system', content: prompt }]);
+  let { reply, keyIndex } = await callLLM(state, [{ role: 'system', content: prompt }]);
+  const nowContext = chatNowContext(state, character);
+  const replyText = () => reply.messages.map(message => message.content || '').join('\n');
+  if (isImplausibleCompletedActivity(replyText(), nowContext, 'proactive')) {
+    await appendDebugLog('time-reality.retry', `room=${room.id} mode=proactive\n${replyText()}`, 'warn');
+    const repaired = await callLLM(state, [
+      { role: 'system', content: prompt },
+      { role: 'system', content: repairTimeRealityInstruction(nowContext) }
+    ]);
+    reply = repaired.reply;
+    keyIndex = repaired.keyIndex;
+  }
+  if (isImplausibleCompletedActivity(replyText(), nowContext, 'proactive')) {
+    await appendDebugLog('time-reality.softened', `room=${room.id} mode=proactive\n${replyText()}`, 'warn');
+    reply = {
+      ...reply,
+      messages: reply.messages.map(message => ({ ...message, content: softenImplausibleCompletedActivity(message.content) }))
+    };
+  }
   let next: SNSGodState = {
     ...state,
     config: {

@@ -9,6 +9,7 @@ import { phoneCardFromReply } from './phone';
 import { buildChatPrompt, normalizeReplyMessagesForStyle } from './prompts';
 import { maybeCreateAutoSNSPost } from './sns';
 import { appendMessage, findCharacter, findRoom, roomMessages, updateCharacter } from './stateHelpers';
+import { chatNowContext, isImplausibleCompletedActivity, repairTimeRealityInstruction, softenImplausibleCompletedActivity } from './timeReality';
 import { SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
 import { appendDebugLog } from './debugLog';
 
@@ -169,8 +170,26 @@ export async function startReplyJob(input: StartReplyJobInput) {
 
     if (!tryLockGeneratingRoom(input.roomId, jobId)) return;
     await input.commitCurrent(current => setPending(current, input.roomId, jobId, 'generating'));
-    const { reply, keyIndex } = await runQueuedReplyLlm(input.roomId, jobId, () => callLLM(promptState, promptMessages));
+    let { reply, keyIndex } = await runQueuedReplyLlm(input.roomId, jobId, () => callLLM(promptState, promptMessages));
     if (!isCurrentChatJob(input.roomId, jobId)) return;
+    const nowContext = chatNowContext(promptState, promptTarget.character);
+    const replyText = () => reply.messages.map(message => message.content || '').join('\n');
+    if (isImplausibleCompletedActivity(replyText(), nowContext, 'reply', input.latestUserInput)) {
+      await appendDebugLog('time-reality.retry', `room=${input.roomId} mode=reply\n${replyText()}`, 'warn');
+      const repaired = await runQueuedReplyLlm(input.roomId, jobId, () => callLLM(promptState, [
+        ...promptMessages,
+        { role: 'system' as const, content: repairTimeRealityInstruction(nowContext) }
+      ]));
+      reply = repaired.reply;
+      keyIndex = repaired.keyIndex;
+    }
+    if (isImplausibleCompletedActivity(replyText(), nowContext, 'reply', input.latestUserInput)) {
+      await appendDebugLog('time-reality.softened', `room=${input.roomId} mode=reply\n${replyText()}`, 'warn');
+      reply = {
+        ...reply,
+        messages: reply.messages.map(message => ({ ...message, content: softenImplausibleCompletedActivity(message.content) }))
+      };
+    }
 
     await input.commitCurrent(current => {
       const activeProfile = current.config.apiProfiles[current.config.apiType] || {};

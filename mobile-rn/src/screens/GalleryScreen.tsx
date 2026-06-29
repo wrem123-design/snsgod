@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme';
 import { SNSGodState } from '../types';
+import { isRenderableMediaUri } from '../logic/media';
 
 type GalleryItem = {
   id: string;
@@ -12,7 +13,7 @@ type GalleryItem = {
 };
 
 function imageUri(value: unknown): string | undefined {
-  return typeof value === 'string' && value.startsWith('data:') ? value : undefined;
+  return isRenderableMediaUri(value) ? value : undefined;
 }
 
 function collectGalleryItems(state: SNSGodState): GalleryItem[] {

@@ -1,9 +1,10 @@
 import React from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 import { SNSGodCharacter } from '../types';
+import { isRenderableMediaUri } from '../logic/media';
 
 export function Avatar({ character, size = 48 }: { character?: SNSGodCharacter; size?: number }) {
-  const uri = typeof character?.avatar === 'string' && character.avatar.startsWith('data:') ? character.avatar : '';
+  const uri = isRenderableMediaUri(character?.avatar) ? character.avatar : '';
   const label = character?.avatarText || character?.name?.slice(0, 2) || '?';
   return (
     <View style={[styles.base, { width: size, height: size, borderRadius: size / 2, backgroundColor: character?.color || '#d8e7ff' }]}>

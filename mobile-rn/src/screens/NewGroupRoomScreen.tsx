@@ -15,7 +15,7 @@ export function NewGroupRoomScreen({ state, onBack, onCreate }: {
   const selectedIds = availableCharacters.filter(character => selected[character.id]).map(character => character.id);
 
   function create() {
-    if (!selectedIds.length) return;
+    if (selectedIds.length < 2) return;
     const now = Date.now();
     const room: GroupRoom = {
       id: makeId('group'),
@@ -38,13 +38,13 @@ export function NewGroupRoomScreen({ state, onBack, onCreate }: {
       <View style={styles.header}>
         <Pressable onPress={onBack} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable>
         <Text style={styles.title}>새 단톡</Text>
-        <Pressable onPress={create} disabled={!selectedIds.length} style={[styles.save, !selectedIds.length && styles.disabled]}><Text style={styles.saveText}>생성</Text></Pressable>
+        <Pressable onPress={create} disabled={selectedIds.length < 2} style={[styles.save, selectedIds.length < 2 && styles.disabled]}><Text style={styles.saveText}>생성</Text></Pressable>
       </View>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.card}>
           <Text style={styles.label}>방 이름</Text>
           <TextInput value={name} onChangeText={setName} style={styles.input} />
-          <Text style={styles.help}>참여 캐릭터를 1명 이상 선택하면 그룹 채팅방이 만들어집니다.</Text>
+          <Text style={styles.help}>참여 캐릭터를 2명 이상 선택하면 그룹 채팅방이 만들어집니다.</Text>
         </View>
         <View style={styles.card}>
           <Text style={styles.cardTitle}>참여 캐릭터</Text>

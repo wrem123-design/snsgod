@@ -4,9 +4,10 @@ import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
 import { SNSGodCharacter, SNSGodState } from '../types';
 import { findCharacter } from '../logic/stateHelpers';
+import { isRenderableMediaUri } from '../logic/media';
 
 function imageUri(value?: string) {
-  return typeof value === 'string' && value.startsWith('data:') ? value : '';
+  return isRenderableMediaUri(value) ? value : '';
 }
 
 export function ProfileScreen({ state, characterId, onBack, onOpenChat, onOpenCall, onOpenSettings }: {
@@ -59,10 +60,6 @@ export function ProfileScreen({ state, characterId, onBack, onOpenChat, onOpenCa
             <Pressable onPress={() => onOpenCall(character)} style={styles.actionButton}><Text style={styles.actionText}>전화걸기</Text></Pressable>
             <Pressable onPress={() => onOpenSettings(character)} style={styles.actionButton}><Text style={styles.actionText}>설정</Text></Pressable>
           </View>
-        </View>
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>소개</Text>
-          <Text style={styles.bodyText}>{character.prompt || character.userDescription || '아직 소개가 없습니다.'}</Text>
         </View>
         {history.length ? (
           <View style={styles.card}>

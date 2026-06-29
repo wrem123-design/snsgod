@@ -6,8 +6,13 @@ import { SNSGodMessage, SNSGodState, Sticker } from '../types';
 import { callLLM, generateImageDataUri } from '../logic/api';
 import { makeId } from '../logic/ids';
 import { appendMessage, findCharacter, findRoom, roomMessages, updateCharacter } from '../logic/stateHelpers';
-import { buildChatPrompt } from '../logic/prompts';
-import { pickImageDataUri } from '../logic/media';
+import { buildChatPrompt, normalizeReplyMessagesForStyle } from '../logic/prompts';
+import { isRenderableMediaUri, pickImageDataUri } from '../logic/media';
+import { maybeCreateAutoSNSPost } from '../logic/sns';
+import { formatMessageTime } from '../logic/time';
+import { beginChatJob, endChatJob, isCurrentChatJob, tryLockGeneratingRoom } from '../logic/chatJobs';
+import { markRoomRead } from '../logic/notifications';
+import { phoneCardFromReply } from '../logic/phone';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -43,7 +48,7 @@ function markUserMessagesRead(state: SNSGodState, roomId: string) {
   };
 }
 
-export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSettings, onOpenCharacterSettings, onOpenProfile, randomMode, onLeaveRandomRoom }: {
+export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSettings, onOpenCharacterSettings, onOpenProfile, randomMode, onLeaveRandomRoom, onPromoteRandomRoom, onOpenCall }: {
   state: SNSGodState;
   roomId: string;
   onBack: () => void;
@@ -53,16 +58,38 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
   onOpenProfile: (characterId: string) => void;
   randomMode?: boolean;
   onLeaveRandomRoom?: (roomId: string) => void;
+  onPromoteRandomRoom?: (roomId: string) => void;
+  onOpenCall?: (characterId: string, roomId?: string, messageId?: string) => void;
 }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [showStickers, setShowStickers] = useState(false);
   const [typing, setTyping] = useState(false);
+  const listRef = useRef<FlatList<SNSGodMessage>>(null);
   const currentStateRef = useRef(state);
   currentStateRef.current = state;
   const room = findRoom(state, roomId);
   const character = findCharacter(state, room?.characterId);
+  const isRandomRoom = randomMode || room?.type === 'random';
   const messages = useMemo(() => roomMessages(state, roomId), [state, roomId]);
+
+  function scrollToLatest(animated = true) {
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToEnd({ animated });
+    });
+  }
+
+  useEffect(() => {
+    scrollToLatest(false);
+    const current = currentStateRef.current;
+    if ((current.unreadCounts[roomId] || 0) > 0 || (current.notifications || []).some(item => !item.read && (item.roomId === roomId || item.target?.roomId === roomId))) {
+      void commit(markRoomRead(current, roomId));
+    }
+  }, [roomId]);
+
+  useEffect(() => {
+    scrollToLatest(true);
+  }, [messages.length, typing]);
 
   async function commit(next: SNSGodState) {
     currentStateRef.current = next;
@@ -74,22 +101,24 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
     await commit(markUserMessagesRead(currentStateRef.current, targetRoomId));
   }
 
-  async function send() {
-    const content = text.trim();
-    if (!content || !room || !character || sending) return;
-    setText('');
-    setSending(true);
-    const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content, createdAt: Date.now() };
-    let next = appendMessage(currentStateRef.current, room.id, userMessage);
-    next = { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
-    await commit(next);
+  async function requestCharacterReply(
+    baseState: SNSGodState,
+    targetRoom: NonNullable<typeof room>,
+    targetCharacter: NonNullable<typeof character>,
+    latestUserInput: string
+  ) {
+    const jobId = beginChatJob(targetRoom.id);
     try {
-      const promptMessages = buildChatPrompt(next, character, room, content);
-      await sleep(characterDelayMs(character));
-      next = markUserMessagesRead(currentStateRef.current, room.id);
+      const replyDelayMs = characterDelayMs(targetCharacter);
+      const promptMessages = buildChatPrompt(baseState, targetCharacter, targetRoom, latestUserInput, { mode: 'reply', replyDelaySeconds: replyDelayMs / 1000 });
+      await sleep(replyDelayMs);
+      if (!isCurrentChatJob(targetRoom.id, jobId)) return;
+      let next = markUserMessagesRead(currentStateRef.current, targetRoom.id);
       await commit(next);
       setTyping(true);
+      if (!tryLockGeneratingRoom(targetRoom.id, jobId)) return;
       const { reply, keyIndex } = await callLLM(next, promptMessages);
+      if (!isCurrentChatJob(targetRoom.id, jobId)) return;
       const activeProfile = next.config.apiProfiles[next.config.apiType] || {};
       next = {
         ...next,
@@ -102,38 +131,50 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
         }
       };
       if (!reply.messages.length) throw new Error('모델 응답에서 표시할 메시지를 찾지 못했습니다. ETC > 디버그에서 llm.response 원문을 확인하세요.');
-      const bubbles = reply.messages;
+      const bubbles = normalizeReplyMessagesForStyle(reply.messages, targetCharacter);
       for (const bubble of bubbles) {
-        await sleep(bubbleDelayMs(character, bubble.delay ?? reply.reactionDelay));
+        await sleep(bubbleDelayMs(targetCharacter, bubble.delay ?? reply.reactionDelay));
+        if (!isCurrentChatJob(targetRoom.id, jobId)) return;
+        const phone = phoneCardFromReply(next, targetCharacter, bubble, 'reply');
         let mediaData = '';
         if (bubble.imagePrompt && next.config.imageGeneration?.enabled !== false) {
           try {
-            mediaData = await generateImageDataUri(next, bubble.imagePrompt, character);
+            mediaData = await generateImageDataUri(next, bubble.imagePrompt, targetCharacter);
+            if (!isCurrentChatJob(targetRoom.id, jobId)) return;
           } catch (error) {
             bubble.imageCaption = `${bubble.imageCaption || ''}\n이미지 생성 실패: ${error instanceof Error ? error.message : String(error)}`.trim();
           }
         }
-        next = appendMessage(next, room.id, {
-          id: makeId('msg'),
-          role: 'character',
-          characterId: character.id,
-          content: bubble.content || '',
-          createdAt: Date.now(),
-          sticker: bubble.sticker,
-          imagePrompt: bubble.imagePrompt,
-          imageCaption: bubble.imageCaption,
-          mediaData: mediaData || undefined,
-          mediaType: mediaData ? 'image' : undefined
-        });
+        if (phone.textContent || bubble.sticker || bubble.imagePrompt || bubble.imageCaption || mediaData) {
+          next = appendMessage(next, targetRoom.id, {
+            id: makeId('msg'),
+            role: 'character',
+            characterId: targetCharacter.id,
+            content: phone.textContent || '',
+            createdAt: Date.now(),
+            sticker: bubble.sticker,
+            imagePrompt: bubble.imagePrompt,
+            imageCaption: bubble.imageCaption,
+            mediaData: mediaData || undefined,
+            mediaType: mediaData ? 'image' : undefined
+          });
+        }
+        if (phone.card) next = appendMessage(next, targetRoom.id, phone.card);
       }
+      if (!isCurrentChatJob(targetRoom.id, jobId)) return;
       if (reply.newMemory?.trim()) {
-        const updated = findCharacter(next, character.id);
-        next = updateCharacter(next, character.id, { memories: [...(updated?.memories || []), reply.newMemory.trim()].slice(-80) });
+        const updated = findCharacter(next, targetCharacter.id);
+        next = updateCharacter(next, targetCharacter.id, { memories: [...(updated?.memories || []), reply.newMemory.trim()].slice(-80) });
       }
+      if (!isRandomRoom) {
+        const snsCharacter = findCharacter(next, targetCharacter.id) || targetCharacter;
+        next = await maybeCreateAutoSNSPost(next, snsCharacter, targetRoom.id);
+      }
+      if (!isCurrentChatJob(targetRoom.id, jobId)) return;
       await commit(next);
     } catch (error) {
       setTyping(false);
-      const failed = appendMessage(currentStateRef.current, room.id, {
+      const failed = appendMessage(currentStateRef.current, targetRoom.id, {
         id: makeId('msg'),
         role: 'system',
         content: `답장 생성 실패: ${error instanceof Error ? error.message : String(error)}`,
@@ -143,9 +184,22 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
       await commit(failed);
       Alert.alert('답장 생성 실패', error instanceof Error ? error.message : String(error));
     } finally {
+      endChatJob(targetRoom.id, jobId);
       setTyping(false);
       setSending(false);
     }
+  }
+
+  async function send() {
+    const content = text.trim();
+    if (!content || !room || !character || sending) return;
+    setText('');
+    setSending(true);
+    const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content, createdAt: Date.now() };
+    let next = appendMessage(currentStateRef.current, room.id, userMessage);
+    next = { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
+    await commit(next);
+    await requestCharacterReply(next, room, character, content);
   }
 
   async function attachImage() {
@@ -159,8 +213,10 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
       let next = appendMessage(currentStateRef.current, room.id, userMessage);
       next = { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
       await commit(next);
-      void markReadLater(room.id, character);
+      setSending(true);
+      await requestCharacterReply(next, room, character, `${content}\n[사용자가 사진을 보냈습니다.]`);
     } catch (error) {
+      setSending(false);
       Alert.alert('사진 첨부 실패', error instanceof Error ? error.message : String(error));
     }
   }
@@ -168,11 +224,37 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
   async function sendSticker(sticker: Sticker) {
     if (!room || !character || sending) return;
     setShowStickers(false);
+    setSending(true);
     const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content: '', createdAt: Date.now(), sticker: sticker.id };
     let next = appendMessage(currentStateRef.current, room.id, userMessage);
     next = { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
     await commit(next);
-    void markReadLater(room.id, character);
+    await requestCharacterReply(next, room, character, `[스티커: ${sticker.name || sticker.id}]`);
+  }
+
+  async function rejectCall(message: SNSGodMessage) {
+    if (!room || !character) return;
+    let next = {
+      ...currentStateRef.current,
+      messages: {
+        ...currentStateRef.current.messages,
+        [room.id]: (currentStateRef.current.messages[room.id] || []).map(item => item.id === message.id ? {
+          ...item,
+          callStatus: 'rejected',
+          callHandledAt: Date.now()
+        } : item)
+      }
+    };
+    next = appendMessage(next, room.id, {
+      id: makeId('msg'),
+      role: 'character',
+      characterId: character.id,
+      content: '통화 취소',
+      createdAt: Date.now(),
+      phoneLog: 'rejected',
+      sourceMode: 'phone'
+    });
+    await commit(next);
   }
 
   if (!room || !character) {
@@ -195,21 +277,32 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
           <Text style={styles.title}>{character.name}</Text>
           <Text style={styles.subtitle}>{room.name === '기본 채팅' ? character.statusMessage || '접속 중' : `${room.name} · ${character.statusMessage || '접속 중'}`}</Text>
         </Pressable>
-        <Pressable
-          onPress={() => randomMode ? onLeaveRandomRoom?.(room.id) : onOpenProfile(character.id)}
-          style={[styles.profileButton, randomMode && styles.leaveButton]}
-        >
-          <Text style={[styles.profileText, randomMode && styles.leaveText]}>{randomMode ? '나가기' : '프로필'}</Text>
-        </Pressable>
-        <Pressable onPress={() => onOpenRoomSettings(room.id)} style={styles.settingsButton}><Text style={styles.settingsText}>방 설정</Text></Pressable>
+        {randomMode ? (
+          <Pressable onPress={() => onPromoteRandomRoom?.(room.id)} style={styles.profileButton}>
+            <Text style={styles.profileText}>정식 추가</Text>
+          </Pressable>
+        ) : (
+          <Pressable onPress={() => onOpenProfile(character.id)} style={styles.profileButton}>
+            <Text style={styles.profileText}>프로필</Text>
+          </Pressable>
+        )}
+        {randomMode ? (
+          <Pressable onPress={() => onLeaveRandomRoom?.(room.id)} style={[styles.profileButton, styles.leaveButton]}>
+            <Text style={[styles.profileText, styles.leaveText]}>삭제</Text>
+          </Pressable>
+        ) : null}
+        {!isRandomRoom ? <Pressable onPress={() => onOpenRoomSettings(room.id)} style={styles.settingsButton}><Text style={styles.settingsText}>방 설정</Text></Pressable> : null}
       </View>
 
       <FlatList
+        ref={listRef}
         data={messages}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.messages}
+        onContentSizeChange={() => scrollToLatest(false)}
+        onLayout={() => scrollToLatest(false)}
         ListHeaderComponent={room.name !== '기본 채팅' ? <View style={styles.roomNotice}><Text style={styles.roomNoticeText}>{room.name}</Text></View> : null}
-        renderItem={({ item }) => <MessageBubble message={item} character={character} userStickers={state.userStickers || []} />}
+        renderItem={({ item }) => <MessageBubble message={item} character={character} userStickers={state.userStickers || []} roomId={room.id} onOpenCall={onOpenCall} onRejectCall={rejectCall} />}
         ListFooterComponent={typing ? <TypingBubble character={character} /> : null}
       />
 
@@ -258,7 +351,7 @@ function StickerTray({ stickers, onPick }: { stickers: Sticker[]; onPick: (stick
     <View style={styles.stickerTray}>
       {stickers.length ? stickers.map(sticker => (
         <Pressable key={sticker.id} onPress={() => onPick(sticker)} style={styles.stickerTrayItem}>
-          {String(sticker.data || sticker.mediaData || '').startsWith('data:') ? <Image source={{ uri: sticker.data || sticker.mediaData || '' }} style={styles.stickerThumb} resizeMode="contain" /> : <Text style={styles.stickerThumbText}>S</Text>}
+          {isRenderableMediaUri(sticker.data || sticker.mediaData) ? <Image source={{ uri: sticker.data || sticker.mediaData || '' }} style={styles.stickerThumb} resizeMode="contain" /> : <Text style={styles.stickerThumbText}>S</Text>}
           <Text style={styles.stickerTrayName} numberOfLines={1}>{sticker.name}</Text>
         </Pressable>
       )) : <Text style={styles.emptyStickerText}>설정의 스티커 메뉴에서 내 스티커를 추가하세요.</Text>}
@@ -266,7 +359,15 @@ function StickerTray({ stickers, onPick }: { stickers: Sticker[]; onPick: (stick
   );
 }
 
-function MessageBubble({ message, character, userStickers }: { message: SNSGodMessage; character: NonNullable<ReturnType<typeof findCharacter>>; userStickers: Sticker[] }) {
+function MessageBubble({ message, character, userStickers, roomId, onOpenCall, onRejectCall }: {
+  message: SNSGodMessage;
+  character: NonNullable<ReturnType<typeof findCharacter>>;
+  userStickers: Sticker[];
+  roomId: string;
+  onOpenCall?: (characterId: string, roomId?: string, messageId?: string) => void;
+  onRejectCall?: (message: SNSGodMessage) => void;
+}) {
+  const [promptOpen, setPromptOpen] = useState(false);
   const mine = message.role === 'user';
   const system = message.role === 'system';
   const sticker = message.sticker ? (mine ? userStickers : character.stickers || []).find(item => String(item.id) === String(message.sticker)) : undefined;
@@ -276,16 +377,55 @@ function MessageBubble({ message, character, userStickers }: { message: SNSGodMe
   return (
     <View style={[styles.messageRow, mine && styles.messageRowMine]}>
       {!mine ? <Avatar character={character} size={34} /> : null}
+      {mine ? (
+        <View style={styles.messageMeta}>
+          {!message.readAt ? <Text style={styles.readOne}>1</Text> : null}
+          <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text>
+        </View>
+      ) : null}
       <View style={[styles.bubble, mine ? styles.myBubble : styles.theirBubble]}>
-        {message.content ? <Text style={[styles.bubbleText, mine && styles.myText]}>{message.content}</Text> : null}
+        {message.callInvite ? (
+          <View style={styles.callCard}>
+            <Text style={styles.callTitle}>{String(message.callTitle || message.mediaName || `${character.name} 전화`)}</Text>
+            <Text style={styles.callBody}>{String(message.callLine || '통화 요청이 도착했습니다.')}</Text>
+            {message.callStatus ? <Text style={styles.callStatus}>{callStatusLabel(String(message.callStatus))}</Text> : (
+              <View style={styles.callActions}>
+                <Pressable onPress={() => onOpenCall?.(String(message.characterId || character.id), roomId, message.id)} style={styles.callButton}>
+                  <Text style={styles.callButtonText}>받기</Text>
+                </Pressable>
+                <Pressable onPress={() => onRejectCall?.(message)} style={[styles.callButton, styles.callRejectButton]}>
+                  <Text style={styles.callRejectText}>거절</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+        ) : null}
+        {message.content && !message.callInvite ? <Text style={[styles.bubbleText, mine && styles.myText]}>{message.content}</Text> : null}
         {sticker?.data || sticker?.mediaData ? <Image source={{ uri: sticker.data || sticker.mediaData || '' }} style={styles.stickerImage} resizeMode="contain" /> : message.sticker ? <Text style={styles.stickerText}>스티커 · {sticker?.name || message.sticker}</Text> : null}
-        {message.mediaData ? <Image source={{ uri: message.mediaData }} style={styles.messageImage} resizeMode="cover" /> : null}
-        {message.imagePrompt ? <Text style={styles.imageHint}>이미지 프롬프트: {message.imagePrompt}</Text> : null}
+        {message.mediaData ? (
+          <View style={styles.messageImageWrap}>
+            <Image source={{ uri: message.mediaData }} style={styles.messageImage} resizeMode="cover" />
+            {message.imagePrompt ? (
+              <Pressable accessibilityLabel={promptOpen ? '이미지 프롬프트 접기' : '이미지 프롬프트 펼치기'} onPress={() => setPromptOpen(value => !value)} style={styles.promptToggle}>
+                <Text style={styles.promptToggleText}>{promptOpen ? '⌃' : '⌄'}</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
+        {message.imagePrompt && promptOpen ? <Text style={styles.imageHint}>이미지 프롬프트: {message.imagePrompt}</Text> : null}
         {message.imageCaption ? <Text style={styles.imageHint}>{message.imageCaption}</Text> : null}
-        {mine && !message.readAt ? <Text style={styles.readOne}>1</Text> : null}
       </View>
+      {!mine ? <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text> : null}
     </View>
   );
+}
+
+function callStatusLabel(status: string) {
+  if (status === 'accepted') return '통화 연결됨';
+  if (status === 'rejected') return '통화 취소';
+  if (status === 'missed') return '부재중 전화';
+  if (status === 'ringing') return '수신 중';
+  return status;
 }
 
 const styles = StyleSheet.create({
@@ -307,6 +447,8 @@ const styles = StyleSheet.create({
   roomNoticeText: { color: '#4f5a62', fontSize: 12, fontWeight: '900' },
   messageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginVertical: 4 },
   messageRowMine: { justifyContent: 'flex-end' },
+  messageMeta: { minWidth: 42, alignItems: 'flex-end', justifyContent: 'flex-end', gap: 1, marginBottom: 2 },
+  messageTime: { color: '#30445a', fontSize: 11, fontWeight: '700' },
   bubble: { maxWidth: '78%', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 9 },
   theirBubble: { backgroundColor: '#fff' },
   myBubble: { backgroundColor: '#fee56a' },
@@ -314,11 +456,23 @@ const styles = StyleSheet.create({
   myText: { color: '#211b00' },
   stickerText: { marginTop: 6, color: '#6c4f00', fontWeight: '900' },
   stickerImage: { marginTop: 8, width: 128, height: 128, borderRadius: 12 },
-  readOne: { position: 'absolute', left: -14, bottom: 2, color: '#7b6a21', fontSize: 11, fontWeight: '900' },
+  readOne: { color: '#7b6a21', fontSize: 11, fontWeight: '900', lineHeight: 13 },
   typingBubble: { minWidth: 58, minHeight: 38, alignItems: 'center', justifyContent: 'center' },
   typingDots: { color: '#656565', fontWeight: '900', fontSize: 20, lineHeight: 22 },
-  messageImage: { marginTop: 8, width: 210, height: 210, maxWidth: '100%', borderRadius: 12, backgroundColor: '#eee' },
+  messageImageWrap: { marginTop: 8, position: 'relative', alignSelf: 'flex-start' },
+  messageImage: { width: 210, height: 210, maxWidth: '100%', borderRadius: 12, backgroundColor: '#eee' },
+  promptToggle: { position: 'absolute', right: 6, bottom: 6, width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(86,92,99,0.78)' },
+  promptToggleText: { color: '#e5e7eb', fontSize: 16, lineHeight: 20, fontWeight: '900' },
   imageHint: { marginTop: 6, fontSize: 12, color: colors.sub },
+  callCard: { minWidth: 190, gap: 6 },
+  callTitle: { color: colors.text, fontSize: 15, fontWeight: '900' },
+  callBody: { color: colors.sub, fontSize: 12, fontWeight: '700' },
+  callActions: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  callButton: { flex: 1, minHeight: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: '#27313b' },
+  callRejectButton: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#d5c6b1' },
+  callButtonText: { color: '#fff', fontWeight: '900' },
+  callRejectText: { color: colors.text, fontWeight: '900' },
+  callStatus: { marginTop: 4, color: colors.sub, fontSize: 12, fontWeight: '900' },
   systemBubble: { alignSelf: 'center', maxWidth: '88%', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: 'rgba(255,255,255,0.45)' },
   systemText: { color: '#4f5a62', fontSize: 12, fontWeight: '700' },
   composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 10, backgroundColor: '#f7f2e9', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },

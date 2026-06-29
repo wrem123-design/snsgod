@@ -4,7 +4,7 @@ import { colors } from '../theme';
 import { CalendarEvent, LoreEntry, SNSGodCharacter, SNSGodRoom, SNSGodState } from '../types';
 import { clampNumber, makeId } from '../logic/ids';
 import { findCharacter, updateCharacter } from '../logic/stateHelpers';
-import { pickImageDataUri } from '../logic/media';
+import { isRenderableMediaUri, pickImageDataUri } from '../logic/media';
 import { generateImageDataUri } from '../logic/api';
 
 type CharacterSection = 'basic' | 'reply' | 'profile' | 'time' | 'calendar' | 'lore' | 'stickers' | 'prompt';
@@ -574,7 +574,7 @@ function StickerPreview({ text }: { text: string }) {
     <View style={styles.stickerGrid}>
       {stickers.map((item, index) => (
         <View key={`${item.id}-${index}`} style={styles.stickerTile}>
-          {item.data?.startsWith('data:') ? <Image source={{ uri: item.data }} style={styles.stickerImage} /> : <Text style={styles.stickerFallback}>ID</Text>}
+          {isRenderableMediaUri(item.data) ? <Image source={{ uri: item.data }} style={styles.stickerImage} /> : <Text style={styles.stickerFallback}>ID</Text>}
           <Text style={styles.stickerName} numberOfLines={1}>{item.name || item.id}</Text>
         </View>
       ))}

@@ -1,5 +1,9 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
+import { SNSGodState } from '../types';
+
+const MEDIA_DIR = `${FileSystem.documentDirectory || ''}snsgod-media/`;
+const EXTERNALIZE_THRESHOLD = 180_000;
 
 export async function pickImageDataUri(): Promise<string | undefined> {
   const result = await DocumentPicker.getDocumentAsync({ type: 'image/*', copyToCacheDirectory: true });
@@ -20,4 +24,86 @@ export async function pickStickerDataUri(): Promise<{ data: string; name: string
     name: asset.name?.replace(/\.[^.]+$/, '') || '스티커',
     type
   };
+}
+
+function isLargeDataUri(value: unknown): value is string {
+  return typeof value === 'string' && value.startsWith('data:') && value.length > EXTERNALIZE_THRESHOLD;
+}
+
+export function isRenderableMediaUri(value: unknown): value is string {
+  return typeof value === 'string'
+    && /^(data:|file:|content:|asset:|https?:\/\/)/i.test(value)
+    && value.trim().length > 0;
+}
+
+function extensionFor(dataUri: string) {
+  const mime = /^data:([^;]+);base64,/.exec(dataUri)?.[1] || 'image/jpeg';
+  if (mime.includes('png')) return 'png';
+  if (mime.includes('webp')) return 'webp';
+  if (mime.includes('gif')) return 'gif';
+  if (mime.includes('mp4')) return 'mp4';
+  return 'jpg';
+}
+
+async function ensureMediaDir() {
+  if (!FileSystem.documentDirectory) return undefined;
+  const info = await FileSystem.getInfoAsync(MEDIA_DIR);
+  if (!info.exists) await FileSystem.makeDirectoryAsync(MEDIA_DIR, { intermediates: true });
+  return MEDIA_DIR;
+}
+
+export async function externalizeDataUri(value: string, hint: string): Promise<string> {
+  if (!isLargeDataUri(value)) return value;
+  const dir = await ensureMediaDir();
+  if (!dir) return value;
+  const ext = extensionFor(value);
+  const base64 = value.replace(/^data:[^;]+;base64,/, '');
+  const safeHint = hint.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 48) || 'media';
+  const uri = `${dir}${safeHint}_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+  await FileSystem.writeAsStringAsync(uri, base64, { encoding: FileSystem.EncodingType.Base64 });
+  return uri;
+}
+
+export async function externalizeStateMedia(state: SNSGodState): Promise<SNSGodState> {
+  let next: SNSGodState = {
+    ...state,
+    characters: [...state.characters],
+    messages: { ...state.messages },
+    snsPosts: [...(state.snsPosts || [])],
+    userStickers: [...(state.userStickers || [])]
+  };
+
+  next.characters = await Promise.all(next.characters.map(async character => ({
+    ...character,
+    avatar: isLargeDataUri(character.avatar) ? await externalizeDataUri(character.avatar, `${character.id}_avatar`) : character.avatar,
+    profileImage: isLargeDataUri(character.profileImage) ? await externalizeDataUri(character.profileImage, `${character.id}_profile`) : character.profileImage,
+    coverImage: isLargeDataUri(character.coverImage) ? await externalizeDataUri(character.coverImage, `${character.id}_cover`) : character.coverImage,
+    profileReferenceImage: isLargeDataUri(character.profileReferenceImage) ? await externalizeDataUri(character.profileReferenceImage, `${character.id}_ref`) : character.profileReferenceImage,
+    profileImageHistory: await Promise.all((character.profileImageHistory || []).map(async item => ({
+      ...item,
+      image: isLargeDataUri(item.image) ? await externalizeDataUri(item.image, `${character.id}_${item.kind || 'history'}`) : item.image
+    })))
+  })));
+
+  const messageEntries = await Promise.all(Object.entries(next.messages || {}).map(async ([roomId, list]) => [
+    roomId,
+    await Promise.all((Array.isArray(list) ? list : []).map(async message => ({
+      ...message,
+      mediaData: isLargeDataUri(message.mediaData) ? await externalizeDataUri(message.mediaData, `${roomId}_${message.id}`) : message.mediaData
+    })))
+  ] as const));
+  next.messages = Object.fromEntries(messageEntries);
+
+  next.userStickers = await Promise.all((next.userStickers || []).map(async sticker => ({
+    ...sticker,
+    data: isLargeDataUri(sticker.data) ? await externalizeDataUri(sticker.data, `sticker_${sticker.id}`) : sticker.data,
+    mediaData: isLargeDataUri(sticker.mediaData) ? await externalizeDataUri(sticker.mediaData, `sticker_${sticker.id}`) : sticker.mediaData
+  })));
+
+  next.snsPosts = await Promise.all((next.snsPosts || []).map(async post => ({
+    ...post,
+    image: isLargeDataUri(post.image) ? await externalizeDataUri(post.image, `sns_${post.id}`) : post.image
+  })));
+
+  return next;
 }

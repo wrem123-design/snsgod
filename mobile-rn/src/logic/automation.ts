@@ -1,9 +1,12 @@
 import { callLLM, generateImageDataUri } from './api';
 import { makeId } from './ids';
-import { DEFAULT_PROMPTS, userNameFor, userProfileFor } from './prompts';
+import { DEFAULT_PROMPTS, proactiveInstruction, userNameFor, userProfileFor } from './prompts';
 import { appendMessage, findCharacter } from './stateHelpers';
-import { generateSNSPost } from './sns';
+import { MAX_GROUP_ROOM_MESSAGES, MAX_SNS_DM_CONTEXT_MESSAGES } from './limits';
 import { GroupRoom, SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
+import { isRoomBusy } from './chatJobs';
+import { notifyRoomMessage, pushNotification } from './notifications';
+import { runDailyDiaryMemory } from './dailyDiary';
 
 function minutesSince(timestamp?: number): number {
   if (!timestamp) return 9999;
@@ -20,6 +23,7 @@ function eligiblePrivateRooms(state: SNSGodState, firstMessageOnly: boolean): { 
     if (character.randomTemporary === true || character.enabled === false || character.proactiveEnabled === false) continue;
     const rooms = state.chatRooms[character.id] || [];
     for (const room of rooms) {
+      if (isRoomBusy(room.id)) continue;
       const messages = state.messages[room.id] || [];
       if (firstMessageOnly) {
         if (sent[room.id]) continue;
@@ -27,7 +31,7 @@ function eligiblePrivateRooms(state: SNSGodState, firstMessageOnly: boolean): { 
       }
       const frequency = Math.max(1, Number(character.frequencyMinutes || 10));
       if (minutesSince(room.lastActivity || room.createdAt) < frequency) continue;
-      const chance = Math.max(0, Math.min(100, Number(character.initiative ?? 40)));
+      const chance = adjustedInitiative(state, character, room.id);
       if (Math.random() * 100 > chance) continue;
       pairs.push({ character, room });
     }
@@ -39,6 +43,7 @@ function eligibleGroupRooms(state: SNSGodState): { room: GroupRoom; speaker: SNS
   if (state.config.autoEnabled === false || state.config.groupFirst !== true) return [];
   const pairs: { room: GroupRoom; speaker: SNSGodCharacter; participants: SNSGodCharacter[] }[] = [];
   for (const room of state.groupRooms || []) {
+    if (isRoomBusy(room.id)) continue;
     const participants = state.characters.filter(character => character.randomTemporary !== true && room.participantIds.includes(character.id) && character.enabled !== false && character.proactiveEnabled !== false);
     if (!participants.length) continue;
     const frequency = Math.max(1, Math.min(...participants.map(character => Number(character.frequencyMinutes || 10))));
@@ -57,7 +62,7 @@ function eligibleGroupRooms(state: SNSGodState): { room: GroupRoom; speaker: SNS
 function appendGroupMessage(state: SNSGodState, roomId: string, message: SNSGodMessage): SNSGodState {
   return {
     ...state,
-    messages: { ...state.messages, [roomId]: [...(state.messages[roomId] || []), message].slice(-180) },
+    messages: { ...state.messages, [roomId]: [...(state.messages[roomId] || []), message].slice(-MAX_GROUP_ROOM_MESSAGES) },
     groupRooms: (state.groupRooms || []).map(room => room.id === roomId ? { ...room, lastActivity: message.createdAt } : room)
   };
 }
@@ -84,6 +89,7 @@ async function runCalendarEvent(state: SNSGodState): Promise<SNSGodState | undef
     if (character.randomTemporary === true || character.enabled === false) continue;
     const room = (state.chatRooms[character.id] || [])[0];
     if (!room) continue;
+    if (isRoomBusy(room.id)) continue;
     const event = calendarEventsFor(state, character).find(item => eventMatchesToday(item.date));
     if (!event) continue;
     const marker = `${character.id}:${event.id || event.title}:${todayKey()}`;
@@ -99,7 +105,6 @@ async function runCalendarEvent(state: SNSGodState): Promise<SNSGodState | undef
     const { reply, keyIndex } = await callLLM(state, [{ role: 'system', content: prompt }]);
     let next: SNSGodState = {
       ...state,
-      __calendarSent: { ...sent, [marker]: new Date().toISOString() },
       config: {
         ...state.config,
         apiProfiles: {
@@ -117,19 +122,14 @@ async function runCalendarEvent(state: SNSGodState): Promise<SNSGodState | undef
         createdAt: Date.now()
       });
     }
-    return {
-      ...next,
-      unreadCounts: { ...next.unreadCounts, [room.id]: (next.unreadCounts[room.id] || 0) + 1 },
-      notifications: [{
-        id: makeId('noti'),
-        type: 'chat' as const,
-        title: `${character.name} · ${event.title}`,
-        body: reply.messages[0]?.content || '기념일 메시지',
-        roomId: room.id,
-        characterId: character.id,
-        createdAt: Date.now()
-      }, ...(next.notifications || [])].slice(0, 100)
-    };
+    next = { ...next, __calendarSent: { ...sent, [marker]: new Date().toISOString() } };
+    return notifyRoomMessage(next, {
+      roomId: room.id,
+      characterId: character.id,
+      title: `${character.name} · ${event.title}`,
+      body: reply.messages[0]?.content || '기념일 메시지',
+      app: 'messenger'
+    });
   }
   return undefined;
 }
@@ -147,19 +147,51 @@ function runPhoneInvite(state: SNSGodState): SNSGodState | undefined {
   if (!candidates.length) return undefined;
   const character = candidates[Math.floor(Math.random() * candidates.length)];
   const roomId = (state.chatRooms[character.id] || [])[0]?.id;
-  return {
+  if (roomId && isRoomBusy(roomId)) return undefined;
+  let next: SNSGodState = {
     ...state,
-    __phoneInviteAt: { ...sent, [character.id]: Date.now() },
-    notifications: [{
-      id: makeId('noti'),
-      type: 'system' as const,
+    __phoneInviteAt: { ...sent, [character.id]: Date.now() }
+  };
+  if (roomId) {
+    next = appendMessage(next, roomId, {
+      id: makeId('msg'),
+      role: 'character',
+      characterId: character.id,
+      content: `${character.name}에게서 전화가 왔어요.`,
+      createdAt: Date.now(),
+      callInvite: true,
+      sourceMode: 'phone'
+    });
+  }
+  return pushNotification(next, {
+      type: 'system',
       title: `${character.name} 전화`,
       body: `${character.name}에게서 전화가 왔어요.`,
+      app: 'messenger',
       roomId,
       characterId: character.id,
-      createdAt: Date.now()
-    }, ...(state.notifications || [])].slice(0, 100)
-  };
+      target: { app: 'call', roomId, characterId: character.id },
+      collapseKey: `call:${character.id}`
+    });
+}
+
+function unansweredProactiveCount(state: SNSGodState, roomId: string): number {
+  const messages = state.messages[roomId] || [];
+  const lastUserIndex = [...messages].map((message, index) => ({ message, index })).reverse().find(item => item.message.role === 'user')?.index ?? -1;
+  return messages.slice(lastUserIndex + 1).filter(message => message.role === 'character' && message.sourceMode === 'proactive').length;
+}
+
+function adjustedInitiative(state: SNSGodState, character: SNSGodCharacter, roomId: string): number {
+  const base = Math.max(0, Math.min(100, Number(character.initiative ?? 40)));
+  const unanswered = unansweredProactiveCount(state, roomId);
+  const patience = Math.max(0, Number(character.proactivePatience ?? 2));
+  const style = String(character.proactiveStyle || 'auto');
+  if (unanswered <= patience) return base;
+  if (style === 'reserved') return Math.max(0, base - unanswered * 18);
+  if (style === 'steady') return Math.max(0, base - unanswered * 8);
+  if (style === 'attached') return Math.min(100, base + unanswered * 6);
+  if (style === 'obsessive') return Math.min(100, base + unanswered * 12);
+  return base;
 }
 
 async function runProfileImageAutomation(state: SNSGodState): Promise<SNSGodState | undefined> {
@@ -227,6 +259,7 @@ async function runPrivateFirstMessage(state: SNSGodState, firstMessageOnly: bool
     `User profile: ${userProfileFor(state, character) || '(empty)'}`,
     `Character profile: ${character.prompt || '(empty)'}`,
     `Recent chat:\n${transcript || '(empty)'}`,
+    firstMessageOnly ? '' : proactiveInstruction(state, character, room.id),
     'Return only JSON: {"reactionDelay":0,"messages":[{"content":"short natural Korean message"}]}.'
   ].join('\n\n');
   const { reply, keyIndex } = await callLLM(state, [{ role: 'system', content: prompt }]);
@@ -247,7 +280,8 @@ async function runPrivateFirstMessage(state: SNSGodState, firstMessageOnly: bool
       role: 'character',
       characterId: character.id,
       content: bubble.content,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      sourceMode: firstMessageOnly ? 'random_first' : 'proactive'
     });
   }
   const updatedCharacter = findCharacter(next, character.id);
@@ -257,26 +291,20 @@ async function runPrivateFirstMessage(state: SNSGodState, firstMessageOnly: bool
       characters: next.characters.map(item => item.id === character.id ? { ...item, memories: [...(item.memories || []), reply.newMemory?.trim()].filter(Boolean).slice(-80) as string[] } : item)
     };
   }
-  return {
-    ...next,
-    unreadCounts: { ...next.unreadCounts, [room.id]: (next.unreadCounts[room.id] || 0) + 1 },
-    notifications: [{
-      id: makeId('noti'),
-      type: 'chat' as const,
-      title: character.name,
-      body: reply.messages[0]?.content || '새 메시지',
-      roomId: room.id,
-      characterId: character.id,
-      createdAt: Date.now()
-    }, ...(next.notifications || [])].slice(0, 100)
-  };
+  return notifyRoomMessage(next, {
+    roomId: room.id,
+    characterId: character.id,
+    title: character.name,
+    body: reply.messages[0]?.content || '새 메시지',
+    app: 'messenger'
+  });
 }
 
 async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | undefined> {
   const candidates = eligibleGroupRooms(state);
   if (!candidates.length) return undefined;
   const { room, speaker, participants } = candidates[Math.floor(Math.random() * candidates.length)];
-  const messages = (state.messages[room.id] || []).slice(-12);
+  const messages = (state.messages[room.id] || []).slice(-MAX_SNS_DM_CONTEXT_MESSAGES);
   const transcript = messages.map(message => {
     if (message.role === 'user') return `${state.config.userName || '나'}: ${message.content}`;
     const character = participants.find(item => item.id === message.characterId);
@@ -313,44 +341,24 @@ async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | u
       createdAt: Date.now()
     });
   }
-  return {
-    ...next,
-    unreadCounts: { ...next.unreadCounts, [room.id]: (next.unreadCounts[room.id] || 0) + 1 },
-    notifications: [{
-      id: makeId('noti'),
-      type: 'chat' as const,
-      title: `${room.name} · ${speaker.name}`,
-      body: reply.messages[0]?.content || '새 단톡 메시지',
-      roomId: room.id,
-      characterId: speaker.id,
-      createdAt: Date.now()
-    }, ...(next.notifications || [])].slice(0, 100)
-  };
+  return notifyRoomMessage(next, {
+    roomId: room.id,
+    characterId: speaker.id,
+    title: `${room.name} · ${speaker.name}`,
+    body: reply.messages[0]?.content || '새 단톡 메시지',
+    app: 'messenger'
+  });
 }
 
 export async function runAutomationTick(state: SNSGodState): Promise<SNSGodState> {
   const profileImageNext = await runProfileImageAutomation(state);
   if (profileImageNext) return profileImageNext;
 
+  const diaryNext = await runDailyDiaryMemory(state);
+  if (diaryNext) return diaryNext;
+
   const calendarNext = await runCalendarEvent(state);
   if (calendarNext) return calendarNext;
-
-  if (state.config.autoEnabled !== false && state.config.snsAutoPostEnabled !== false) {
-    const chance = Math.max(0, Math.min(100, Number(state.config.snsAutoChance ?? 40)));
-    const countNeeded = Math.max(1, Number(state.config.snsStartCount || 6));
-    const eligibleCharacters = state.characters.filter(character => {
-      if (character.randomTemporary === true || character.enabled === false || character.snsAutoEnabled === false) return false;
-      const rooms = state.chatRooms[character.id] || [];
-      const messageCount = rooms.reduce((sum, room) => sum + (state.messages[room.id] || []).length, 0);
-      const latestPost = state.snsPosts.filter(post => post.characterId === character.id).sort((a, b) => b.createdAt - a.createdAt)[0];
-      return messageCount >= countNeeded && minutesSince(latestPost?.createdAt) >= 60;
-    });
-    if (eligibleCharacters.length && Math.random() * 100 <= chance) {
-      const character = eligibleCharacters[Math.floor(Math.random() * eligibleCharacters.length)];
-      const platform = Math.random() > 0.5 ? 'instagram' : 'twitter';
-      return generateSNSPost(state, character, platform);
-    }
-  }
 
   const randomFirstNext = await runPrivateFirstMessage(state, true);
   if (randomFirstNext) return randomFirstNext;

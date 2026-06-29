@@ -1,7 +1,7 @@
 import { SNSGodState } from '../types';
 import { createDefaultState } from '../data/defaultState';
 import { DEFAULT_PROMPTS } from '../logic/prompts';
-import { ensureCharacterRooms } from '../logic/stateHelpers';
+import { ensureCharacterRooms, normalizeRandomChats } from '../logic/stateHelpers';
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -116,8 +116,9 @@ function normalizeSnsDmThreads(parsed: Record<string, unknown>, characters: SNSG
 }
 
 export function normalizeLegacyState(rawJson: string): SNSGodState {
-  const parsed = JSON.parse(rawJson) as unknown;
-  if (!isObject(parsed)) throw new Error('백업 JSON 형식이 올바르지 않습니다.');
+  const parsedRoot = JSON.parse(rawJson) as unknown;
+  if (!isObject(parsedRoot)) throw new Error('백업 JSON 형식이 올바르지 않습니다.');
+  const parsed = isObject(parsedRoot.state) ? parsedRoot.state : parsedRoot;
   const fallback = createDefaultState();
   const config = isObject(parsed.config) ? parsed.config : {};
   const characters = normalizeCharacters(parsed, fallback);
@@ -136,7 +137,7 @@ export function normalizeLegacyState(rawJson: string): SNSGodState {
           systemRules: String((config.prompts.main as Record<string, unknown>).system_rules || DEFAULT_PROMPTS.systemRules),
           roleObjective: String((config.prompts.main as Record<string, unknown>).role_and_objective || DEFAULT_PROMPTS.roleObjective),
           characterActing: String((config.prompts.main as Record<string, unknown>).character_acting || DEFAULT_PROMPTS.characterActing),
-          jsonFormat: String((config.prompts.main as Record<string, unknown>).message_json || DEFAULT_PROMPTS.jsonFormat),
+          jsonFormat: String((config.prompts.main as Record<string, unknown>).message_writing || (config.prompts.main as Record<string, unknown>).message_json || DEFAULT_PROMPTS.jsonFormat),
           memoryRules: String((config.prompts.main as Record<string, unknown>).memory_generation || DEFAULT_PROMPTS.memoryRules),
           stickerRules: String((config.prompts.main as Record<string, unknown>).sticker_usage || DEFAULT_PROMPTS.stickerRules),
           language: String((config.prompts.main as Record<string, unknown>).language || DEFAULT_PROMPTS.language)
@@ -181,5 +182,5 @@ export function normalizeLegacyState(rawJson: string): SNSGodState {
     userStickers: (firstArray(parsed.userStickers, parsed.stickers) || []) as SNSGodState['userStickers'],
     notifications: (firstArray(parsed.notifications, parsed.notificationList, parsed.alerts) || []) as SNSGodState['notifications']
   };
-  return ensureCharacterRooms(normalized);
+  return normalizeRandomChats(ensureCharacterRooms(normalized));
 }

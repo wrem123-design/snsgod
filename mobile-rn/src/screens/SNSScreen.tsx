@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
 import { SNSDmThread, SNSGodCharacter, SNSGodState, SNSPost } from '../types';
@@ -19,6 +19,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
   const [loading, setLoading] = useState(false);
   const [imageData, setImageData] = useState('');
   const [activeDmId, setActiveDmId] = useState('');
+  const [dmHub, setDmHub] = useState<{ postId: string; platformIndex: number } | null>(null);
   const [dmText, setDmText] = useState('');
   const [showGenerator, setShowGenerator] = useState(false);
   const [showDmList, setShowDmList] = useState(false);
@@ -99,10 +100,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
     try {
       const draftState = stateWithDraftOptions();
       const draftCharacter = draftState.characters.find(character => character.id === selectedCharacter.id) || selectedCharacter;
-      const generated = await generateSNSPost(draftState, draftCharacter, platform);
-      const next = imageData
-        ? { ...generated, snsPosts: generated.snsPosts.map((post, index) => index === 0 ? { ...post, image: imageData } : post) }
-        : generated;
+      const next = await generateSNSPost(draftState, draftCharacter, platform, { manual: true, image: imageData || undefined });
       await onChange(next);
       setImageData('');
       setShowGenerator(false);
@@ -184,17 +182,109 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
     }
   }
 
+  function postContext(post: SNSPost) {
+    return `${platform === 'instagram' ? 'Instagram' : 'X'} post by ${post.displayName || selectedCharacter?.name || 'Character'}: ${post.content}`;
+  }
+
+  async function openSnsDm(post: SNSPost) {
+    const character = state.characters.find(item => item.id === post.characterId);
+    const existing = (state.snsDmThreads || []).find(thread =>
+      thread.postId === post.id
+      && Number(thread.platformIndex || 0) === 0
+      && thread.kind !== 'thirdParty'
+      && !thread.id.startsWith('postdm:')
+    );
+    if (!existing && character) {
+      const thread: SNSDmThread = {
+        id: makeId('snsdm'),
+        postId: post.id,
+        platformIndex: 0,
+        characterId: post.characterId,
+        kind: 'user',
+        title: `${platform === 'instagram' ? 'Instagram' : 'X'} DM`,
+        context: postContext(post),
+        messages: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        unread: 0
+      };
+      await onChange({ ...state, snsDmThreads: [thread, ...(state.snsDmThreads || [])] });
+    }
+    setSelectedCharacterId(post.characterId);
+    setDmHub({ postId: post.id, platformIndex: 0 });
+    setActiveDmId('');
+    setShowDmList(false);
+  }
+
+  const hubPost = dmHub ? (state.snsPosts || []).find(post => post.id === dmHub.postId) : undefined;
+  const hubUserThread = hubPost ? (state.snsDmThreads || []).find(thread =>
+    thread.postId === hubPost.id
+    && Number(thread.platformIndex || 0) === Number(dmHub?.platformIndex || 0)
+    && thread.kind !== 'thirdParty'
+    && !thread.id.startsWith('postdm:')
+  ) : undefined;
+  const hubThirdPartyDms = hubPost ? [
+    ...(hubPost.dms || []).map((dm, index) => ({ id: String(dm.id || `postdm_${index}`), title: dm.title, messages: dm.messages })),
+    ...(state.snsDmThreads || [])
+      .filter(thread => thread.postId === hubPost.id && (thread.kind === 'thirdParty' || thread.messages.some(message => message.from === 'thirdParty')))
+      .map(thread => ({
+        id: thread.id,
+        title: thread.title,
+        messages: thread.messages.map(message => ({ id: message.id, from: message.author || message.from, body: message.body, createdAt: message.createdAt }))
+      }))
+  ] : [];
+  const activePostDmParts = activeDmId.startsWith('postdm:') ? activeDmId.split(':') : [];
+  const activePostDmPost = activePostDmParts.length >= 3 ? (state.snsPosts || []).find(post => post.id === activePostDmParts[1]) : undefined;
+  const activePostDmList = activePostDmPost ? [
+    ...(activePostDmPost.dms || []).map((dm, index) => ({ id: String(dm.id || `postdm_${index}`), title: dm.title, messages: dm.messages })),
+    ...(state.snsDmThreads || [])
+      .filter(thread => thread.postId === activePostDmPost.id && (thread.kind === 'thirdParty' || thread.messages.some(message => message.from === 'thirdParty')))
+      .map(thread => ({
+        id: thread.id,
+        title: thread.title,
+        messages: thread.messages.map(message => ({ id: message.id, from: message.author || message.from, body: message.body, createdAt: message.createdAt }))
+      }))
+  ] : [];
+  const activePostDm = activePostDmPost
+    ? activePostDmList.find(dm => `postdm:${activePostDmPost.id}:${dm.id}` === activeDmId)
+    : undefined;
+
   return (
     <View style={[styles.screen, platform === 'twitter' && styles.xScreen]}>
       {activeDmId ? (
-        <DmModal
-          thread={(state.snsDmThreads || []).find(item => item.id === activeDmId)}
-          value={dmText}
-          onChangeText={setDmText}
-          onClose={() => setActiveDmId('')}
-          onSend={() => sendDmReply(false)}
-          onAiSend={() => sendDmReply(true)}
-          loading={loading}
+        activePostDm ? (
+          <ReadOnlyDmModal
+            title={activePostDm.title}
+            messages={activePostDm.messages}
+            onClose={() => setActiveDmId('')}
+          />
+        ) : (
+          <DmModal
+            thread={(state.snsDmThreads || []).find(item => item.id === activeDmId)}
+            value={dmText}
+            onChangeText={setDmText}
+            onClose={() => setActiveDmId('')}
+            onSend={() => sendDmReply(true)}
+            onAiSend={() => sendDmReply(false)}
+            loading={loading}
+          />
+        )
+      ) : null}
+      {dmHub && hubPost ? (
+        <SnsDmHubModal
+          post={hubPost}
+          character={state.characters.find(character => character.id === hubPost.characterId)}
+          userThread={hubUserThread}
+          thirdPartyDms={hubThirdPartyDms}
+          onClose={() => setDmHub(null)}
+          onOpenUserThread={threadId => {
+            setActiveDmId(threadId);
+            setDmHub(null);
+          }}
+          onOpenThirdParty={dmId => {
+            setActiveDmId(`postdm:${hubPost.id}:${dmId}`);
+            setDmHub(null);
+          }}
         />
       ) : null}
       <View style={[styles.header, platform === 'twitter' && styles.xHeader]}>
@@ -289,7 +379,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
         keyExtractor={item => item.id}
         contentContainerStyle={[styles.feed, platform === 'instagram' && styles.instagramFeed, platform === 'twitter' && styles.twitterFeed]}
         ListEmptyComponent={<Text style={styles.emptyText}>아직 {selectedCharacter?.name || '이 캐릭터'}의 {platform === 'instagram' ? 'Instagram' : 'Twitter/X'} 게시물이 없습니다.</Text>}
-        renderItem={({ item }) => <PostCard platform={platform} post={item} character={state.characters.find(character => character.id === item.characterId)} onLike={() => likePost(item.id)} onDelete={() => deletePost(item.id)} onComment={content => addComment(item.id, content)} />}
+        renderItem={({ item }) => <PostCard platform={platform} post={item} character={state.characters.find(character => character.id === item.characterId)} onLike={() => likePost(item.id)} onDelete={() => deletePost(item.id)} onComment={content => addComment(item.id, content)} onOpenDm={() => openSnsDm(item)} />}
       />
     </View>
   );
@@ -354,14 +444,89 @@ function DmModal({ thread, value, onChangeText, onClose, onSend, onAiSend, loadi
         <View style={styles.dmComposer}>
           <TextInput value={value} onChangeText={onChangeText} style={styles.dmInput} placeholder="SNS DM 입력" placeholderTextColor="#aaa" />
           <Pressable onPress={onSend} style={styles.dmSend}><Text style={styles.dmSendText}>보내기</Text></Pressable>
-          <Pressable onPress={onAiSend} disabled={loading} style={[styles.dmSend, styles.dmAiSend, loading && styles.disabled]}><Text style={styles.dmAiText}>AI</Text></Pressable>
+          <Pressable onPress={onAiSend} disabled={loading} style={[styles.dmSend, styles.dmAiSend, loading && styles.disabled]}><Text style={styles.dmAiText}>저장만</Text></Pressable>
         </View>
       </View>
     </View>
   );
 }
 
-function PostCard({ platform, post, character, onLike, onDelete, onComment }: { platform: SNSPost['platform']; post: SNSPost; character?: SNSGodCharacter; onLike: () => void; onDelete: () => void; onComment: (content: string) => void }) {
+function ReadOnlyDmModal({ title, messages, onClose }: {
+  title: string;
+  messages: { id?: string; from: string; body: string; createdAt?: number }[];
+  onClose: () => void;
+}) {
+  return (
+    <View style={styles.modal}>
+      <View style={styles.dmPanel}>
+        <View style={styles.dmPanelHeader}>
+          <Text style={styles.dmPanelTitle}>{title}</Text>
+          <Pressable onPress={onClose} style={styles.dmPanelClose}><Text style={styles.dmPanelCloseText}>닫기</Text></Pressable>
+        </View>
+        <FlatList
+          data={messages}
+          keyExtractor={(item, index) => String(item.id || `${item.createdAt || 0}_${index}`)}
+          contentContainerStyle={styles.dmMessages}
+          renderItem={({ item }) => (
+            <View style={styles.dmBubble}>
+              <Text style={styles.dmSpeaker}>{item.from}</Text>
+              <Text style={styles.dmBubbleText}>{item.body}</Text>
+            </View>
+          )}
+        />
+      </View>
+    </View>
+  );
+}
+
+function SnsDmHubModal({ post, character, userThread, thirdPartyDms, onClose, onOpenUserThread, onOpenThirdParty }: {
+  post: SNSPost;
+  character?: SNSGodCharacter;
+  userThread?: SNSDmThread;
+  thirdPartyDms: { id: string; title: string; messages: { id?: string; from: string; body: string; createdAt?: number }[] }[];
+  onClose: () => void;
+  onOpenUserThread: (threadId: string) => void;
+  onOpenThirdParty: (dmId: string) => void;
+}) {
+  const lastUserDm = userThread?.messages[userThread.messages.length - 1];
+  return (
+    <View style={styles.modal}>
+      <View style={styles.dmPanel}>
+        <View style={styles.dmPanelHeader}>
+          <View style={styles.dmHubHeaderLeft}>
+            <Avatar character={character} size={34} />
+            <View>
+              <Text style={styles.dmPanelTitle}>{character?.name || 'Character'} DM</Text>
+              <Text style={styles.dmHubSub}>SNS 게시물에서 이어진 대화 목록</Text>
+            </View>
+          </View>
+          <Pressable onPress={onClose} style={styles.dmPanelClose}><Text style={styles.dmPanelCloseText}>닫기</Text></Pressable>
+        </View>
+        <View style={styles.dmHubPostPreview}>
+          <Text style={styles.dmHubPostLabel}>{post.platform === 'instagram' ? 'Instagram' : 'X'} 게시물</Text>
+          <Text style={styles.dmHubPostText} numberOfLines={3}>{post.content}</Text>
+        </View>
+        <ScrollView contentContainerStyle={styles.dmHubList}>
+          {userThread ? (
+            <Pressable onPress={() => onOpenUserThread(userThread.id)} style={styles.dmHubCard}>
+              <Text style={styles.dmHubCardTitle}>나와 {character?.name || '캐릭터'}의 DM</Text>
+              <Text style={styles.dmHubCardBody} numberOfLines={2}>{lastUserDm?.body || '아직 메시지가 없습니다.'}</Text>
+            </Pressable>
+          ) : null}
+          {thirdPartyDms.map(dm => (
+            <Pressable key={dm.id} onPress={() => onOpenThirdParty(dm.id)} style={styles.dmHubCard}>
+              <Text style={styles.dmHubCardTitle}>{dm.title}</Text>
+              <Text style={styles.dmHubCardBody} numberOfLines={2}>{dm.messages[dm.messages.length - 1]?.body || '읽기 전용 DM'}</Text>
+            </Pressable>
+          ))}
+          {!thirdPartyDms.length ? <Text style={styles.dmHubEmpty}>다른 DM은 아직 없습니다.</Text> : null}
+        </ScrollView>
+      </View>
+    </View>
+  );
+}
+
+function PostCard({ platform, post, character, onLike, onDelete, onComment, onOpenDm }: { platform: SNSPost['platform']; post: SNSPost; character?: SNSGodCharacter; onLike: () => void; onDelete: () => void; onComment: (content: string) => void; onOpenDm: () => void }) {
   const [comment, setComment] = useState('');
   function submitComment() {
     onComment(comment);
@@ -403,6 +568,7 @@ function PostCard({ platform, post, character, onLike, onDelete, onComment }: { 
       <View style={[styles.postFooter, platform === 'twitter' && styles.xFooter]}>
         <Pressable onPress={onLike}><Text style={[styles.footerText, platform === 'twitter' && styles.xFooterText]}>{platform === 'twitter' ? `♡ ${post.likes || 0}` : `좋아요 ${post.likes || 0}개`}</Text></Pressable>
         <Text style={[styles.footerText, platform === 'twitter' && styles.xFooterText]}>{platform === 'twitter' ? `💬 ${post.replies || post.comments?.length || 0}` : `댓글 ${post.replies || post.comments?.length || 0}개`}</Text>
+        <Pressable onPress={onOpenDm}><Text style={[styles.footerText, platform === 'twitter' && styles.xFooterText]}>DM</Text></Pressable>
         {post.platform === 'twitter' ? <Text style={styles.xFooterText}>↗</Text> : null}
       </View>
       {(post.comments || []).slice(-5).map(item => (
@@ -539,6 +705,8 @@ const styles = StyleSheet.create({
   modal: { ...StyleSheet.absoluteFillObject, zIndex: 20, backgroundColor: 'rgba(0,0,0,0.38)', justifyContent: 'flex-end' },
   dmPanel: { maxHeight: '82%', backgroundColor: '#f7f2e9', borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: 'hidden' },
   dmPanelHeader: { minHeight: 58, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  dmHubHeaderLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  dmHubSub: { marginTop: 2, color: colors.sub, fontSize: 11, fontWeight: '800' },
   dmPanelTitle: { color: colors.text, fontSize: 17, fontWeight: '900' },
   dmPanelClose: { minHeight: 36, paddingHorizontal: 12, borderRadius: 18, backgroundColor: '#fff' },
   dmPanelCloseText: { lineHeight: 36, color: colors.text, fontWeight: '900' },
@@ -553,5 +721,13 @@ const styles = StyleSheet.create({
   dmAiSend: { backgroundColor: '#111' },
   dmSendText: { color: '#241a00', fontWeight: '900' },
   dmAiText: { color: '#fff', fontWeight: '900' },
+  dmHubPostPreview: { margin: 12, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa' },
+  dmHubPostLabel: { color: colors.sub, fontSize: 11, fontWeight: '900' },
+  dmHubPostText: { marginTop: 5, color: colors.text, lineHeight: 20, fontWeight: '700' },
+  dmHubList: { paddingHorizontal: 12, paddingBottom: 18, gap: 8 },
+  dmHubCard: { minHeight: 72, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fff' },
+  dmHubCardTitle: { color: colors.text, fontWeight: '900' },
+  dmHubCardBody: { marginTop: 5, color: colors.sub, lineHeight: 18 },
+  dmHubEmpty: { padding: 12, color: colors.sub, fontWeight: '800', textAlign: 'center' },
   disabled: { opacity: 0.55 }
 });

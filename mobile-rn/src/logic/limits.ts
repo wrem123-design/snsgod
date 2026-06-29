@@ -1,0 +1,7 @@
+export const STATE_SCHEMA_VERSION = 2;
+
+export const MAX_ROOM_MESSAGES = 120;
+export const MAX_GROUP_ROOM_MESSAGES = 120;
+export const MAX_CONTEXT_MESSAGES = 24;
+export const MAX_SNS_CONTEXT_MESSAGES = 12;
+export const MAX_SNS_DM_CONTEXT_MESSAGES = 12;

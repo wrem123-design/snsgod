@@ -6,7 +6,7 @@ import { colors } from '../theme';
 export function DebugScreen({ onBack, onReloadState, onReloadBundle }: {
   onBack: () => void;
   onReloadState: () => Promise<void> | void;
-  onReloadBundle: () => void;
+  onReloadBundle: () => Promise<void> | void;
 }) {
   const [logs, setLogs] = useState<DebugLogEntry[]>([]);
   const [status, setStatus] = useState('');
@@ -31,6 +31,17 @@ export function DebugScreen({ onBack, onReloadState, onReloadBundle }: {
     }
   }
 
+  async function reloadBundle() {
+    try {
+      setStatus('JS 런타임 재로드를 요청했습니다...');
+      await onReloadBundle();
+      setStatus('JS 런타임/저장 데이터를 다시 불러왔습니다.');
+      await refresh();
+    } catch (error) {
+      setStatus(`JS 재로드 실패: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   useEffect(() => {
     void refresh();
   }, []);
@@ -49,7 +60,7 @@ export function DebugScreen({ onBack, onReloadState, onReloadBundle }: {
         <View style={styles.actions}>
           <Pressable onPress={refresh} style={styles.button}><Text style={styles.buttonText}>새로고침</Text></Pressable>
           <Pressable onPress={reloadState} style={styles.button}><Text style={styles.buttonText}>저장 데이터 다시 읽기</Text></Pressable>
-          <Pressable onPress={onReloadBundle} style={styles.button}><Text style={styles.buttonText}>JS 번들 재로드</Text></Pressable>
+          <Pressable onPress={reloadBundle} style={styles.button}><Text style={styles.buttonText}>JS 번들 재로드</Text></Pressable>
           <Pressable onPress={clear} style={styles.danger}><Text style={styles.dangerText}>로그 삭제</Text></Pressable>
         </View>
         <Text style={styles.help}>개발 중 화면이 바뀌지 않으면 APK 재설치 또는 JS 번들 재로드가 필요할 수 있습니다. 릴리즈 앱에서는 새 APK를 설치해야 코드 변경이 반영됩니다.</Text>

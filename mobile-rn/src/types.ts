@@ -209,14 +209,25 @@ export type CalendarEvent = {
   date: string;
   type?: string;
   prompt?: string;
+  triggered?: Record<string, string>;
+  lastTriggeredAt?: number;
 };
 
 export type LoreEntry = {
   id: string;
   title: string;
   keys: string[];
+  secondKeys?: string[];
   content: string;
   enabled?: boolean;
+  alwaysActive?: boolean;
+  regex?: boolean;
+  selective?: boolean;
+  insertOrder?: number;
+  priority?: number;
+  folderId?: string;
+  dailyMemory?: boolean;
+  dateKey?: string;
   characterId?: string;
   roomId?: string;
 };
@@ -239,13 +250,17 @@ export type SNSPost = {
   bookmarks?: number;
   views?: number;
   comments?: { id: string; author: string; handle?: string; content: string; createdAt: number; likes?: number; ai?: boolean }[];
+  dms?: { id?: string; title: string; messages: { id?: string; from: string; body: string; createdAt?: number }[] }[];
 };
 
 export type SNSDmThread = {
   id: string;
   postId?: string;
+  platformIndex?: number;
   characterId: string;
+  kind?: 'user' | 'thirdParty';
   title: string;
+  context?: string;
   messages: { id: string; from: 'user' | 'character' | 'thirdParty'; author?: string; body: string; createdAt: number }[];
   createdAt: number;
   updatedAt?: number;
@@ -263,16 +278,21 @@ export type GroupRoom = {
 
 export type NotificationItem = {
   id: string;
-  type: 'chat' | 'sns' | 'system';
+  type: 'chat' | 'sns' | 'system' | 'randomchat' | 'sumgod' | 'snsdm';
   title: string;
   body?: string;
   roomId?: string;
   characterId?: string;
+  app?: 'messenger' | 'randomchat' | 'social' | 'snsdm' | 'sumgod' | 'system';
+  target?: { app?: string; roomId?: string; characterId?: string; postId?: string; threadId?: string };
+  collapseKey?: string;
+  count?: number;
   createdAt: number;
   read?: boolean;
 };
 
 export type SNSGodState = {
+  schemaVersion?: number;
   config: SNSGodConfig;
   characters: SNSGodCharacter[];
   chatRooms: Record<string, SNSGodRoom[]>;

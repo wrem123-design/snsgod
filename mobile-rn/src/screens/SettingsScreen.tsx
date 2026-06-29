@@ -8,9 +8,10 @@ import { ApiProvider, CalendarEvent, SNSGodState, Sticker } from '../types';
 import { normalizeLegacyState } from '../storage/importLegacy';
 import { callLLMText } from '../logic/api';
 import { makeId } from '../logic/ids';
-import { pickStickerDataUri } from '../logic/media';
+import { isRenderableMediaUri, pickStickerDataUri } from '../logic/media';
 import { Avatar } from '../components/Avatar';
 import { fetchGrokAccounts, fetchGrokBilling, fetchGrokStatus, GrokBilling, GrokLocalAccount, GrokLocalStatus, grokBaseUrl, logoutGrokOAuth, selectGrokOAuth } from '../logic/grokLocal';
+import { createBackupPayload } from '../logic/backup';
 
 const PROVIDERS: ApiProvider[] = ['vertex', 'gemini', 'openai', 'anthropic', 'custom'];
 const PROVIDER_PRESETS: Partial<Record<ApiProvider, { endpoint: string; model: string }[]>> = {
@@ -692,7 +693,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const fileName = `snsgod-backup-${timestamp}.json`;
       const uri = `${FileSystem.cacheDirectory || FileSystem.documentDirectory || ''}${fileName}`;
-      const payload = JSON.stringify({ ...state, __exportedAt: Date.now() }, null, 2);
+      const payload = JSON.stringify(createBackupPayload(state, { includeMedia: false }), null, 2);
       await FileSystem.writeAsStringAsync(uri, payload, { encoding: FileSystem.EncodingType.UTF8 });
       setStatus(`백업 파일 생성 완료: ${fileName}`);
       if (await Sharing.isAvailableAsync()) {
@@ -784,7 +785,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
             const draft = stickerDraft(sticker);
             return (
               <View key={sticker.id} style={styles.stickerCard}>
-                {String(sticker.data || sticker.mediaData || '').startsWith('data:image/') ? <Image source={{ uri: sticker.data || sticker.mediaData || '' }} style={styles.stickerPreview} resizeMode="cover" /> : <View style={styles.stickerIcon}><Text style={styles.stickerIconText}>S</Text></View>}
+                {isRenderableMediaUri(sticker.data || sticker.mediaData) ? <Image source={{ uri: sticker.data || sticker.mediaData || '' }} style={styles.stickerPreview} resizeMode="cover" /> : <View style={styles.stickerIcon}><Text style={styles.stickerIconText}>S</Text></View>}
                 <View style={styles.stickerEditBody}>
                   <Text style={styles.label}>이름</Text>
                   <TextInput value={draft.name} onChangeText={value => setStickerDraft(sticker, { name: value })} style={styles.input} />
@@ -1084,36 +1085,9 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
         </View>
 
         <View style={[styles.card, activeSection !== 'prompts' && styles.hidden]}>
-          <Text style={styles.cardTitle}>SNS 생성 옵션</Text>
-          <Text style={styles.label}>설정할 플랫폼</Text>
-          <View style={styles.segmentRow}>
-            {(['instagram', 'twitter'] as SnsSettingsPlatform[]).map(item => (
-              <Pressable key={item} onPress={() => setSnsDefaultPlatform(item)} style={[styles.segment, snsDefaultPlatform === item && styles.segmentActive]}>
-                <Text style={[styles.segmentText, snsDefaultPlatform === item && styles.segmentTextActive]}>{item}</Text>
-              </Pressable>
-            ))}
-          </View>
-          <View style={styles.twoCols}>
-            <View style={styles.col}>
-              <Text style={styles.label}>댓글 수</Text>
-              <TextInput value={snsCommentQty} onChangeText={setSnsCommentQty} style={styles.input} />
-            </View>
-            <View style={styles.col}>
-              <Text style={styles.label}>무드</Text>
-              <TextInput value={snsMood} onChangeText={setSnsMood} style={styles.input} />
-            </View>
-          </View>
-          <Text style={styles.label}>소재</Text>
-          <TextInput value={snsSubject} onChangeText={setSnsSubject} style={styles.input} />
-          <SwitchLine label="익명계" value={snsAnonymous} onChange={setSnsAnonymous} />
-          <SwitchLine label="NSFW 뒷계" value={snsNsfw} onChange={setSnsNsfw} />
-          <SwitchLine label="글만 생성" value={snsTextOnly} onChange={setSnsTextOnly} />
-          <SwitchLine label="AI 댓글 자동 생성" value={snsAutoComments} onChange={setSnsAutoComments} />
-          <SwitchLine label="SNS DM 생성 안함" value={snsNoDM} onChange={setSnsNoDM} />
-          <SwitchLine label="제3자 DM 허용" value={snsThirdPartyDM} onChange={setSnsThirdPartyDM} />
-          <SwitchLine label="이미지 자동 생성" value={snsAutoImage} onChange={setSnsAutoImage} />
-          <Text style={styles.help}>이 값은 선택한 플랫폼에만 저장됩니다. 인스타그램과 X의 생성/댓글/DM/이미지 옵션은 서로 분리됩니다.</Text>
-          <Pressable onPress={saveSnsOptions} style={styles.primary}><Text style={styles.primaryText}>SNS 옵션 저장</Text></Pressable>
+          <Text style={styles.cardTitle}>SNS 생성 설정</Text>
+          <Text style={styles.help}>SNS 생성 세부값은 캐릭터마다 다르게 적용됩니다. Instagram/X별 무드, 소재, 댓글, DM, 이미지 옵션은 SNS 화면에서 캐릭터를 선택한 뒤 저장하세요.</Text>
+          <Text style={styles.help}>이 화면에는 전역 자동화와 프롬프트만 남겨 캐릭터별 고유 SNS 옵션과 섞이지 않게 했습니다.</Text>
         </View>
 
         <View style={[styles.card, activeSection !== 'user' && styles.hidden]}>

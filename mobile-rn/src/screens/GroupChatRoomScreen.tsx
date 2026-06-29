@@ -2,11 +2,20 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, Image, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
-import { callLLM, generateImageDataUri } from '../logic/api';
+import { callLLMText, generateImageDataUri, parseJsonObject } from '../logic/api';
 import { makeId } from '../logic/ids';
+import { formatMessageTime } from '../logic/time';
+import { MAX_CONTEXT_MESSAGES, MAX_GROUP_ROOM_MESSAGES } from '../logic/limits';
 import { SNSGodCharacter, SNSGodMessage, SNSGodState, Sticker } from '../types';
+import { markRoomRead } from '../logic/notifications';
+import { beginChatJob, endChatJob, isCurrentChatJob, tryLockGeneratingRoom } from '../logic/chatJobs';
+import { isRenderableMediaUri } from '../logic/media';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+type GroupReplyPayload = {
+  messages?: Array<{ characterId?: string; speakerId?: string; name?: string; handle?: string; content?: string; sticker?: string; imagePrompt?: string; imageCaption?: string; delay?: number }>;
+};
 
 function clampDelay(value: unknown, fallback: number) {
   const number = Number(value);
@@ -48,32 +57,33 @@ function participantNames(participants: SNSGodCharacter[]) {
   return participants.map(character => character.name).join(', ');
 }
 
-function buildGroupPrompt(state: SNSGodState, roomId: string, speaker: SNSGodCharacter, participants: SNSGodCharacter[], latestUserText: string) {
+function buildGroupPrompt(state: SNSGodState, roomId: string, participants: SNSGodCharacter[], latestUserText: string) {
   const profile = state.config.apiProfiles[state.config.apiType] || {};
-  const messages = (state.messages[roomId] || []).slice(-Number(profile.contextMessageLimit || 24));
+  const messages = (state.messages[roomId] || []).slice(-Number(profile.contextMessageLimit || MAX_CONTEXT_MESSAGES));
   const transcript = messages.map(message => {
-    if (message.role === 'user') return `${state.config.userName || '나'}: ${message.content}`;
+    if (message.role === 'user') return `${state.config.userName || 'User'}: ${message.content}`;
     const character = participants.find(item => item.id === message.characterId);
     return `${character?.name || 'Character'}: ${message.content}`;
   }).join('\n');
-  const stickerText = [...(speaker.stickers || []), ...(state.userStickers || [])]
+  const stickerText = participants.flatMap(character => character.stickers || []).concat(state.userStickers || [])
     .slice(0, 20)
     .map(item => `- ${item.id}: ${item.name}${item.description ? ` (${item.description})` : ''}`)
     .join('\n');
   const system = [
-      'This is a private fictional group messenger. Stay in character and return JSON only.',
-      'Return only valid JSON: {"reactionDelay":0,"messages":[{"content":"short Korean chat bubble"}]}. Do not wrap it in markdown.',
-      'Do not expose JSON keys as visible chat text. Do not echo, rewrite, summarize, or delete the latest user message.',
-      `Group room participants: ${participantNames(participants)}.`,
-      `You are ${speaker.name}. Character profile: ${speaker.prompt || '(empty)'}`,
-      `User profile: ${state.config.userDescription || '(empty)'}`,
-      `Room-only relationship/context note: ${findGroup(state, roomId)?.relationshipNote || '(empty)'}`,
-      stickerText ? `Available stickers:\n${stickerText}` : 'Available stickers: none'
+    'This is a private fictional group messenger. Stay in character and return JSON only.',
+    'Return only valid JSON: {"messages":[{"characterId":"one allowed id","content":"short Korean chat bubble","sticker":"","imagePrompt":"","imageCaption":""}]}. Do not wrap it in markdown.',
+    'Write 1 to 4 messages. Usually only 1 to 3 members reply. Not everyone needs to answer.',
+    'Every message must include characterId from the allowed member list. Do not use outside speakers.',
+    'Do not expose JSON keys as visible chat text. Do not echo, rewrite, summarize, or delete the latest user message.',
+    `Allowed members:\n${participants.map(character => `- ${character.id} (@${character.handle || character.id}) ${character.name}: ${character.prompt || '(empty)'}`).join('\n')}`,
+    `User profile: ${state.config.userDescription || '(empty)'}`,
+    `Room-only relationship/context note: ${findGroup(state, roomId)?.relationshipNote || '(empty)'}`,
+    stickerText ? `Available stickers:\n${stickerText}` : 'Available stickers: none'
   ].join('\n\n');
   const user = [
-      `Conversation transcript:\n${transcript || '(empty)'}`,
-      `Latest user message: ${latestUserText}`,
-      'Reply as only your character. Do not speak for other characters.'
+    `Conversation transcript:\n${transcript || '(empty)'}`,
+    `Latest user message: ${latestUserText}`,
+    `Output language: ${state.config.language || 'Korean'}.`
   ].join('\n\n');
   return [
     { role: 'system' as const, content: system },
@@ -81,12 +91,22 @@ function buildGroupPrompt(state: SNSGodState, roomId: string, speaker: SNSGodCha
   ];
 }
 
-function chooseSpeakers(participants: SNSGodCharacter[], messages: SNSGodMessage[]): SNSGodCharacter[] {
+function chooseFallbackSpeaker(participants: SNSGodCharacter[], messages: SNSGodMessage[]): SNSGodCharacter {
   const lastCharacterId = [...messages].reverse().find(message => message.role === 'character')?.characterId;
   const candidates = participants.filter(character => character.id !== lastCharacterId);
   const pool = candidates.length ? candidates : participants;
-  const count = Math.min(pool.length, 1 + Math.floor(Math.random() * Math.min(3, pool.length)));
-  return [...pool].sort(() => Math.random() - 0.5).slice(0, count);
+  return pool[Math.floor(Math.random() * pool.length)] || participants[0];
+}
+
+function resolveGroupSpeaker(participants: SNSGodCharacter[], item: NonNullable<GroupReplyPayload['messages']>[number]): SNSGodCharacter | undefined {
+  const raw = String(item.characterId || item.speakerId || '').trim();
+  if (raw) {
+    const byId = participants.find(character => character.id === raw || character.handle === raw.replace(/^@/, ''));
+    if (byId) return byId;
+  }
+  const name = String(item.name || item.handle || '').replace(/^@/, '').trim();
+  if (!name) return undefined;
+  return participants.find(character => character.name === name || character.handle === name || character.id === name);
 }
 
 export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onOpenSettings }: {
@@ -106,8 +126,27 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onOpenSet
   const [sending, setSending] = useState(false);
   const [showStickers, setShowStickers] = useState(false);
   const [typingCharacters, setTypingCharacters] = useState<SNSGodCharacter[]>([]);
+  const listRef = useRef<FlatList<SNSGodMessage>>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
+
+  function scrollToLatest(animated = true) {
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToEnd({ animated });
+    });
+  }
+
+  useEffect(() => {
+    scrollToLatest(false);
+    const current = stateRef.current;
+    if ((current.unreadCounts[roomId] || 0) > 0 || (current.notifications || []).some(item => !item.read && (item.roomId === roomId || item.target?.roomId === roomId))) {
+      void commit(markRoomRead(current, roomId));
+    }
+  }, [roomId]);
+
+  useEffect(() => {
+    scrollToLatest(true);
+  }, [messages.length, typingCharacters.length]);
 
   async function commit(next: SNSGodState) {
     stateRef.current = next;
@@ -132,51 +171,63 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onOpenSet
       ...stateRef.current,
       messages: {
         ...stateRef.current.messages,
-        [roomId]: [...(stateRef.current.messages[roomId] || []), userMessage].slice(-180)
+        [roomId]: [...(stateRef.current.messages[roomId] || []), userMessage].slice(-MAX_GROUP_ROOM_MESSAGES)
       },
       groupRooms: (stateRef.current.groupRooms || []).map(item => item.id === roomId ? { ...item, lastActivity: now } : item),
       unreadCounts: { ...stateRef.current.unreadCounts, [roomId]: 0 }
     };
     await commit(next);
+    const jobId = beginChatJob(roomId);
     try {
-      const speakers = chooseSpeakers(participants, next.messages[roomId] || []);
-      const firstSpeaker = speakers[0];
+      const firstSpeaker = chooseFallbackSpeaker(participants, next.messages[roomId] || []);
       if (firstSpeaker) {
+        setTypingCharacters([firstSpeaker]);
         await sleep(characterDelayMs(firstSpeaker));
+        if (!isCurrentChatJob(roomId, jobId)) return;
         next = markUserMessagesRead(stateRef.current, roomId);
         await commit(next);
       }
-      for (const speaker of speakers) {
-        setTypingCharacters(prev => Array.from(new Map([...prev, speaker].map(item => [item.id, item])).values()));
-        const prompt = buildGroupPrompt(next, roomId, speaker, participants, content);
-        const { reply, keyIndex } = await callLLM(next, prompt);
-        const profile = next.config.apiProfiles[next.config.apiType] || {};
+      if (!tryLockGeneratingRoom(roomId, jobId)) return;
+      const prompt = buildGroupPrompt(next, roomId, participants, content);
+      const { text: rawText, keyIndex } = await callLLMText(next, prompt);
+      if (!isCurrentChatJob(roomId, jobId)) return;
+      const profile = next.config.apiProfiles[next.config.apiType] || {};
+      next = {
+        ...next,
+        config: { ...next.config, apiProfiles: { ...next.config.apiProfiles, [next.config.apiType]: { ...profile, apiKeyIndex: keyIndex } } }
+      };
+      const parsed = parseJsonObject<GroupReplyPayload>(rawText);
+      const replyItems = (parsed?.messages || []).slice(0, 4).filter(item => String(item.content || '').trim());
+      const normalizedItems = replyItems.length ? replyItems : [{
+        characterId: chooseFallbackSpeaker(participants, next.messages[roomId] || []).id,
+        content: rawText.trim() && !rawText.trim().startsWith('{') ? rawText.trim() : '응.'
+      }];
+      let deliveredCount = 0;
+      for (const item of normalizedItems) {
+        const speaker = resolveGroupSpeaker(participants, item) || (deliveredCount === 0 ? chooseFallbackSpeaker(participants, next.messages[roomId] || []) : undefined);
+        if (!speaker) continue;
+        setTypingCharacters(prev => Array.from(new Map([...prev, speaker].map(value => [value.id, value])).values()));
+        await sleep(bubbleDelayMs(speaker, item.delay));
+        if (!isCurrentChatJob(roomId, jobId)) return;
+        let mediaData = '';
+        if (item.imagePrompt && next.config.imageGeneration?.enabled !== false) {
+          try {
+            mediaData = await generateImageDataUri(next, item.imagePrompt, speaker);
+          } catch (error) {
+            item.imageCaption = `${item.imageCaption || ''}\n이미지 생성 실패: ${error instanceof Error ? error.message : String(error)}`.trim();
+          }
+        }
+        const characterMessage: SNSGodMessage = { id: makeId('msg'), role: 'character', characterId: speaker.id, content: String(item.content || '').trim(), createdAt: Date.now(), sticker: item.sticker, imagePrompt: item.imagePrompt, imageCaption: item.imageCaption, mediaData: mediaData || undefined, mediaType: mediaData ? 'image' : undefined };
         next = {
           ...next,
-          config: { ...next.config, apiProfiles: { ...next.config.apiProfiles, [next.config.apiType]: { ...profile, apiKeyIndex: keyIndex } } }
+          messages: {
+            ...next.messages,
+            [roomId]: [...(next.messages[roomId] || []), characterMessage].slice(-MAX_GROUP_ROOM_MESSAGES)
+          },
+          groupRooms: (next.groupRooms || []).map(item => item.id === roomId ? { ...item, lastActivity: Date.now() } : item)
         };
-        if (!reply.messages.length) throw new Error('모델 응답에서 표시할 메시지를 찾지 못했습니다. ETC > 디버그에서 llm.response 원문을 확인하세요.');
-        for (const bubble of reply.messages.slice(0, 2)) {
-          await sleep(bubbleDelayMs(speaker, bubble.delay ?? reply.reactionDelay));
-          let mediaData = '';
-          if (bubble.imagePrompt && next.config.imageGeneration?.enabled !== false) {
-            try {
-              mediaData = await generateImageDataUri(next, bubble.imagePrompt, speaker);
-            } catch (error) {
-              bubble.imageCaption = `${bubble.imageCaption || ''}\n이미지 생성 실패: ${error instanceof Error ? error.message : String(error)}`.trim();
-            }
-          }
-          const characterMessage: SNSGodMessage = { id: makeId('msg'), role: 'character', characterId: speaker.id, content: bubble.content || '', createdAt: Date.now(), sticker: bubble.sticker, imagePrompt: bubble.imagePrompt, imageCaption: bubble.imageCaption, mediaData: mediaData || undefined, mediaType: mediaData ? 'image' : undefined };
-          next = {
-            ...next,
-            messages: {
-              ...next.messages,
-              [roomId]: [...(next.messages[roomId] || []), characterMessage].slice(-180)
-            },
-            groupRooms: (next.groupRooms || []).map(item => item.id === roomId ? { ...item, lastActivity: Date.now() } : item)
-          };
-        }
-        setTypingCharacters(prev => prev.filter(item => item.id !== speaker.id));
+        deliveredCount += 1;
+        setTypingCharacters(prev => prev.filter(value => value.id !== speaker.id));
       }
       await commit(next);
     } catch (error) {
@@ -186,12 +237,13 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onOpenSet
         ...stateRef.current,
         messages: {
           ...stateRef.current.messages,
-          [roomId]: [...(stateRef.current.messages[roomId] || []), systemMessage].slice(-180)
+          [roomId]: [...(stateRef.current.messages[roomId] || []), systemMessage].slice(-MAX_GROUP_ROOM_MESSAGES)
         }
       };
       await commit(failed);
       Alert.alert('그룹 답장 실패', error instanceof Error ? error.message : String(error));
     } finally {
+      endChatJob(roomId, jobId);
       setTypingCharacters([]);
       setSending(false);
     }
@@ -206,7 +258,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onOpenSet
       ...stateRef.current,
       messages: {
         ...stateRef.current.messages,
-        [roomId]: [...(stateRef.current.messages[roomId] || []), userMessage].slice(-180)
+        [roomId]: [...(stateRef.current.messages[roomId] || []), userMessage].slice(-MAX_GROUP_ROOM_MESSAGES)
       },
       groupRooms: (stateRef.current.groupRooms || []).map(item => item.id === roomId ? { ...item, lastActivity: now } : item),
       unreadCounts: { ...stateRef.current.unreadCounts, [roomId]: 0 }
@@ -218,7 +270,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onOpenSet
   if (!room) {
     return (
       <View style={styles.empty}>
-        <Text style={styles.emptyText}>단톡방을 찾을 수 없습니다.</Text>
+        <Text style={styles.emptyText}>그룹방을 찾을 수 없습니다.</Text>
         <Pressable onPress={onBack} style={styles.primary}><Text style={styles.primaryText}>목록으로</Text></Pressable>
       </View>
     );
@@ -235,9 +287,12 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onOpenSet
         <Pressable onPress={() => onOpenSettings(room.id)} style={styles.settings}><Text style={styles.settingsText}>방 설정</Text></Pressable>
       </View>
       <FlatList
+        ref={listRef}
         data={messages}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.messages}
+        onContentSizeChange={() => scrollToLatest(false)}
+        onLayout={() => scrollToLatest(false)}
         renderItem={({ item }) => <GroupBubble message={item} participants={participants} userName={state.config.userName || '나'} userStickers={state.userStickers || []} />}
         ListFooterComponent={typingCharacters.length ? <GroupTypingBubble characters={typingCharacters} /> : null}
       />
@@ -280,7 +335,7 @@ function StickerTray({ stickers, onPick }: { stickers: Sticker[]; onPick: (stick
     <View style={styles.stickerTray}>
       {stickers.length ? stickers.map(sticker => (
         <Pressable key={sticker.id} onPress={() => onPick(sticker)} style={styles.stickerTrayItem}>
-          {String(sticker.data || sticker.mediaData || '').startsWith('data:') ? <Image source={{ uri: sticker.data || sticker.mediaData || '' }} style={styles.stickerThumb} resizeMode="contain" /> : <Text style={styles.stickerThumbText}>S</Text>}
+          {isRenderableMediaUri(sticker.data || sticker.mediaData) ? <Image source={{ uri: sticker.data || sticker.mediaData || '' }} style={styles.stickerThumb} resizeMode="contain" /> : <Text style={styles.stickerThumbText}>S</Text>}
           <Text style={styles.stickerTrayName} numberOfLines={1}>{sticker.name}</Text>
         </Pressable>
       )) : <Text style={styles.emptyStickerText}>설정의 스티커 메뉴에서 내 스티커를 추가하세요.</Text>}
@@ -289,6 +344,7 @@ function StickerTray({ stickers, onPick }: { stickers: Sticker[]; onPick: (stick
 }
 
 function GroupBubble({ message, participants, userName, userStickers }: { message: SNSGodMessage; participants: SNSGodCharacter[]; userName: string; userStickers: Sticker[] }) {
+  const [promptOpen, setPromptOpen] = useState(false);
   const mine = message.role === 'user';
   const system = message.role === 'system';
   const character = participants.find(item => item.id === message.characterId);
@@ -297,15 +353,30 @@ function GroupBubble({ message, participants, userName, userStickers }: { messag
   return (
     <View style={[styles.messageRow, mine && styles.messageRowMine]}>
       {!mine ? <Avatar character={character} size={34} /> : null}
+      {mine ? (
+        <View style={styles.messageMeta}>
+          {!message.readAt ? <Text style={styles.readOne}>1</Text> : null}
+          <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text>
+        </View>
+      ) : null}
       <View style={[styles.bubble, mine ? styles.myBubble : styles.theirBubble]}>
         {!mine ? <Text style={styles.speaker}>{character?.name || 'Character'}</Text> : <Text style={styles.speakerMine}>{userName}</Text>}
         {message.content ? <Text style={styles.bubbleText}>{message.content}</Text> : null}
         {sticker?.data || sticker?.mediaData ? <Image source={{ uri: sticker.data || sticker.mediaData || '' }} style={styles.stickerImage} resizeMode="contain" /> : message.sticker ? <Text style={styles.stickerText}>스티커 · {sticker?.name || message.sticker}</Text> : null}
-        {message.mediaData ? <Image source={{ uri: message.mediaData }} style={styles.messageImage} resizeMode="cover" /> : null}
-        {message.imagePrompt ? <Text style={styles.imageHint}>이미지 프롬프트: {message.imagePrompt}</Text> : null}
+        {message.mediaData ? (
+          <View style={styles.messageImageWrap}>
+            <Image source={{ uri: message.mediaData }} style={styles.messageImage} resizeMode="cover" />
+            {message.imagePrompt ? (
+              <Pressable accessibilityLabel={promptOpen ? '이미지 프롬프트 접기' : '이미지 프롬프트 펼치기'} onPress={() => setPromptOpen(value => !value)} style={styles.promptToggle}>
+                <Text style={styles.promptToggleText}>{promptOpen ? '⌃' : '⌄'}</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
+        {message.imagePrompt && promptOpen ? <Text style={styles.imageHint}>이미지 프롬프트: {message.imagePrompt}</Text> : null}
         {message.imageCaption ? <Text style={styles.imageHint}>{message.imageCaption}</Text> : null}
-        {mine && !message.readAt ? <Text style={styles.readOne}>1</Text> : null}
       </View>
+      {!mine ? <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text> : null}
     </View>
   );
 }
@@ -323,6 +394,8 @@ const styles = StyleSheet.create({
   messages: { padding: 12, gap: 8 },
   messageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginVertical: 4 },
   messageRowMine: { justifyContent: 'flex-end' },
+  messageMeta: { minWidth: 42, alignItems: 'flex-end', justifyContent: 'flex-end', gap: 1, marginBottom: 2 },
+  messageTime: { color: '#30445a', fontSize: 11, fontWeight: '700' },
   bubble: { maxWidth: '78%', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 9 },
   theirBubble: { backgroundColor: '#fff' },
   myBubble: { backgroundColor: '#fee56a' },
@@ -331,10 +404,13 @@ const styles = StyleSheet.create({
   bubbleText: { fontSize: 16, lineHeight: 22, color: '#222' },
   stickerText: { marginTop: 6, color: '#6c4f00', fontWeight: '900' },
   stickerImage: { marginTop: 8, width: 128, height: 128, borderRadius: 12 },
-  readOne: { position: 'absolute', left: -14, bottom: 2, color: '#7b6a21', fontSize: 11, fontWeight: '900' },
+  readOne: { color: '#7b6a21', fontSize: 11, fontWeight: '900', lineHeight: 13 },
   typingBubble: { minWidth: 58, minHeight: 42, alignItems: 'center', justifyContent: 'center' },
   typingDots: { color: '#656565', fontWeight: '900', fontSize: 20, lineHeight: 22 },
-  messageImage: { marginTop: 8, width: 210, height: 210, maxWidth: '100%', borderRadius: 12, backgroundColor: '#eee' },
+  messageImageWrap: { marginTop: 8, position: 'relative', alignSelf: 'flex-start' },
+  messageImage: { width: 210, height: 210, maxWidth: '100%', borderRadius: 12, backgroundColor: '#eee' },
+  promptToggle: { position: 'absolute', right: 6, bottom: 6, width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(86,92,99,0.78)' },
+  promptToggleText: { color: '#e5e7eb', fontSize: 16, lineHeight: 20, fontWeight: '900' },
   imageHint: { marginTop: 6, fontSize: 12, color: colors.sub },
   systemBubble: { alignSelf: 'center', maxWidth: '88%', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: 'rgba(255,255,255,0.45)' },
   systemText: { color: '#4f5a62', fontSize: 12, fontWeight: '700' },

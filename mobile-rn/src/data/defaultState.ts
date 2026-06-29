@@ -1,10 +1,12 @@
 import { SNSGodState } from '../types';
 import { DEFAULT_PROMPTS } from '../logic/prompts';
+import { STATE_SCHEMA_VERSION } from '../logic/limits';
 
 export function createDefaultState(): SNSGodState {
   const now = Date.now();
   const roomId = `mika_${now.toString(36)}`;
   return {
+    schemaVersion: STATE_SCHEMA_VERSION,
     config: {
       apiType: 'vertex',
       apiProfiles: {
@@ -139,6 +141,7 @@ export function createDefaultState(): SNSGodState {
     snsPosts: [],
     snsDmThreads: [],
     groupRooms: [],
+    randomChats: [],
     loreEntries: [],
     loreFolders: [],
     userStickers: [],

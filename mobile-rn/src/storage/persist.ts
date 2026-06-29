@@ -1,9 +1,19 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { RandomChatRoom, SNSGodState } from '../types';
+import { SNSGodState } from '../types';
 import { createDefaultState } from '../data/defaultState';
+import { ensureCharacterRooms, normalizeRandomChats } from '../logic/stateHelpers';
+import { MAX_GROUP_ROOM_MESSAGES, MAX_ROOM_MESSAGES, STATE_SCHEMA_VERSION } from '../logic/limits';
+import { normalizeLoreEntries } from '../logic/loreEngine';
+import { normalizeNotifications } from '../logic/notifications';
+import { externalizeStateMedia } from '../logic/media';
 
 const STATE_KEY = 'snsgod.state.v1';
 const LEGACY_BACKUP_KEY = 'snsgod.legacyBackup.v1';
+const SAVE_DEBOUNCE_MS = 1200;
+
+let saveInFlight = Promise.resolve();
+let pendingState: SNSGodState | undefined;
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
 
 export async function loadState(): Promise<SNSGodState> {
   const raw = await AsyncStorage.getItem(STATE_KEY);
@@ -15,18 +25,49 @@ export async function loadState(): Promise<SNSGodState> {
   }
 }
 
-export async function saveState(state: SNSGodState): Promise<void> {
-  const snapshot: SNSGodState = { ...normalizeState(state), __savedAt: Date.now() };
+async function writeStateNow(state: SNSGodState): Promise<void> {
+  const snapshot = prepareStateForSave(await externalizeStateMedia(state));
   const payload = JSON.stringify(snapshot);
-  await AsyncStorage.setItem(STATE_KEY, payload);
-  const saved = await AsyncStorage.getItem(STATE_KEY);
-  if (saved !== payload) {
-    throw new Error('저장소 검증 실패: 저장 직후 읽은 데이터가 일치하지 않습니다.');
+  saveInFlight = saveInFlight
+    .catch(() => undefined)
+    .then(async () => {
+      await AsyncStorage.setItem(STATE_KEY, payload);
+      const saved = await AsyncStorage.getItem(STATE_KEY);
+      if (saved !== payload) {
+        throw new Error('저장 검증 실패: 저장 직후 읽은 데이터가 일치하지 않습니다.');
+      }
+    });
+  await saveInFlight;
+}
+
+export async function saveState(state: SNSGodState): Promise<void> {
+  await writeStateNow(state);
+}
+
+export function saveStateDebounced(state: SNSGodState): void {
+  pendingState = state;
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const snapshot = pendingState;
+    pendingState = undefined;
+    saveTimer = undefined;
+    if (snapshot) void writeStateNow(snapshot);
+  }, SAVE_DEBOUNCE_MS);
+}
+
+export async function flushSaveState(state?: SNSGodState): Promise<void> {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = undefined;
   }
+  const snapshot = state || pendingState;
+  pendingState = undefined;
+  if (snapshot) await writeStateNow(snapshot);
+  await saveInFlight;
 }
 
 export async function importState(state: SNSGodState, originalJson: string): Promise<SNSGodState> {
-  const imported: SNSGodState = { ...normalizeState(state), __importedAt: Date.now(), __savedAt: Date.now() };
+  const imported: SNSGodState = { ...prepareStateForSave(state), __importedAt: Date.now() };
   await AsyncStorage.multiSet([
     [STATE_KEY, JSON.stringify(imported)],
     [LEGACY_BACKUP_KEY, originalJson]
@@ -40,8 +81,53 @@ export async function clearState(): Promise<SNSGodState> {
   return fresh;
 }
 
+function migrateState(state: SNSGodState): SNSGodState {
+  const version = Number(state.schemaVersion || 0);
+  let next = { ...state };
+  if (version < 1) {
+    next = {
+      ...next,
+      groupRooms: Array.isArray(next.groupRooms) ? next.groupRooms : [],
+      randomChats: Array.isArray(next.randomChats) ? next.randomChats : [],
+      notifications: Array.isArray(next.notifications) ? next.notifications : [],
+      loreEntries: Array.isArray(next.loreEntries) ? next.loreEntries : [],
+      loreFolders: Array.isArray(next.loreFolders) ? next.loreFolders : [],
+      userStickers: Array.isArray(next.userStickers) ? next.userStickers : []
+    };
+  }
+  if (version < 2) next = normalizeMessageCaps(next);
+  return { ...next, schemaVersion: STATE_SCHEMA_VERSION };
+}
+
 function normalizeState(state: SNSGodState): SNSGodState {
-  return normalizeRandomChats(normalizeSnsOptions(normalizeApiProfiles(normalizeProfileImages(state))));
+  const defaults = createDefaultState();
+  const merged: SNSGodState = {
+    ...defaults,
+    ...state,
+    config: {
+      ...defaults.config,
+      ...(state.config || {}),
+      apiProfiles: {
+        ...defaults.config.apiProfiles,
+        ...(state.config?.apiProfiles || {})
+      }
+    }
+  };
+  const migrated = migrateState(merged);
+  return normalizeMessageCaps(normalizeNotifications(normalizeLoreEntries(normalizeRandomChats(ensureCharacterRooms(normalizeSnsOptions(normalizeApiProfiles(normalizeProfileImages(migrated))))))));
+}
+
+function prepareStateForSave(state: SNSGodState): SNSGodState {
+  return { ...normalizeState(state), schemaVersion: STATE_SCHEMA_VERSION, __savedAt: Date.now() };
+}
+
+function normalizeMessageCaps(state: SNSGodState): SNSGodState {
+  const groupIds = new Set((state.groupRooms || []).map(room => room.id));
+  const messages = Object.fromEntries(Object.entries(state.messages || {}).map(([roomId, list]) => [
+    roomId,
+    (Array.isArray(list) ? list : []).slice(-(groupIds.has(roomId) ? MAX_GROUP_ROOM_MESSAGES : MAX_ROOM_MESSAGES))
+  ]));
+  return { ...state, messages };
 }
 
 function normalizeApiProfiles(state: SNSGodState): SNSGodState {
@@ -116,33 +202,4 @@ function normalizeSnsOptions(state: SNSGodState): SNSGodState {
       }
     }
   };
-}
-
-function normalizeRandomChats(state: SNSGodState): SNSGodState {
-  const randomChats = Array.isArray(state.randomChats) ? state.randomChats as RandomChatRoom[] : [];
-  if (!randomChats.length) return state;
-  const characters = [...(state.characters || [])];
-  const chatRooms = { ...(state.chatRooms || {}) };
-  const messages = { ...(state.messages || {}) };
-  const normalizedRandomChats: RandomChatRoom[] = [];
-  for (const room of randomChats) {
-    const character = room.character;
-    if (!character?.id) continue;
-    if (!characters.some(item => item.id === character.id)) {
-      characters.push({ ...character, randomTemporary: true });
-    }
-    const normalizedRoom: RandomChatRoom = {
-      ...room,
-      character: { ...character, randomTemporary: true },
-      type: 'random',
-      randomChat: true
-    };
-    const existing = chatRooms[character.id] || [];
-    chatRooms[character.id] = existing.some(item => item.id === room.id)
-      ? existing.map(item => item.id === room.id ? { ...item, ...normalizedRoom } : item)
-      : [normalizedRoom, ...existing];
-    messages[room.id] = messages[room.id] || [];
-    normalizedRandomChats.push(normalizedRoom);
-  }
-  return { ...state, characters, chatRooms, messages, randomChats: normalizedRandomChats };
 }

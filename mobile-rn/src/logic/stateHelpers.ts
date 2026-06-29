@@ -1,8 +1,22 @@
-import { SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
+import { RandomChatRoom, SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
 import { makeId } from './ids';
+import { MAX_ROOM_MESSAGES } from './limits';
+
+function randomRoomAsChatRoom(room: RandomChatRoom): SNSGodRoom {
+  return {
+    id: room.id,
+    characterId: room.characterId,
+    name: room.name,
+    createdAt: room.createdAt,
+    lastActivity: room.lastActivity || room.createdAt,
+    type: 'random'
+  };
+}
 
 export function allRooms(state: SNSGodState): SNSGodRoom[] {
-  return Object.values(state.chatRooms || {}).flat();
+  const directRooms = Object.values(state.chatRooms || {}).flat();
+  const randomRooms = (state.randomChats || []).map(randomRoomAsChatRoom);
+  return [...directRooms, ...randomRooms];
 }
 
 export function findRoom(state: SNSGodState, roomId?: string): SNSGodRoom | undefined {
@@ -12,7 +26,8 @@ export function findRoom(state: SNSGodState, roomId?: string): SNSGodRoom | unde
 
 export function findCharacter(state: SNSGodState, characterId?: string): SNSGodCharacter | undefined {
   if (!characterId) return undefined;
-  return state.characters.find(character => character.id === characterId);
+  return state.characters.find(character => character.id === characterId)
+    || (state.randomChats || []).find(room => room.characterId === characterId || room.character.id === characterId)?.character;
 }
 
 export function roomMessages(state: SNSGodState, roomId?: string): SNSGodMessage[] {
@@ -39,7 +54,8 @@ export function ensureCharacterRooms(state: SNSGodState): SNSGodState {
       : [];
     if (!selectedRoomId) selectedRoomId = room.id;
   }
-  return { ...state, chatRooms, messages, selectedRoomId };
+  const randomChats = normalizeRandomChats({ ...state, messages }).randomChats || [];
+  return { ...state, chatRooms, messages, randomChats, selectedRoomId };
 }
 
 export function createRoom(characterId: string, name = '기본 채팅'): SNSGodRoom {
@@ -49,16 +65,25 @@ export function createRoom(characterId: string, name = '기본 채팅'): SNSGodR
 
 export function appendMessage(state: SNSGodState, roomId: string, message: SNSGodMessage): SNSGodState {
   const room = findRoom(state, roomId);
-  const messages = { ...state.messages, [roomId]: [...(state.messages[roomId] || []), message].slice(-160) };
+  const messages = { ...state.messages, [roomId]: [...(state.messages[roomId] || []), message].slice(-MAX_ROOM_MESSAGES) };
   const chatRooms = { ...state.chatRooms };
   const randomChats = Array.isArray(state.randomChats)
     ? state.randomChats.map(item => item.id === roomId ? { ...item, lastActivity: message.createdAt } : item)
     : state.randomChats;
   if (room) {
-    const rooms = [...(chatRooms[room.characterId] || [])];
-    const index = rooms.findIndex(item => item.id === roomId);
-    if (index >= 0) rooms[index] = { ...rooms[index], lastActivity: message.createdAt };
-    chatRooms[room.characterId] = rooms;
+    if (room.type === 'random') {
+      return {
+        ...state,
+        messages,
+        randomChats: (state.randomChats || []).map(item => item.id === roomId ? { ...item, lastActivity: message.createdAt } : item),
+        selectedRoomId: roomId
+      };
+    } else {
+      const rooms = [...(chatRooms[room.characterId] || [])];
+      const index = rooms.findIndex(item => item.id === roomId);
+      if (index >= 0) rooms[index] = { ...rooms[index], lastActivity: message.createdAt };
+      chatRooms[room.characterId] = rooms;
+    }
   }
   return { ...state, messages, chatRooms, randomChats, selectedRoomId: roomId };
 }
@@ -90,7 +115,56 @@ export function deleteRoom(state: SNSGodState, roomId: string): SNSGodState {
 }
 
 export function updateCharacter(state: SNSGodState, characterId: string, patch: Partial<SNSGodCharacter>): SNSGodState {
-  return { ...state, characters: state.characters.map(character => character.id === characterId ? { ...character, ...patch } : character) };
+  return {
+    ...state,
+    characters: state.characters.map(character => character.id === characterId ? { ...character, ...patch } : character),
+    randomChats: (state.randomChats || []).map(room => room.characterId === characterId || room.character.id === characterId ? {
+      ...room,
+      character: { ...room.character, ...patch }
+    } : room)
+  };
+}
+
+export function normalizeRandomChats(state: SNSGodState): SNSGodState {
+  const messages = { ...state.messages };
+  const legacyCharacters = Array.isArray(state.randomCharacters) ? state.randomCharacters as SNSGodCharacter[] : [];
+  const legacyRooms: RandomChatRoom[] = legacyCharacters.map(character => {
+    const roomId = `random_room_${character.id}`;
+    return {
+      id: roomId,
+      type: 'random' as const,
+      characterId: character.id,
+      character,
+      name: `${character.name || '랜덤'} 랜덤채팅`,
+      createdAt: Date.now(),
+      lastActivity: Date.now(),
+      promoted: false
+    };
+  });
+  const randomChats = [...((state.randomChats || []) as RandomChatRoom[]), ...legacyRooms]
+    .filter(room => room?.id && room?.character)
+    .map(room => ({
+      ...room,
+      type: 'random' as const,
+      promoted: room.promoted === true,
+      createdAt: Number(room.createdAt || Date.now()),
+      lastActivity: Number(room.lastActivity || room.createdAt || Date.now()),
+      characterId: String(room.characterId || room.character.id),
+      character: {
+        ...room.character,
+        id: String(room.character?.id || room.characterId || makeId('random')),
+        enabled: room.character?.enabled !== false,
+        proactiveEnabled: false
+      }
+    }));
+  for (const room of randomChats) {
+    if (!Array.isArray(messages[room.id])) {
+      messages[room.id] = room.character.firstMessage
+        ? [{ id: makeId('msg'), role: 'character', characterId: room.characterId, content: room.character.firstMessage, createdAt: room.createdAt, sourceMode: 'randomchat' }]
+        : [];
+    }
+  }
+  return { ...state, messages, randomChats, randomCharacters: undefined };
 }
 
 export function deleteCharacter(state: SNSGodState, characterId: string): SNSGodState {

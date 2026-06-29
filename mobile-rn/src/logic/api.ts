@@ -17,7 +17,19 @@ type VertexServiceAccount = {
 
 export type LLMReply = {
   reactionDelay: number;
-  messages: { delay?: number; content: string; sticker?: string; imagePrompt?: string; imageCaption?: string }[];
+  messages: {
+    delay?: number;
+    content: string;
+    sticker?: string;
+    imagePrompt?: string;
+    imageCaption?: string;
+    callInvite?: boolean;
+    phoneCall?: boolean;
+    callTitle?: string;
+    callLine?: string;
+    phoneTitle?: string;
+    phoneLine?: string;
+  }[];
   newMemory?: string;
 };
 
@@ -157,8 +169,8 @@ function repairJsonish(text: string): string {
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/```$/i, '')
     .replace(/"messages"\s*;/g, '"messages":')
-    .replace(/([{,]\s*)(reactionDelay|delay|messages|content|body|text|sticker|imagePrompt|imageCaption|newMemory|platforms|platform|displayName|handle|hashtags|stats|comments|dms|title|from|name|prompt|persona|profile|description|firstMessage|first_message|greeting)\s*:/g, '$1"$2":')
-    .replace(/([{,]\s*)'(reactionDelay|delay|messages|content|body|text|sticker|imagePrompt|imageCaption|newMemory|platforms|platform|displayName|handle|hashtags|stats|comments|dms|title|from|name|prompt|persona|profile|description|firstMessage|first_message|greeting)'\s*:/g, '$1"$2":')
+    .replace(/([{,]\s*)(reactionDelay|delay|messages|content|body|text|sticker|imagePrompt|imageCaption|newMemory|platforms|platform|displayName|handle|hashtags|stats|comments|dms|title|from|name|prompt|persona|profile|description|firstMessage|first_message|greeting|callInvite|phoneCall|callTitle|callLine|phoneTitle|phoneLine|call)\s*:/g, '$1"$2":')
+    .replace(/([{,]\s*)'(reactionDelay|delay|messages|content|body|text|sticker|imagePrompt|imageCaption|newMemory|platforms|platform|displayName|handle|hashtags|stats|comments|dms|title|from|name|prompt|persona|profile|description|firstMessage|first_message|greeting|callInvite|phoneCall|callTitle|callLine|phoneTitle|phoneLine|call)'\s*:/g, '$1"$2":')
     .replace(/,\s*([}\]])/g, '$1')
     .trim();
 }
@@ -195,15 +207,48 @@ function normalizedReplyFromParsed(parsed: Partial<LLMReply> & { content?: strin
   const sourceMessages = Array.isArray(parsed.messages) ? parsed.messages : [];
   const normalizedMessages = sourceMessages.length
     ? sourceMessages.map(item => {
-      const record = (item || {}) as { delay?: number; content?: string; body?: string; text?: string; sticker?: string; imagePrompt?: string; imageCaption?: string };
+      const record = (item || {}) as {
+        delay?: number;
+        content?: string;
+        body?: string;
+        text?: string;
+        sticker?: string;
+        imagePrompt?: string;
+        imageCaption?: string;
+        callInvite?: boolean;
+        phoneCall?: boolean;
+        callTitle?: string;
+        callLine?: string;
+        phoneTitle?: string;
+        phoneLine?: string;
+        call?: boolean | { callInvite?: boolean; phoneCall?: boolean; title?: string; line?: string };
+        type?: string;
+        intent?: string;
+        action?: string;
+        marker?: string;
+      };
+      const callRecord = typeof record.call === 'object' && record.call ? record.call : undefined;
+      const intentText = String(record.type || record.intent || record.action || record.marker || '').toLowerCase();
+      const hasCall = record.callInvite === true
+        || record.phoneCall === true
+        || record.call === true
+        || callRecord?.callInvite === true
+        || callRecord?.phoneCall === true
+        || /phone[_\s-]*call|incoming[_\s-]*call|call[_\s-]*(now|user|invite)/i.test(intentText);
       return {
         delay: Number(record.delay || 0),
         content: sanitizeAssistantContent(record.content || record.body || record.text || record.imageCaption || ''),
         sticker: record.sticker ? String(record.sticker) : undefined,
         imagePrompt: record.imagePrompt ? String(record.imagePrompt).trim() : undefined,
-        imageCaption: record.imageCaption ? sanitizeAssistantContent(record.imageCaption) : undefined
+        imageCaption: record.imageCaption ? sanitizeAssistantContent(record.imageCaption) : undefined,
+        callInvite: hasCall || undefined,
+        phoneCall: hasCall || undefined,
+        callTitle: record.callTitle || callRecord?.title ? String(record.callTitle || callRecord?.title || '').trim() : undefined,
+        callLine: record.callLine || callRecord?.line ? sanitizeAssistantContent(record.callLine || callRecord?.line || '') : undefined,
+        phoneTitle: record.phoneTitle ? String(record.phoneTitle).trim() : undefined,
+        phoneLine: record.phoneLine ? sanitizeAssistantContent(record.phoneLine) : undefined
       };
-    }).filter(item => item.content || item.sticker || item.imagePrompt)
+    }).filter(item => item.content || item.sticker || item.imagePrompt || item.callInvite)
     : [sanitizeAssistantContent(parsed.content || parsed.message || parsed.body || parsed.text || '')]
       .filter(Boolean)
       .map(content => ({ content }));
@@ -719,6 +764,24 @@ async function appendDataUriImage(form: FormData, field: string, dataUri: string
   form.append(field, file as unknown as Blob);
 }
 
+function mediaTypeForUri(uri: string): string {
+  const lower = uri.toLowerCase();
+  if (lower.includes('.png')) return 'image/png';
+  if (lower.includes('.webp')) return 'image/webp';
+  if (lower.includes('.gif')) return 'image/gif';
+  return 'image/jpeg';
+}
+
+async function appendReferenceImage(form: FormData, field: string, uri: string) {
+  if (uri.startsWith('data:')) {
+    await appendDataUriImage(form, field, uri, 'reference.png');
+    return;
+  }
+  if (/^(file:|content:|asset:)/i.test(uri)) {
+    form.append(field, { uri, name: 'reference.jpg', type: mediaTypeForUri(uri) } as unknown as Blob);
+  }
+}
+
 async function generateGrokLocalImage(state: SNSGodState, prompt: string, character?: SNSGodCharacter, options?: { referenceImage?: string; kind?: 'profile' | 'cover' | 'general' }): Promise<string> {
   const config = state.config.imageGeneration || {};
   const baseUrl = normalizeGrokBaseUrl(config.grokBaseUrl);
@@ -726,11 +789,11 @@ async function generateGrokLocalImage(state: SNSGodState, prompt: string, charac
   const resolution = String(config.grokResolution || config.quality || '1k').includes('1k') ? '1k' : String(config.grokResolution || '1k');
   const aspectRatio = String(config.grokAspectRatio || 'auto');
   const referenceImage = options?.referenceImage || '';
-  if (referenceImage.startsWith('data:')) {
+  if (/^(data:|file:|content:|asset:)/i.test(referenceImage)) {
     const form = new FormData();
     form.append('prompt', finalPrompt);
     form.append('resolution', resolution);
-    await appendDataUriImage(form, 'image', referenceImage, 'reference.png');
+    await appendReferenceImage(form, 'image', referenceImage);
     const response = await fetch(`${baseUrl}/api/i2i`, { method: 'POST', body: form });
     const payload = await response.json();
     if (!response.ok || payload?.ok === false) throw new Error(payload?.error?.message || `Grok i2i ${response.status}`);

@@ -10,6 +10,7 @@ import { SNSGodCharacter, SNSGodMessage, SNSGodState, Sticker } from '../types';
 import { markRoomRead } from '../logic/notifications';
 import { beginChatJob, endChatJob, isCurrentChatJob, tryLockGeneratingRoom } from '../logic/chatJobs';
 import { isRenderableMediaUri } from '../logic/media';
+import { characterReferenceImageForPrompt } from '../logic/imageReference';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -49,8 +50,24 @@ function markUserMessagesRead(state: SNSGodState, roomId: string) {
   };
 }
 
+function appendGroupMessage(state: SNSGodState, roomId: string, message: SNSGodMessage) {
+  return {
+    ...state,
+    messages: {
+      ...state.messages,
+      [roomId]: [...(state.messages[roomId] || []), message].slice(-MAX_GROUP_ROOM_MESSAGES)
+    },
+    groupRooms: (state.groupRooms || []).map(item => item.id === roomId ? { ...item, lastActivity: message.createdAt } : item)
+  };
+}
+
 function findGroup(state: SNSGodState, roomId: string) {
   return (state.groupRooms || []).find(room => room.id === roomId);
+}
+
+function groupParticipants(state: SNSGodState, roomId: string) {
+  const participantIds = Array.isArray(findGroup(state, roomId)?.participantIds) ? findGroup(state, roomId)?.participantIds || [] : [];
+  return state.characters.filter(character => participantIds.includes(character.id));
 }
 
 function participantNames(participants: SNSGodCharacter[]) {
@@ -91,7 +108,7 @@ function buildGroupPrompt(state: SNSGodState, roomId: string, participants: SNSG
   ];
 }
 
-function chooseFallbackSpeaker(participants: SNSGodCharacter[], messages: SNSGodMessage[]): SNSGodCharacter {
+function chooseFallbackSpeaker(participants: SNSGodCharacter[], messages: SNSGodMessage[]): SNSGodCharacter | undefined {
   const lastCharacterId = [...messages].reverse().find(message => message.role === 'character')?.characterId;
   const candidates = participants.filter(character => character.id !== lastCharacterId);
   const pool = candidates.length ? candidates : participants;
@@ -109,11 +126,12 @@ function resolveGroupSpeaker(participants: SNSGodCharacter[], item: NonNullable<
   return participants.find(character => character.name === name || character.handle === name || character.id === name);
 }
 
-export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onOpenSettings }: {
+export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurrent, onOpenSettings }: {
   state: SNSGodState;
   roomId: string;
   onBack: () => void;
   onChange: (next: SNSGodState) => Promise<void> | void;
+  onCommitCurrent?: (patch: (current: SNSGodState) => SNSGodState) => Promise<SNSGodState | void> | SNSGodState | void;
   onOpenSettings: (roomId: string) => void;
 }) {
   const room = findGroup(state, roomId);
@@ -153,11 +171,23 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onOpenSet
     await onChange(next);
   }
 
+  async function commitCurrent(patch: (current: SNSGodState) => SNSGodState) {
+    const localNext = patch(stateRef.current);
+    stateRef.current = localNext;
+    if (onCommitCurrent) {
+      const committed = await onCommitCurrent(current => patch(current));
+      if (committed) stateRef.current = committed;
+    } else {
+      await onChange(localNext);
+    }
+    return stateRef.current;
+  }
+
   async function markReadLater(targetRoomId: string, readers: SNSGodCharacter[]) {
     const firstReader = readers[0];
     if (!firstReader) return;
     await sleep(characterDelayMs(firstReader));
-    await commit(markUserMessagesRead(stateRef.current, targetRoomId));
+    await commitCurrent(current => markUserMessagesRead(current, targetRoomId));
   }
 
   async function send() {
@@ -167,80 +197,68 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onOpenSet
     setSending(true);
     const now = Date.now();
     const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content, createdAt: now };
-    let next: SNSGodState = {
-      ...stateRef.current,
-      messages: {
-        ...stateRef.current.messages,
-        [roomId]: [...(stateRef.current.messages[roomId] || []), userMessage].slice(-MAX_GROUP_ROOM_MESSAGES)
-      },
-      groupRooms: (stateRef.current.groupRooms || []).map(item => item.id === roomId ? { ...item, lastActivity: now } : item),
-      unreadCounts: { ...stateRef.current.unreadCounts, [roomId]: 0 }
-    };
-    await commit(next);
+    await commitCurrent(current => ({
+      ...appendGroupMessage(current, roomId, userMessage),
+      unreadCounts: { ...current.unreadCounts, [roomId]: 0 }
+    }));
     const jobId = beginChatJob(roomId);
     try {
-      const firstSpeaker = chooseFallbackSpeaker(participants, next.messages[roomId] || []);
+      const firstSpeaker = chooseFallbackSpeaker(participants, stateRef.current.messages[roomId] || []);
       if (firstSpeaker) {
         setTypingCharacters([firstSpeaker]);
         await sleep(characterDelayMs(firstSpeaker));
         if (!isCurrentChatJob(roomId, jobId)) return;
-        next = markUserMessagesRead(stateRef.current, roomId);
-        await commit(next);
+        await commitCurrent(current => markUserMessagesRead(current, roomId));
       }
       if (!tryLockGeneratingRoom(roomId, jobId)) return;
-      const prompt = buildGroupPrompt(next, roomId, participants, content);
-      const { text: rawText, keyIndex } = await callLLMText(next, prompt);
+      const promptState = stateRef.current;
+      const promptParticipants = groupParticipants(promptState, roomId);
+      const prompt = buildGroupPrompt(promptState, roomId, promptParticipants, content);
+      const { text: rawText, keyIndex } = await callLLMText(promptState, prompt);
       if (!isCurrentChatJob(roomId, jobId)) return;
-      const profile = next.config.apiProfiles[next.config.apiType] || {};
-      next = {
-        ...next,
-        config: { ...next.config, apiProfiles: { ...next.config.apiProfiles, [next.config.apiType]: { ...profile, apiKeyIndex: keyIndex } } }
-      };
+      await commitCurrent(current => {
+        const profile = current.config.apiProfiles[current.config.apiType] || {};
+        return {
+          ...current,
+          config: { ...current.config, apiProfiles: { ...current.config.apiProfiles, [current.config.apiType]: { ...profile, apiKeyIndex: keyIndex } } }
+        };
+      });
       const parsed = parseJsonObject<GroupReplyPayload>(rawText);
       const replyItems = (parsed?.messages || []).slice(0, 4).filter(item => String(item.content || '').trim());
-      const normalizedItems = replyItems.length ? replyItems : [{
-        characterId: chooseFallbackSpeaker(participants, next.messages[roomId] || []).id,
+      const fallbackSpeaker = chooseFallbackSpeaker(groupParticipants(stateRef.current, roomId), stateRef.current.messages[roomId] || []) || chooseFallbackSpeaker(participants, stateRef.current.messages[roomId] || []);
+      const normalizedItems = replyItems.length ? replyItems : fallbackSpeaker ? [{
+        characterId: fallbackSpeaker.id,
         content: rawText.trim() && !rawText.trim().startsWith('{') ? rawText.trim() : '응.'
-      }];
+      }] : [];
       let deliveredCount = 0;
       for (const item of normalizedItems) {
-        const speaker = resolveGroupSpeaker(participants, item) || (deliveredCount === 0 ? chooseFallbackSpeaker(participants, next.messages[roomId] || []) : undefined);
+        const latestParticipants = groupParticipants(stateRef.current, roomId);
+        const speaker = resolveGroupSpeaker(latestParticipants, item) || (deliveredCount === 0 ? chooseFallbackSpeaker(latestParticipants, stateRef.current.messages[roomId] || []) : undefined);
         if (!speaker) continue;
         setTypingCharacters(prev => Array.from(new Map([...prev, speaker].map(value => [value.id, value])).values()));
         await sleep(bubbleDelayMs(speaker, item.delay));
         if (!isCurrentChatJob(roomId, jobId)) return;
         let mediaData = '';
-        if (item.imagePrompt && next.config.imageGeneration?.enabled !== false) {
+        const imageState = stateRef.current;
+        if (item.imagePrompt && imageState.config.imageGeneration?.enabled !== false) {
           try {
-            mediaData = await generateImageDataUri(next, item.imagePrompt, speaker);
+            mediaData = await generateImageDataUri(imageState, item.imagePrompt, speaker, {
+              referenceImage: characterReferenceImageForPrompt(speaker, item.imagePrompt),
+              kind: 'general'
+            });
           } catch (error) {
             item.imageCaption = `${item.imageCaption || ''}\n이미지 생성 실패: ${error instanceof Error ? error.message : String(error)}`.trim();
           }
         }
         const characterMessage: SNSGodMessage = { id: makeId('msg'), role: 'character', characterId: speaker.id, content: String(item.content || '').trim(), createdAt: Date.now(), sticker: item.sticker, imagePrompt: item.imagePrompt, imageCaption: item.imageCaption, mediaData: mediaData || undefined, mediaType: mediaData ? 'image' : undefined };
-        next = {
-          ...next,
-          messages: {
-            ...next.messages,
-            [roomId]: [...(next.messages[roomId] || []), characterMessage].slice(-MAX_GROUP_ROOM_MESSAGES)
-          },
-          groupRooms: (next.groupRooms || []).map(item => item.id === roomId ? { ...item, lastActivity: Date.now() } : item)
-        };
+        await commitCurrent(current => appendGroupMessage(current, roomId, characterMessage));
         deliveredCount += 1;
         setTypingCharacters(prev => prev.filter(value => value.id !== speaker.id));
       }
-      await commit(next);
     } catch (error) {
       setTypingCharacters([]);
       const systemMessage: SNSGodMessage = { id: makeId('msg'), role: 'system', content: `그룹 답장 실패: ${error instanceof Error ? error.message : String(error)}`, createdAt: Date.now(), failed: true };
-      const failed: SNSGodState = {
-        ...stateRef.current,
-        messages: {
-          ...stateRef.current.messages,
-          [roomId]: [...(stateRef.current.messages[roomId] || []), systemMessage].slice(-MAX_GROUP_ROOM_MESSAGES)
-        }
-      };
-      await commit(failed);
+      await commitCurrent(current => appendGroupMessage(current, roomId, systemMessage));
       Alert.alert('그룹 답장 실패', error instanceof Error ? error.message : String(error));
     } finally {
       endChatJob(roomId, jobId);
@@ -254,16 +272,10 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onOpenSet
     setShowStickers(false);
     const now = Date.now();
     const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content: '', createdAt: now, sticker: sticker.id };
-    const next: SNSGodState = {
-      ...stateRef.current,
-      messages: {
-        ...stateRef.current.messages,
-        [roomId]: [...(stateRef.current.messages[roomId] || []), userMessage].slice(-MAX_GROUP_ROOM_MESSAGES)
-      },
-      groupRooms: (stateRef.current.groupRooms || []).map(item => item.id === roomId ? { ...item, lastActivity: now } : item),
-      unreadCounts: { ...stateRef.current.unreadCounts, [roomId]: 0 }
-    };
-    await commit(next);
+    await commitCurrent(current => ({
+      ...appendGroupMessage(current, roomId, userMessage),
+      unreadCounts: { ...current.unreadCounts, [roomId]: 0 }
+    }));
     void markReadLater(roomId, participants);
   }
 

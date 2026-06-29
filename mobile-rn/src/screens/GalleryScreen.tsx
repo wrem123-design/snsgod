@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme';
 import { SNSGodState } from '../types';
 import { isRenderableMediaUri } from '../logic/media';
@@ -8,8 +8,10 @@ type GalleryItem = {
   id: string;
   title: string;
   subtitle: string;
-  uri?: string;
-  prompt?: string;
+  uri: string;
+  prompt: string;
+  createdAt: number;
+  source: string;
 };
 
 function imageUri(value: unknown): string | undefined {
@@ -19,38 +21,54 @@ function imageUri(value: unknown): string | undefined {
 function collectGalleryItems(state: SNSGodState): GalleryItem[] {
   const items: GalleryItem[] = [];
   for (const character of state.characters) {
-    const profile = imageUri(character.avatar || character.profileImage);
-    const cover = imageUri(character.coverImage);
-    if (profile) items.push({ id: `${character.id}:profile`, title: character.name, subtitle: '프로필/목록 사진', uri: profile });
-    if (cover) items.push({ id: `${character.id}:cover`, title: character.name, subtitle: '배경 사진', uri: cover });
+    for (const history of character.profileImageHistory || []) {
+      const uri = imageUri(history.image);
+      const prompt = String(history.prompt || '').trim();
+      if (!uri || !prompt) continue;
+      items.push({
+        id: `profile:${character.id}:${history.id}`,
+        title: character.name,
+        subtitle: `${history.kind === 'cover' ? '커버' : '프로필'} · ${new Date(history.createdAt).toLocaleString()}`,
+        uri,
+        prompt,
+        createdAt: Number(history.createdAt || 0),
+        source: history.kind === 'cover' ? '프로필 커버 AI 생성' : '프로필 사진 AI 생성'
+      });
+    }
   }
   for (const post of state.snsPosts || []) {
     const character = state.characters.find(item => item.id === post.characterId);
     const uri = imageUri(post.image);
+    const prompt = String(post.imagePrompt || '').trim();
+    if (!uri || !prompt) continue;
     items.push({
       id: `sns:${post.id}`,
       title: character?.name || 'SNS',
       subtitle: `${post.platform} · ${new Date(post.createdAt).toLocaleString()}`,
       uri,
-      prompt: uri ? undefined : post.content
+      prompt,
+      createdAt: Number(post.createdAt || 0),
+      source: post.platform === 'instagram' ? 'Instagram AI 이미지' : 'X AI 이미지'
     });
   }
   for (const [roomId, messages] of Object.entries(state.messages || {})) {
     for (const message of messages) {
       const uri = imageUri(message.mediaData);
-      if (uri || message.imagePrompt) {
-        const character = state.characters.find(item => item.id === message.characterId);
-        items.push({
-          id: `msg:${roomId}:${message.id}`,
-          title: character?.name || '채팅 이미지',
-          subtitle: new Date(message.createdAt).toLocaleString(),
-          uri,
-          prompt: message.imagePrompt || message.imageCaption
-        });
-      }
+      const prompt = String(message.imagePrompt || '').trim();
+      if (!uri || !prompt || message.role !== 'character') continue;
+      const character = state.characters.find(item => item.id === message.characterId);
+      items.push({
+        id: `msg:${roomId}:${message.id}`,
+        title: character?.name || '채팅 이미지',
+        subtitle: new Date(message.createdAt).toLocaleString(),
+        uri,
+        prompt,
+        createdAt: Number(message.createdAt || 0),
+        source: '채팅 AI 이미지'
+      });
     }
   }
-  return items.sort((a, b) => b.id.localeCompare(a.id));
+  return items.sort((a, b) => b.createdAt - a.createdAt);
 }
 
 export function GalleryScreen({ state, onBack }: {
@@ -63,9 +81,18 @@ export function GalleryScreen({ state, onBack }: {
     <View style={styles.screen}>
       {selected ? (
         <View style={styles.viewer}>
-          <Pressable onPress={() => setSelected(null)} style={styles.viewerClose}><Text style={styles.viewerCloseText}>닫기</Text></Pressable>
-          {selected.uri ? <Image source={{ uri: selected.uri }} style={styles.viewerImage} resizeMode="contain" /> : <Text style={styles.viewerPrompt}>{selected.prompt}</Text>}
-          <Text style={styles.viewerTitle}>{selected.title} · {selected.subtitle}</Text>
+          <View style={styles.viewerHeader}>
+            <View style={styles.viewerTitleBlock}>
+              <Text style={styles.viewerTitle}>{selected.title}</Text>
+              <Text style={styles.viewerSubtitle}>{selected.source} · {selected.subtitle}</Text>
+            </View>
+            <Pressable onPress={() => setSelected(null)} style={styles.viewerClose}><Text style={styles.viewerCloseText}>닫기</Text></Pressable>
+          </View>
+          <Image source={{ uri: selected.uri }} style={styles.viewerImage} resizeMode="contain" />
+          <ScrollView style={styles.promptPanel} contentContainerStyle={styles.promptPanelContent}>
+            <Text style={styles.promptLabel}>프롬프트</Text>
+            <Text style={styles.viewerPrompt}>{selected.prompt}</Text>
+          </ScrollView>
         </View>
       ) : null}
       <View style={styles.header}>
@@ -78,21 +105,17 @@ export function GalleryScreen({ state, onBack }: {
       <FlatList
         data={items}
         keyExtractor={item => item.id}
-        numColumns={2}
+        numColumns={3}
         contentContainerStyle={styles.grid}
         columnWrapperStyle={styles.row}
-        ListEmptyComponent={<Text style={styles.empty}>아직 표시할 이미지가 없습니다.</Text>}
+        ListEmptyComponent={<Text style={styles.empty}>아직 AI가 생성한 이미지가 없습니다.</Text>}
         renderItem={({ item }) => (
-          <Pressable onPress={() => setSelected(item)} style={styles.card}>
-            <View style={styles.imageBox}>
-              {item.uri ? (
-                <Image source={{ uri: item.uri }} style={StyleSheet.absoluteFill} />
-              ) : (
-                <Text style={styles.promptText} numberOfLines={6}>{item.prompt || '이미지 프롬프트만 있습니다.'}</Text>
-              )}
+          <Pressable onPress={() => setSelected(item)} style={styles.albumTile}>
+            <Image source={{ uri: item.uri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+            <View style={styles.tileShade}>
+              <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
+              <Text style={styles.itemSubtitle} numberOfLines={1}>{item.source}</Text>
             </View>
-            <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
-            <Text style={styles.itemSubtitle} numberOfLines={1}>{item.subtitle}</Text>
           </Pressable>
         )}
       />
@@ -108,18 +131,23 @@ const styles = StyleSheet.create({
   titleBlock: { flex: 1 },
   title: { fontSize: 21, color: colors.text, fontWeight: '900' },
   subtitle: { marginTop: 2, color: colors.sub, fontWeight: '800' },
-  grid: { padding: 12, paddingBottom: 26 },
-  row: { gap: 10 },
-  card: { flex: 1, marginBottom: 12, padding: 8, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panel },
-  imageBox: { aspectRatio: 1, borderRadius: 7, overflow: 'hidden', backgroundColor: '#eee8dc', alignItems: 'center', justifyContent: 'center', padding: 10 },
-  promptText: { color: colors.sub, fontSize: 12, lineHeight: 17 },
-  itemTitle: { marginTop: 8, color: colors.text, fontWeight: '900' },
-  itemSubtitle: { marginTop: 2, color: colors.sub, fontSize: 12, fontWeight: '700' },
+  grid: { padding: 10, paddingBottom: 26, gap: 4 },
+  row: { gap: 4 },
+  albumTile: { flex: 1, aspectRatio: 1, marginBottom: 4, borderRadius: 4, overflow: 'hidden', backgroundColor: '#eee8dc' },
+  tileShade: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 6, paddingVertical: 5, backgroundColor: 'rgba(0,0,0,0.48)' },
+  itemTitle: { color: '#fff', fontSize: 11, fontWeight: '900' },
+  itemSubtitle: { marginTop: 1, color: 'rgba(255,255,255,0.82)', fontSize: 9, fontWeight: '800' },
   empty: { marginTop: 80, textAlign: 'center', color: colors.sub, fontWeight: '800' },
-  viewer: { ...StyleSheet.absoluteFillObject, zIndex: 10, backgroundColor: 'rgba(0,0,0,0.92)', alignItems: 'center', justifyContent: 'center', padding: 18 },
-  viewerClose: { position: 'absolute', top: 18, right: 18, zIndex: 11, minHeight: 40, paddingHorizontal: 16, borderRadius: 20, backgroundColor: '#fff' },
-  viewerCloseText: { lineHeight: 40, color: '#111', fontWeight: '900' },
-  viewerImage: { width: '100%', height: '76%' },
-  viewerPrompt: { color: '#fff', fontSize: 16, lineHeight: 24, textAlign: 'center' },
-  viewerTitle: { marginTop: 14, color: '#fff', fontWeight: '900', textAlign: 'center' }
+  viewer: { ...StyleSheet.absoluteFillObject, zIndex: 10, backgroundColor: '#101214', padding: 12 },
+  viewerHeader: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  viewerTitleBlock: { flex: 1 },
+  viewerClose: { minHeight: 38, paddingHorizontal: 14, borderRadius: 19, backgroundColor: '#fff' },
+  viewerCloseText: { lineHeight: 38, color: '#111', fontWeight: '900' },
+  viewerImage: { width: '100%', flex: 1, backgroundColor: '#050607', borderRadius: 6 },
+  promptPanel: { marginTop: 10, maxHeight: 150, borderRadius: 8, backgroundColor: '#f7f2e9' },
+  promptPanelContent: { padding: 10 },
+  promptLabel: { color: colors.sub, fontSize: 11, fontWeight: '900' },
+  viewerPrompt: { marginTop: 5, color: colors.text, fontSize: 13, lineHeight: 19, fontWeight: '700' },
+  viewerTitle: { color: '#fff', fontSize: 17, fontWeight: '900' },
+  viewerSubtitle: { marginTop: 2, color: 'rgba(255,255,255,0.72)', fontSize: 11, fontWeight: '800' }
 });

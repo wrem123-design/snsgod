@@ -272,6 +272,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
       {activeDmId ? (
         activePostDm ? (
           <ReadOnlyDmModal
+            platform={platform}
             title={activePostDm.title}
             messages={activePostDm.messages}
             onClose={() => setActiveDmId('')}
@@ -279,6 +280,9 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
         ) : (
           <DmModal
             thread={(state.snsDmThreads || []).find(item => item.id === activeDmId)}
+            character={state.characters.find(character => character.id === (state.snsDmThreads || []).find(item => item.id === activeDmId)?.characterId)}
+            platform={platform}
+            userName={state.config.userName || '나'}
             value={dmText}
             onChangeText={setDmText}
             onClose={() => setActiveDmId('')}
@@ -388,7 +392,11 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
             data={dmThreads.slice(0, 8)}
             keyExtractor={item => item.id}
             contentContainerStyle={styles.dmList}
-            renderItem={({ item }) => <Pressable onPress={() => setActiveDmId(item.id)}><DmCard thread={item} /></Pressable>}
+            renderItem={({ item }) => (
+              <Pressable onPress={() => setActiveDmId(item.id)}>
+                <DmCard thread={item} platform={platform} character={state.characters.find(character => character.id === item.characterId)} userName={state.config.userName || '나'} />
+              </Pressable>
+            )}
           />
         </View>
       ) : null}
@@ -432,19 +440,45 @@ function CharacterChip({ character, active, platform, onPress }: { character: SN
   );
 }
 
-function DmCard({ thread }: { thread: SNSDmThread }) {
+type DmLikeMessage = { id?: string; from: string; author?: string; body: string; createdAt?: number };
+
+function platformName(platform: SNSPost['platform']) {
+  return platform === 'instagram' ? 'Instagram' : 'X';
+}
+
+function dmSenderName(message: DmLikeMessage, character?: SNSGodCharacter, userName = '나') {
+  if (message.from === 'user') return userName;
+  if (message.from === 'character') return character?.name || message.author || 'Character';
+  if (message.from === 'thirdParty') return message.author || '제3자';
+  return message.author || message.from || '상대';
+}
+
+function isUserDmMessage(message: DmLikeMessage, userName = '나') {
+  return message.from === 'user' || message.from === userName || message.author === userName;
+}
+
+function DmCard({ thread, platform, character, userName }: { thread: SNSDmThread; platform: SNSPost['platform']; character?: SNSGodCharacter; userName: string }) {
   const last = thread.messages[thread.messages.length - 1];
+  const sender = last ? dmSenderName(last, character, userName) : '새 대화';
+  const target = character?.name || thread.title;
   return (
     <View style={styles.dmCard}>
-      <Text style={styles.dmCardTitle} numberOfLines={1}>{thread.title}</Text>
-      <Text style={styles.dmCardBody} numberOfLines={2}>{last?.body || '새 SNS DM'}</Text>
-      {thread.unread ? <Text style={styles.dmBadge}>{thread.unread}</Text> : null}
+      <View style={styles.dmCardTop}>
+        <Text style={styles.dmPlatformPill}>{platformName(platform)}</Text>
+        {thread.unread ? <Text style={styles.dmBadge}>{thread.unread}</Text> : null}
+      </View>
+      <Text style={styles.dmCardTitle} numberOfLines={1}>{target}</Text>
+      <Text style={styles.dmCardMeta} numberOfLines={1}>대상: {thread.title}</Text>
+      <Text style={styles.dmCardBody} numberOfLines={2}>{sender}: {last?.body || '새 SNS DM'}</Text>
     </View>
   );
 }
 
-function DmModal({ thread, value, onChangeText, onClose, onSend, onAiSend, loading }: {
+function DmModal({ thread, character, platform, userName, value, onChangeText, onClose, onSend, onAiSend, loading }: {
   thread?: SNSDmThread;
+  character?: SNSGodCharacter;
+  platform: SNSPost['platform'];
+  userName: string;
   value: string;
   onChangeText: (value: string) => void;
   onClose: () => void;
@@ -455,24 +489,27 @@ function DmModal({ thread, value, onChangeText, onClose, onSend, onAiSend, loadi
   if (!thread) return null;
   return (
     <View style={styles.modal}>
-      <View style={styles.dmPanel}>
-        <View style={styles.dmPanelHeader}>
-          <Text style={styles.dmPanelTitle}>{thread.title}</Text>
+      <View style={[styles.dmPanel, platform === 'twitter' && styles.xDmPanel]}>
+        <View style={[styles.dmPanelHeader, platform === 'twitter' && styles.xDmPanelHeader]}>
+          <View style={styles.dmHeaderIdentity}>
+            <Avatar character={character} size={38} />
+            <View style={styles.dmHeaderText}>
+              <Text style={[styles.dmPanelTitle, platform === 'twitter' && styles.xDmPanelTitle]}>{character?.name || thread.title}</Text>
+              <Text style={[styles.dmPanelSub, platform === 'twitter' && styles.xDmPanelSub]}>{platformName(platform)} DM · 받는 사람 {character?.name || '상대'} · 보낸 사람 {userName}</Text>
+            </View>
+          </View>
           <Pressable onPress={onClose} style={styles.dmPanelClose}><Text style={styles.dmPanelCloseText}>닫기</Text></Pressable>
         </View>
         <FlatList
           data={thread.messages}
           keyExtractor={item => item.id}
-          contentContainerStyle={styles.dmMessages}
+          contentContainerStyle={[styles.dmMessages, platform === 'twitter' && styles.xDmMessages]}
           renderItem={({ item }) => (
-            <View style={[styles.dmBubble, item.from === 'user' && styles.dmBubbleMine]}>
-              <Text style={styles.dmSpeaker}>{item.author || item.from}</Text>
-              <Text style={styles.dmBubbleText}>{item.body}</Text>
-            </View>
+            <DmMessageBubble message={item} character={character} userName={userName} platform={platform} />
           )}
         />
-        <View style={styles.dmComposer}>
-          <TextInput value={value} onChangeText={onChangeText} style={styles.dmInput} placeholder="SNS DM 입력" placeholderTextColor="#aaa" />
+        <View style={[styles.dmComposer, platform === 'twitter' && styles.xDmComposer]}>
+          <TextInput value={value} onChangeText={onChangeText} style={[styles.dmInput, platform === 'twitter' && styles.xDmInput]} placeholder={`${character?.name || '상대'}에게 DM`} placeholderTextColor="#aaa" />
           <Pressable onPress={onSend} style={styles.dmSend}><Text style={styles.dmSendText}>보내기</Text></Pressable>
           <Pressable onPress={onAiSend} disabled={loading} style={[styles.dmSend, styles.dmAiSend, loading && styles.disabled]}><Text style={styles.dmAiText}>저장만</Text></Pressable>
         </View>
@@ -481,27 +518,41 @@ function DmModal({ thread, value, onChangeText, onClose, onSend, onAiSend, loadi
   );
 }
 
-function ReadOnlyDmModal({ title, messages, onClose }: {
+function DmMessageBubble({ message, character, userName, platform }: { message: DmLikeMessage; character?: SNSGodCharacter; userName: string; platform: SNSPost['platform'] }) {
+  const mine = isUserDmMessage(message, userName);
+  return (
+    <View style={[styles.dmMessageRow, mine && styles.dmMessageRowMine]}>
+      {!mine ? <View style={styles.dmAvatarMini}><Text style={styles.dmAvatarMiniText}>{dmSenderName(message, character, userName).slice(0, 1)}</Text></View> : null}
+      <View style={[styles.dmBubble, mine ? styles.dmBubbleMine : styles.dmBubbleOther, platform === 'twitter' && !mine && styles.xDmBubbleOther, platform === 'twitter' && mine && styles.xDmBubbleMine]}>
+        <Text style={[styles.dmSpeaker, mine && styles.dmSpeakerMine, platform === 'twitter' && !mine && styles.xDmSpeaker]}>{mine ? `${userName} · 보낸 메시지` : `${dmSenderName(message, character, userName)} · 받은 메시지`}</Text>
+        <Text style={[styles.dmBubbleText, platform === 'twitter' && !mine && styles.xDmBubbleText, platform === 'twitter' && mine && styles.xDmBubbleTextMine]}>{message.body}</Text>
+      </View>
+    </View>
+  );
+}
+
+function ReadOnlyDmModal({ platform, title, messages, onClose }: {
+  platform: SNSPost['platform'];
   title: string;
   messages: { id?: string; from: string; body: string; createdAt?: number }[];
   onClose: () => void;
 }) {
   return (
     <View style={styles.modal}>
-      <View style={styles.dmPanel}>
-        <View style={styles.dmPanelHeader}>
-          <Text style={styles.dmPanelTitle}>{title}</Text>
+      <View style={[styles.dmPanel, platform === 'twitter' && styles.xDmPanel]}>
+        <View style={[styles.dmPanelHeader, platform === 'twitter' && styles.xDmPanelHeader]}>
+          <View style={styles.dmHeaderText}>
+            <Text style={[styles.dmPanelTitle, platform === 'twitter' && styles.xDmPanelTitle]}>{title}</Text>
+            <Text style={[styles.dmPanelSub, platform === 'twitter' && styles.xDmPanelSub]}>{platformName(platform)} 읽기 전용 DM</Text>
+          </View>
           <Pressable onPress={onClose} style={styles.dmPanelClose}><Text style={styles.dmPanelCloseText}>닫기</Text></Pressable>
         </View>
         <FlatList
           data={messages}
           keyExtractor={(item, index) => String(item.id || `${item.createdAt || 0}_${index}`)}
-          contentContainerStyle={styles.dmMessages}
+          contentContainerStyle={[styles.dmMessages, platform === 'twitter' && styles.xDmMessages]}
           renderItem={({ item }) => (
-            <View style={styles.dmBubble}>
-              <Text style={styles.dmSpeaker}>{item.from}</Text>
-              <Text style={styles.dmBubbleText}>{item.body}</Text>
-            </View>
+            <DmMessageBubble message={item} userName="나" platform={platform} />
           )}
         />
       </View>
@@ -539,14 +590,16 @@ function SnsDmHubModal({ post, character, userThread, thirdPartyDms, onClose, on
         <ScrollView contentContainerStyle={styles.dmHubList}>
           {userThread ? (
             <Pressable onPress={() => onOpenUserThread(userThread.id)} style={styles.dmHubCard}>
+              <Text style={styles.dmHubCardKicker}>내 DM</Text>
               <Text style={styles.dmHubCardTitle}>나와 {character?.name || '캐릭터'}의 DM</Text>
-              <Text style={styles.dmHubCardBody} numberOfLines={2}>{lastUserDm?.body || '아직 메시지가 없습니다.'}</Text>
+              <Text style={styles.dmHubCardBody} numberOfLines={2}>{lastUserDm ? `${dmSenderName(lastUserDm, character, '나')}: ${lastUserDm.body}` : '아직 메시지가 없습니다.'}</Text>
             </Pressable>
           ) : null}
           {thirdPartyDms.map(dm => (
             <Pressable key={dm.id} onPress={() => onOpenThirdParty(dm.id)} style={styles.dmHubCard}>
+              <Text style={styles.dmHubCardKicker}>제3자 DM</Text>
               <Text style={styles.dmHubCardTitle}>{dm.title}</Text>
-              <Text style={styles.dmHubCardBody} numberOfLines={2}>{dm.messages[dm.messages.length - 1]?.body || '읽기 전용 DM'}</Text>
+              <Text style={styles.dmHubCardBody} numberOfLines={2}>{dm.messages[dm.messages.length - 1] ? `${dm.messages[dm.messages.length - 1]?.from}: ${dm.messages[dm.messages.length - 1]?.body}` : '읽기 전용 DM'}</Text>
             </Pressable>
           ))}
           {!thirdPartyDms.length ? <Text style={styles.dmHubEmpty}>다른 DM은 아직 없습니다.</Text> : null}
@@ -688,9 +741,12 @@ const styles = StyleSheet.create({
   dmStrip: { paddingVertical: 10, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border, backgroundColor: '#fffefa' },
   dmTitle: { paddingHorizontal: 12, color: colors.text, fontWeight: '900', marginBottom: 8 },
   dmList: { paddingHorizontal: 12, gap: 8 },
-  dmCard: { width: 180, minHeight: 72, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fff', position: 'relative' },
-  dmCardTitle: { color: colors.text, fontWeight: '900' },
-  dmCardBody: { marginTop: 5, color: colors.sub, lineHeight: 18 },
+  dmCard: { width: 224, minHeight: 104, padding: 11, borderRadius: 12, borderWidth: 1, borderColor: '#dedede', backgroundColor: '#fff', position: 'relative' },
+  dmCardTop: { minHeight: 22, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  dmPlatformPill: { alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, overflow: 'hidden', backgroundColor: '#f1f5ff', color: '#31577d', fontSize: 10, fontWeight: '900' },
+  dmCardTitle: { marginTop: 7, color: colors.text, fontSize: 15, fontWeight: '900' },
+  dmCardMeta: { marginTop: 2, color: '#7b8190', fontSize: 11, fontWeight: '800' },
+  dmCardBody: { marginTop: 7, color: colors.sub, lineHeight: 18, fontWeight: '700' },
   dmBadge: { position: 'absolute', top: 8, right: 8, minWidth: 20, height: 20, borderRadius: 10, overflow: 'hidden', textAlign: 'center', lineHeight: 20, backgroundColor: colors.danger, color: '#fff', fontWeight: '900' },
   postCard: { borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fff', overflow: 'hidden' },
   instagramCard: { borderRadius: 0, borderColor: '#dbdbdb', backgroundColor: '#ffffff' },
@@ -736,29 +792,51 @@ const styles = StyleSheet.create({
   commentButton: { minWidth: 52, minHeight: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
   commentButtonText: { color: '#241a00', fontWeight: '900' },
   modal: { ...StyleSheet.absoluteFillObject, zIndex: 20, backgroundColor: 'rgba(0,0,0,0.38)', justifyContent: 'flex-end' },
-  dmPanel: { maxHeight: '82%', backgroundColor: '#f7f2e9', borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: 'hidden' },
-  dmPanelHeader: { minHeight: 58, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  dmPanel: { maxHeight: '88%', backgroundColor: '#ffffff', borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: 'hidden' },
+  xDmPanel: { backgroundColor: '#000000' },
+  dmPanelHeader: { minHeight: 66, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#dbdbdb' },
+  xDmPanelHeader: { borderBottomColor: '#2f3336' },
+  dmHeaderIdentity: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  dmHeaderText: { flex: 1, minWidth: 0 },
   dmHubHeaderLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 9 },
   dmHubSub: { marginTop: 2, color: colors.sub, fontSize: 11, fontWeight: '800' },
   dmPanelTitle: { color: colors.text, fontSize: 17, fontWeight: '900' },
+  xDmPanelTitle: { color: '#e7e9ea' },
+  dmPanelSub: { marginTop: 2, color: '#737373', fontSize: 11, fontWeight: '800' },
+  xDmPanelSub: { color: '#71767b' },
   dmPanelClose: { minHeight: 36, paddingHorizontal: 12, borderRadius: 18, backgroundColor: '#fff' },
   dmPanelCloseText: { lineHeight: 36, color: colors.text, fontWeight: '900' },
-  dmMessages: { padding: 12, gap: 8 },
-  dmBubble: { alignSelf: 'flex-start', maxWidth: '84%', padding: 10, borderRadius: 14, backgroundColor: '#fff' },
-  dmBubbleMine: { alignSelf: 'flex-end', backgroundColor: '#fee56a' },
-  dmSpeaker: { color: colors.sub, fontSize: 11, fontWeight: '900', marginBottom: 3 },
+  dmMessages: { padding: 12, gap: 9, backgroundColor: '#ffffff' },
+  xDmMessages: { backgroundColor: '#000000' },
+  dmMessageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 7 },
+  dmMessageRowMine: { justifyContent: 'flex-end' },
+  dmAvatarMini: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#e9edf5', alignItems: 'center', justifyContent: 'center' },
+  dmAvatarMiniText: { color: '#334155', fontSize: 11, fontWeight: '900' },
+  dmBubble: { maxWidth: '78%', paddingHorizontal: 12, paddingVertical: 9 },
+  dmBubbleOther: { alignSelf: 'flex-start', borderRadius: 18, borderBottomLeftRadius: 5, backgroundColor: '#efefef' },
+  dmBubbleMine: { alignSelf: 'flex-end', borderRadius: 18, borderBottomRightRadius: 5, backgroundColor: '#3797f0' },
+  xDmBubbleOther: { backgroundColor: '#202327' },
+  xDmBubbleMine: { backgroundColor: '#1d9bf0' },
+  dmSpeaker: { color: '#737373', fontSize: 10, fontWeight: '900', marginBottom: 3 },
+  dmSpeakerMine: { color: 'rgba(255,255,255,0.82)' },
+  xDmSpeaker: { color: '#9aa0a6' },
   dmBubbleText: { color: colors.text, fontSize: 15, lineHeight: 21 },
-  dmComposer: { flexDirection: 'row', gap: 8, padding: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
-  dmInput: { flex: 1, minHeight: 42, borderRadius: 18, backgroundColor: '#fff', paddingHorizontal: 12, color: colors.text },
-  dmSend: { minWidth: 58, minHeight: 42, borderRadius: 16, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  xDmBubbleText: { color: '#e7e9ea' },
+  xDmBubbleTextMine: { color: '#ffffff' },
+  dmComposer: { flexDirection: 'row', gap: 8, padding: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#dbdbdb', backgroundColor: '#ffffff' },
+  xDmComposer: { backgroundColor: '#000000', borderTopColor: '#2f3336' },
+  dmInput: { flex: 1, minHeight: 42, borderRadius: 21, backgroundColor: '#f1f1f1', paddingHorizontal: 12, color: colors.text },
+  xDmInput: { backgroundColor: '#202327', color: '#e7e9ea' },
+  dmSend: { minWidth: 58, minHeight: 42, borderRadius: 21, backgroundColor: '#3797f0', alignItems: 'center', justifyContent: 'center' },
   dmAiSend: { backgroundColor: '#111' },
-  dmSendText: { color: '#241a00', fontWeight: '900' },
+  dmSendText: { color: '#ffffff', fontWeight: '900' },
   dmAiText: { color: '#fff', fontWeight: '900' },
   dmHubPostPreview: { margin: 12, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa' },
   dmHubPostLabel: { color: colors.sub, fontSize: 11, fontWeight: '900' },
   dmHubPostText: { marginTop: 5, color: colors.text, lineHeight: 20, fontWeight: '700' },
   dmHubList: { paddingHorizontal: 12, paddingBottom: 18, gap: 8 },
   dmHubCard: { minHeight: 72, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fff' },
+  dmHubCardKicker: { color: '#31577d', fontSize: 10, fontWeight: '900', marginBottom: 5 },
   dmHubCardTitle: { color: colors.text, fontWeight: '900' },
   dmHubCardBody: { marginTop: 5, color: colors.sub, lineHeight: 18 },
   dmHubEmpty: { padding: 12, color: colors.sub, fontWeight: '800', textAlign: 'center' },

@@ -292,6 +292,52 @@ export type NotificationItem = {
   read?: boolean;
 };
 
+export type SumGodConversationItem = {
+  role: 'user' | 'character';
+  text: string;
+  createdAt: number;
+  kind?: 'reveal-comment' | 'talk';
+};
+
+export type SumGodEntry = {
+  id: string;
+  number: number;
+  question: string;
+  unlockedOn: string;
+  createdAt: number;
+  userAnswer: string;
+  characterAnswer: string;
+  completedOn?: string;
+  completedAt?: number;
+  conversation: SumGodConversationItem[];
+  generatingAnswer?: boolean;
+  generatingTalk?: boolean;
+  generatingTalkIndex?: number;
+  userAnswerEditedAt?: number;
+  editingUserAnswer?: boolean;
+  archiveEditing?: boolean;
+  textEditedAt?: number;
+  debugUnlocked?: boolean;
+  cheatUnlocked?: boolean;
+};
+
+export type SumGodArchivedProgress = {
+  id: string;
+  characterId: string;
+  characterName?: string;
+  archivedAt: number;
+  entries: SumGodEntry[];
+};
+
+export type SumGodProgress = {
+  characterId: string;
+  view: 'today' | 'archive';
+  questionOpen: boolean;
+  entries: SumGodEntry[];
+  characterArchives?: SumGodArchivedProgress[];
+  backedUpAt?: number;
+};
+
 export type SNSGodState = {
   schemaVersion?: number;
   config: SNSGodConfig;
@@ -309,6 +355,7 @@ export type SNSGodState = {
   randomChats?: RandomChatRoom[];
   randomCharacters?: SNSGodCharacter[];
   pendingReplies?: Record<string, { jobId: string; startedAt: number; phase?: 'delay' | 'typing' | 'generating' }>;
+  sumGod?: SumGodProgress;
   selectedRoomId?: string;
   __importedAt?: number;
   __savedAt?: number;

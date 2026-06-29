@@ -309,17 +309,17 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
         {activeSection === 'reply' ? (
           <Section title="답장/능동 성향">
             <ChoiceRow label="선톡 성향" value={String(draft.proactiveStyle || 'auto')} options={PROACTIVE_STYLE_OPTIONS} onChange={value => set('proactiveStyle', value)} />
-            <NumberField label="무응답 인내도(0-8)" value={draft.proactivePatience} onChange={value => set('proactivePatience', value)} help="0은 답이 없으면 빨리 멈춤, 8은 오래 기다리거나 여러 번 이어갑니다." />
-            <NumberField label="읽음/답장 최소 지연(초)" value={draft.responseDelayMin} onChange={value => set('responseDelayMin', value)} />
-            <NumberField label="답장 최대 지연(초)" value={draft.responseDelayMax} onChange={value => set('responseDelayMax', value)} help="원본 기준 최대 120초까지 허용합니다." />
-            <NumberField label="연속 메시지 간격 최소(초)" value={draft.messageGapMin} onChange={value => set('messageGapMin', value)} />
-            <NumberField label="연속 메시지 간격 최대(초)" value={draft.messageGapMax} onChange={value => set('messageGapMax', value)} />
-            <NumberField label="확인 속도(1-10)" value={draft.responseTime} onChange={value => set('responseTime', value)} />
-            <NumberField label="생각 깊이(1-10)" value={draft.thinkingTime} onChange={value => set('thinkingTime', value)} />
-            <NumberField label="반응성(1-10)" value={draft.reactivity} onChange={value => set('reactivity', value)} />
-            <NumberField label="말투 강도(1-10)" value={draft.tone} onChange={value => set('tone', value)} />
-            <NumberField label="능동 발화 간격(분)" value={draft.frequencyMinutes} onChange={value => set('frequencyMinutes', value)} help="작을수록 먼저 말을 걸 기회가 자주 옵니다." />
-            <NumberField label="능동 발화 확률(0-100)" value={draft.initiative} onChange={value => set('initiative', value)} />
+            <SliderField label="무응답 인내도(빨리 멈춤 ↔ 오래 기다림)" value={draft.proactivePatience} min={0} max={8} leftLabel="0 빠른 포기" rightLabel="8 오래 기다림" onChange={value => set('proactivePatience', value)} help="답이 없을 때 먼저 말하기를 얼마나 오래 이어갈지 정합니다." />
+            <NumberField label="읽음/답장 최소 지연(빠른 읽음까지 최소 초)" value={draft.responseDelayMin} onChange={value => set('responseDelayMin', value)} />
+            <NumberField label="답장 최대 지연(늦어질 수 있는 최대 초)" value={draft.responseDelayMax} onChange={value => set('responseDelayMax', value)} help="원본 기준 최대 120초까지 허용합니다." />
+            <NumberField label="연속 메시지 간격 최소(연타 최소 초)" value={draft.messageGapMin} onChange={value => set('messageGapMin', value)} />
+            <NumberField label="연속 메시지 간격 최대(연타 최대 초)" value={draft.messageGapMax} onChange={value => set('messageGapMax', value)} />
+            <SliderField label="확인 속도(느림 ↔ 즉각 확인)" value={draft.responseTime} min={1} max={10} leftLabel="1 느림" rightLabel="10 즉각" onChange={value => set('responseTime', value)} />
+            <SliderField label="생각 깊이(즉흥 ↔ 숙고)" value={draft.thinkingTime} min={1} max={10} leftLabel="1 즉흥" rightLabel="10 깊게 생각" onChange={value => set('thinkingTime', value)} />
+            <SliderField label="반응성(무덤덤 ↔ 즉각 반응)" value={draft.reactivity} min={1} max={10} leftLabel="1 무덤덤" rightLabel="10 즉각 반응" onChange={value => set('reactivity', value)} />
+            <SliderField label="말투 강도(담백 ↔ 강한 개성)" value={draft.tone} min={1} max={10} leftLabel="1 담백" rightLabel="10 강함" onChange={value => set('tone', value)} />
+            <NumberField label="능동 발화 간격(먼저 말할 기회 간격/분)" value={draft.frequencyMinutes} onChange={value => set('frequencyMinutes', value)} help="작을수록 먼저 말을 걸 기회가 자주 옵니다." />
+            <SliderField label="능동 발화 확률(소극적 ↔ 자주 선톡)" value={draft.initiative} min={0} max={100} step={5} leftLabel="0 안 함" rightLabel="100 자주" onChange={value => set('initiative', value)} />
           </Section>
         ) : null}
 
@@ -523,6 +523,49 @@ function NumberField({ label, value, onChange, help }: { label: string; value: u
   return <Field label={label} value={String(value ?? '')} onChangeText={text => onChange(Number(text) || 0)} help={help} />;
 }
 
+function SliderField({ label, value, min, max, step = 1, leftLabel, rightLabel, onChange, help }: {
+  label: string;
+  value: unknown;
+  min: number;
+  max: number;
+  step?: number;
+  leftLabel: string;
+  rightLabel: string;
+  onChange: (value: number) => void;
+  help?: string;
+}) {
+  const [trackWidth, setTrackWidth] = useState(1);
+  const numeric = Math.max(min, Math.min(max, Number(value ?? min) || min));
+  const percent = max === min ? 0 : ((numeric - min) / (max - min)) * 100;
+  function updateFromX(x: number) {
+    const ratio = Math.max(0, Math.min(1, x / Math.max(1, trackWidth)));
+    const raw = min + ratio * (max - min);
+    const stepped = Math.round(raw / step) * step;
+    onChange(Math.max(min, Math.min(max, Number(stepped.toFixed(4)))));
+  }
+  return (
+    <View style={styles.field}>
+      <View style={styles.sliderHeader}>
+        <Text style={styles.label}>{label}</Text>
+        <Text style={styles.sliderValue}>{numeric}</Text>
+      </View>
+      <Pressable
+        onLayout={event => setTrackWidth(event.nativeEvent.layout.width)}
+        onPress={event => updateFromX(event.nativeEvent.locationX)}
+        style={styles.sliderTrack}
+      >
+        <View style={[styles.sliderFill, { width: `${percent}%` }]} />
+        <View style={[styles.sliderThumb, { left: `${percent}%` }]} />
+      </Pressable>
+      <View style={styles.sliderScale}>
+        <Text style={[styles.sliderScaleText, styles.sliderScaleLeft]}>{leftLabel}</Text>
+        <Text style={[styles.sliderScaleText, styles.sliderScaleRight]}>{rightLabel}</Text>
+      </View>
+      {help ? <Text style={styles.help}>{help}</Text> : null}
+    </View>
+  );
+}
+
 function ChoiceRow({ label, value, options, onChange, help }: { label: string; value: string; options: string[][]; onChange: (value: string) => void; help?: string }) {
   return (
     <View style={styles.field}>
@@ -632,6 +675,15 @@ const styles = StyleSheet.create({
   subhead: { marginTop: 8, color: colors.text, fontSize: 15, fontWeight: '900' },
   field: { gap: 6 },
   label: { fontSize: 12, color: colors.sub, fontWeight: '900' },
+  sliderHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  sliderValue: { minWidth: 34, textAlign: 'right', color: colors.text, fontWeight: '900', fontSize: 13 },
+  sliderTrack: { height: 30, borderRadius: 15, backgroundColor: '#eee8dc', borderWidth: 1, borderColor: colors.border, justifyContent: 'center', overflow: 'hidden' },
+  sliderFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: colors.accent },
+  sliderThumb: { position: 'absolute', top: 3, width: 22, height: 22, marginLeft: -11, borderRadius: 11, backgroundColor: '#111111', borderWidth: 2, borderColor: '#fffefa' },
+  sliderScale: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  sliderScaleText: { flex: 1, color: colors.sub, fontSize: 11, fontWeight: '800' },
+  sliderScaleLeft: { textAlign: 'left' },
+  sliderScaleRight: { textAlign: 'right' },
   input: { minHeight: 44, borderWidth: 1, borderColor: colors.border, borderRadius: 7, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: '#fffefa', color: colors.text, fontSize: 15 },
   textarea: { minHeight: 116, maxHeight: 220 },
   help: { color: colors.sub, fontSize: 12, lineHeight: 18 },

@@ -3,7 +3,7 @@ import { makeId } from './ids';
 const activeJobs = new Map<string, string>();
 const generatingRooms = new Map<string, string>();
 const jobTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const JOB_TTL_MS = 5 * 60 * 1000;
+const JOB_TTL_MS = 60 * 60 * 1000;
 
 function timerKey(roomId: string, jobId: string) {
   return `${roomId}:${jobId}`;

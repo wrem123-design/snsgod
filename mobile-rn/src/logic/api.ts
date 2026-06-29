@@ -717,12 +717,15 @@ function extractImageBase64(value: unknown): string | undefined {
   return undefined;
 }
 
-function imagePromptFor(config: ImageGenerationConfig, character: SNSGodCharacter | undefined, prompt: string): string {
+function imagePromptFor(config: ImageGenerationConfig, character: SNSGodCharacter | undefined, prompt: string, options: { usesReference?: boolean } = {}): string {
   const prefix = config.promptPrefix || 'Create a realistic in-character phone photo. Natural lighting, casual composition, no text overlay.';
   const profile = character?.prompt ? `Character profile: ${character.prompt}` : '';
   const name = character?.name ? `Character name: ${character.name}` : '';
+  const reference = options.usesReference && character?.name
+    ? `Use the attached reference image as the identity reference for ${character.name}. Preserve the same face, hairstyle, and overall likeness while following the requested scene.`
+    : '';
   const nsfw = config.nsfw ? 'NSFW/private fictional image is allowed when appropriate.' : 'Keep it safe and non-explicit.';
-  return [prefix, name, profile, nsfw, `Requested image: ${prompt}`, config.negativePrompt ? `Avoid: ${config.negativePrompt}` : ''].filter(Boolean).join('\n');
+  return [prefix, name, profile, reference, nsfw, `Requested image: ${prompt}`, config.negativePrompt ? `Avoid: ${config.negativePrompt}` : ''].filter(Boolean).join('\n');
 }
 
 function normalizeGrokBaseUrl(value?: string): string {
@@ -784,12 +787,19 @@ async function appendReferenceImage(form: FormData, field: string, uri: string) 
 
 async function generateGrokLocalImage(state: SNSGodState, prompt: string, character?: SNSGodCharacter, options?: { referenceImage?: string; kind?: 'profile' | 'cover' | 'general' }): Promise<string> {
   const config = state.config.imageGeneration || {};
+  const provider = config.provider || 'openai';
+  const hasReference = /^(data:|file:|content:|asset:)/i.test(String(options?.referenceImage || ''));
+  await appendDebugLog(
+    'image.reference',
+    `provider=${provider} kind=${options?.kind || 'general'} character=${character?.name || '-'} reference=${hasReference ? 'yes' : 'no'} supported=${provider === 'grok-local' || provider === 'grok-cloud' ? 'yes' : 'no'} prompt=${String(prompt || '').replace(/\s+/g, ' ').slice(0, 260)}`
+  );
   const baseUrl = normalizeGrokBaseUrl(config.provider === 'grok-cloud' ? config.grokCloudBaseUrl : config.grokBaseUrl);
-  const finalPrompt = imagePromptFor(config, character, prompt);
+  const referenceImage = options?.referenceImage || '';
+  const usesReference = /^(data:|file:|content:|asset:)/i.test(referenceImage);
+  const finalPrompt = imagePromptFor(config, character, prompt, { usesReference });
   const resolution = String(config.grokResolution || config.quality || '1k').includes('1k') ? '1k' : String(config.grokResolution || '1k');
   const aspectRatio = String(config.grokAspectRatio || 'auto');
-  const referenceImage = options?.referenceImage || '';
-  if (/^(data:|file:|content:|asset:)/i.test(referenceImage)) {
+  if (usesReference) {
     const form = new FormData();
     form.append('prompt', finalPrompt);
     form.append('resolution', resolution);
@@ -815,6 +825,14 @@ async function generateGrokLocalImage(state: SNSGodState, prompt: string, charac
 
 export async function generateImageDataUri(state: SNSGodState, prompt: string, character?: SNSGodCharacter, options?: { referenceImage?: string; kind?: 'profile' | 'cover' | 'general' }): Promise<string> {
   const config = state.config.imageGeneration || {};
+  if (config.provider !== 'grok-local' && config.provider !== 'grok-cloud') {
+    const provider = config.provider || 'openai';
+    const hasReference = /^(data:|file:|content:|asset:)/i.test(String(options?.referenceImage || ''));
+    await appendDebugLog(
+      'image.reference',
+      `provider=${provider} kind=${options?.kind || 'general'} character=${character?.name || '-'} reference=${hasReference ? 'yes' : 'no'} supported=no prompt=${String(prompt || '').replace(/\s+/g, ' ').slice(0, 260)}`
+    );
+  }
   if (config.enabled === false) throw new Error('이미지 생성 설정이 꺼져 있습니다.');
   if (config.provider === 'grok-local' || config.provider === 'grok-cloud') return generateGrokLocalImage(state, prompt, character, options);
   const openAiProfile = state.config.apiProfiles.openai || {};

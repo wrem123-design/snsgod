@@ -317,6 +317,11 @@ export default function App() {
     await commit(next);
   }
 
+  async function commitCurrentForScreen(patch: (current: SNSGodState) => SNSGodState) {
+    await commitCurrent(patch);
+    return stateRef.current || undefined;
+  }
+
   function requestReply(roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean }) {
     void startReplyJob({
       roomId,
@@ -480,7 +485,7 @@ export default function App() {
       ) : route.name === 'random' ? (
         <RandomChatScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'randomChatRoom', roomId })} />
       ) : route.name === 'sumgod' ? (
-        <SumGodScreen state={state} onChange={commit} onBack={goBack} />
+        <SumGodScreen state={state} onChange={commit} onCommitCurrent={commitCurrentForScreen} onBack={goBack} />
       ) : route.name === 'notifications' ? (
         <NotificationsScreen
           state={state}
@@ -520,6 +525,7 @@ export default function App() {
           state={state}
           roomId={route.roomId}
           onChange={commit}
+          onCommitCurrent={commitCurrentForScreen}
           onBack={goBack}
           onOpenSettings={roomId => navigate({ name: 'groupRoomSettings', roomId, returnRoomId: route.roomId })}
         />
@@ -528,6 +534,7 @@ export default function App() {
           state={state}
           roomId={route.roomId}
           onChange={commit}
+          onCommitCurrent={commitCurrent}
           onBack={goBack}
           onOpenRoomSettings={roomId => navigate({ name: 'roomSettings', roomId, returnRoomId: route.roomId })}
           onOpenCharacterSettings={characterId => navigate({ name: 'characterSettings', characterId, returnRoomId: route.roomId })}
@@ -540,6 +547,7 @@ export default function App() {
           state={state}
           roomId={route.roomId}
           onChange={commit}
+          onCommitCurrent={commitCurrent}
           onBack={() => navigate({ name: 'random' })}
           onOpenRoomSettings={roomId => navigate({ name: 'roomSettings', roomId, returnRoomId: route.roomId })}
           onOpenCharacterSettings={characterId => navigate({ name: 'characterSettings', characterId, returnRoomId: route.roomId })}

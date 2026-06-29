@@ -1,5 +1,6 @@
 import { callLLMText, generateImageDataUri, parseJsonObject } from './api';
 import { appendDebugLog } from './debugLog';
+import { characterReferenceImageForPrompt } from './imageReference';
 import { makeId } from './ids';
 import { MAX_SNS_CONTEXT_MESSAGES, MAX_SNS_DM_CONTEXT_MESSAGES } from './limits';
 import { lorePromptBlock, resolveActiveLore } from './loreEngine';
@@ -336,7 +337,10 @@ async function applySnsImagePolicy(state: SNSGodState, posts: SNSPost[], charact
     if (sns.nsfw && next.imagePrompt) next.imagePrompt = ensureNsfwTag(next.imagePrompt);
     if (!next.image && next.imagePrompt && state.config.imageGeneration?.enabled) {
       try {
-        next.image = await generateImageDataUri(state, next.imagePrompt, character);
+        next.image = await generateImageDataUri(state, next.imagePrompt, character, {
+          referenceImage: characterReferenceImageForPrompt(character, next.imagePrompt),
+          kind: 'general'
+        });
       } catch (error) {
         await appendDebugLog('sns.image', `SNS image generation failed: ${error instanceof Error ? error.message : String(error)}`, 'warn');
       }

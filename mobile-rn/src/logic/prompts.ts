@@ -191,6 +191,7 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
       state.config.imageGeneration?.illustrationMode
         ? 'Write imagePrompt as final comma-separated English illustration tags.'
         : 'Write imagePrompt as a specific, grounded phone-photo scene.',
+      `If the image shows ${character.name}'s own face, body, selfie, or mirror photo, explicitly include ${character.name} and words such as selfie, portrait, face, or full body in imagePrompt so the app can use the character reference image.`,
       'Do not claim an image was attached unless imagePrompt is included.'
     ].join(' ');
   const system = [

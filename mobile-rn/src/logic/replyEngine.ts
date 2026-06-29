@@ -1,5 +1,6 @@
 import { callLLM, generateImageDataUri } from './api';
 import { beginChatJob, cancelChatJob, endChatJob, isCurrentChatJob, tryLockGeneratingRoom } from './chatJobs';
+import { characterReferenceImageForPrompt } from './imageReference';
 import { makeId } from './ids';
 import { isRenderableMediaUri } from './media';
 import { markRoomRead } from './notifications';
@@ -8,6 +9,7 @@ import { buildChatPrompt, normalizeReplyMessagesForStyle } from './prompts';
 import { maybeCreateAutoSNSPost } from './sns';
 import { appendMessage, findCharacter, findRoom, roomMessages, updateCharacter } from './stateHelpers';
 import { SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
+import { appendDebugLog } from './debugLog';
 
 type CommitPatch = (patch: (current: SNSGodState) => SNSGodState) => Promise<void> | void;
 
@@ -21,6 +23,38 @@ type StartReplyJobInput = {
 };
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const REPLY_LLM_TIMEOUT_MS = 12 * 60 * 1000;
+let replyLlmQueue: Promise<void> = Promise.resolve();
+
+async function withTimeout<T>(task: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      task,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} 시간이 너무 오래 걸려 중단했습니다.`)), ms);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function runQueuedReplyLlm<T>(roomId: string, jobId: string, task: () => Promise<T>): Promise<T> {
+  const previous = replyLlmQueue;
+  let release: () => void = () => undefined;
+  replyLlmQueue = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  await previous.catch(() => undefined);
+  if (!isCurrentChatJob(roomId, jobId)) throw new Error('답장 작업이 새 메시지로 교체되었습니다.');
+  await appendDebugLog('reply.queue', `LLM reply job started room=${roomId} job=${jobId}`);
+  try {
+    return await withTimeout(task(), REPLY_LLM_TIMEOUT_MS, 'AI 답장 생성');
+  } finally {
+    release();
+  }
+}
 
 function clampDelay(value: unknown, fallback: number) {
   const number = Number(value);
@@ -134,7 +168,7 @@ export async function startReplyJob(input: StartReplyJobInput) {
 
     if (!tryLockGeneratingRoom(input.roomId, jobId)) return;
     await input.commitCurrent(current => setPending(current, input.roomId, jobId, 'generating'));
-    const { reply, keyIndex } = await callLLM(promptState, promptMessages);
+    const { reply, keyIndex } = await runQueuedReplyLlm(input.roomId, jobId, () => callLLM(promptState, promptMessages));
     if (!isCurrentChatJob(input.roomId, jobId)) return;
 
     await input.commitCurrent(current => {
@@ -163,7 +197,10 @@ export async function startReplyJob(input: StartReplyJobInput) {
       if (bubble.imagePrompt && input.getState()?.config.imageGeneration?.enabled !== false) {
         try {
           const imageState = input.getState() || promptState;
-          mediaData = await generateImageDataUri(imageState, bubble.imagePrompt, latestForBubble.character);
+          mediaData = await generateImageDataUri(imageState, bubble.imagePrompt, latestForBubble.character, {
+            referenceImage: characterReferenceImageForPrompt(latestForBubble.character, bubble.imagePrompt),
+            kind: 'general'
+          });
           if (!isCurrentChatJob(input.roomId, jobId)) return;
         } catch (error) {
           bubble.imageCaption = `${bubble.imageCaption || ''}\n이미지 생성 실패: ${error instanceof Error ? error.message : String(error)}`.trim();

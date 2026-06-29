@@ -6,6 +6,7 @@ import { MAX_GROUP_ROOM_MESSAGES, MAX_ROOM_MESSAGES, STATE_SCHEMA_VERSION } from
 import { normalizeLoreEntries } from '../logic/loreEngine';
 import { normalizeNotifications } from '../logic/notifications';
 import { externalizeStateMedia } from '../logic/media';
+import { normalizeSumGodState } from '../logic/sumgod';
 
 const STATE_KEY = 'snsgod.state.v1';
 const LEGACY_BACKUP_KEY = 'snsgod.legacyBackup.v1';
@@ -114,7 +115,7 @@ function normalizeState(state: SNSGodState): SNSGodState {
     }
   };
   const migrated = migrateState(merged);
-  return normalizeMessageCaps(normalizeNotifications(normalizeLoreEntries(normalizeRandomChats(ensureCharacterRooms(normalizeSnsOptions(normalizeApiProfiles(normalizeProfileImages(migrated))))))));
+  return normalizeMessageCaps(normalizeSumGodState(normalizeNotifications(normalizeLoreEntries(normalizeRandomChats(ensureCharacterRooms(normalizeSnsOptions(normalizeApiProfiles(normalizeProfileImages(migrated)))))))));
 }
 
 function prepareStateForSave(state: SNSGodState): SNSGodState {

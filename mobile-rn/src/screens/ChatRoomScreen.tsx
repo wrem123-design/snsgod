@@ -9,11 +9,12 @@ import { isRenderableMediaUri, pickImageDataUri } from '../logic/media';
 import { formatMessageTime } from '../logic/time';
 import { markRoomRead } from '../logic/notifications';
 
-export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSettings, onOpenCharacterSettings, onOpenProfile, randomMode, onLeaveRandomRoom, onPromoteRandomRoom, onOpenCall, onRequestReply }: {
+export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurrent, onOpenRoomSettings, onOpenCharacterSettings, onOpenProfile, randomMode, onLeaveRandomRoom, onPromoteRandomRoom, onOpenCall, onRequestReply }: {
   state: SNSGodState;
   roomId: string;
   onBack: () => void;
   onChange: (next: SNSGodState) => Promise<void> | void;
+  onCommitCurrent?: (patch: (current: SNSGodState) => SNSGodState) => Promise<void> | void;
   onOpenRoomSettings: (roomId: string) => void;
   onOpenCharacterSettings: (characterId: string) => void;
   onOpenProfile: (characterId: string) => void;
@@ -43,7 +44,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
   useEffect(() => {
     scrollToLatest(false);
     if ((state.unreadCounts[roomId] || 0) > 0 || (state.notifications || []).some(item => !item.read && (item.roomId === roomId || item.target?.roomId === roomId))) {
-      void commit(markRoomRead(state, roomId));
+      void commitCurrent(current => markRoomRead(current, roomId));
     }
   }, [roomId]);
 
@@ -55,15 +56,24 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
     await onChange(next);
   }
 
+  async function commitCurrent(patch: (current: SNSGodState) => SNSGodState) {
+    if (onCommitCurrent) {
+      await onCommitCurrent(patch);
+    } else {
+      await commit(patch(state));
+    }
+  }
+
   async function send() {
     const content = text.trim();
     if (!content || !room || !character || sending) return;
     setText('');
     setSending(true);
     const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content, createdAt: Date.now() };
-    let next = appendMessage(state, room.id, userMessage);
-    next = { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
-    await commit(next);
+    await commitCurrent(current => {
+      const next = appendMessage(current, room.id, userMessage);
+      return { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
+    });
     setSending(false);
     onRequestReply(room.id, character.id, content, { randomMode: isRandomRoom });
   }
@@ -76,9 +86,10 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
       const content = text.trim() || '사진을 보냈습니다.';
       setText('');
       const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content, createdAt: Date.now(), mediaData: image };
-      let next = appendMessage(state, room.id, userMessage);
-      next = { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
-      await commit(next);
+      await commitCurrent(current => {
+        const next = appendMessage(current, room.id, userMessage);
+        return { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
+      });
       onRequestReply(room.id, character.id, `${content}\n[사용자가 사진을 보냈습니다.]`, { randomMode: isRandomRoom });
     } catch (error) {
       Alert.alert('사진 첨부 실패', error instanceof Error ? error.message : String(error));
@@ -92,36 +103,38 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onOpenRoomSett
     setShowStickers(false);
     setSending(true);
     const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content: '', createdAt: Date.now(), sticker: sticker.id };
-    let next = appendMessage(state, room.id, userMessage);
-    next = { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
-    await commit(next);
+    await commitCurrent(current => {
+      const next = appendMessage(current, room.id, userMessage);
+      return { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
+    });
     setSending(false);
     onRequestReply(room.id, character.id, `[스티커: ${sticker.name || sticker.id}]`, { randomMode: isRandomRoom });
   }
 
   async function rejectCall(message: SNSGodMessage) {
     if (!room || !character) return;
-    let next = {
-      ...state,
-      messages: {
-        ...state.messages,
-        [room.id]: (state.messages[room.id] || []).map(item => item.id === message.id ? {
-          ...item,
-          callStatus: 'rejected',
-          callHandledAt: Date.now()
-        } : item)
-      }
-    };
-    next = appendMessage(next, room.id, {
-      id: makeId('msg'),
-      role: 'character',
-      characterId: character.id,
-      content: '통화 취소',
-      createdAt: Date.now(),
-      phoneLog: 'rejected',
-      sourceMode: 'phone'
+    await commitCurrent(current => {
+      const next = {
+        ...current,
+        messages: {
+          ...current.messages,
+          [room.id]: (current.messages[room.id] || []).map(item => item.id === message.id ? {
+            ...item,
+            callStatus: 'rejected',
+            callHandledAt: Date.now()
+          } : item)
+        }
+      };
+      return appendMessage(next, room.id, {
+        id: makeId('msg'),
+        role: 'character',
+        characterId: character.id,
+        content: '통화 취소',
+        createdAt: Date.now(),
+        phoneLog: 'rejected',
+        sourceMode: 'phone'
+      });
     });
-    await commit(next);
   }
 
   if (!room || !character) {

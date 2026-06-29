@@ -79,6 +79,9 @@ export async function externalizeStateMedia(state: SNSGodState): Promise<SNSGodS
     profileImage: isLargeDataUri(character.profileImage) ? await externalizeDataUri(character.profileImage, `${character.id}_profile`) : character.profileImage,
     coverImage: isLargeDataUri(character.coverImage) ? await externalizeDataUri(character.coverImage, `${character.id}_cover`) : character.coverImage,
     profileReferenceImage: isLargeDataUri(character.profileReferenceImage) ? await externalizeDataUri(character.profileReferenceImage, `${character.id}_ref`) : character.profileReferenceImage,
+    profileReferenceImages: await Promise.all((character.profileReferenceImages || []).slice(0, 3).map(async (image, index) =>
+      isLargeDataUri(image) ? await externalizeDataUri(image, `${character.id}_ref_${index + 1}`) : image
+    )),
     profileImageHistory: await Promise.all((character.profileImageHistory || []).map(async item => ({
       ...item,
       image: isLargeDataUri(item.image) ? await externalizeDataUri(item.image, `${character.id}_${item.kind || 'history'}`) : item.image

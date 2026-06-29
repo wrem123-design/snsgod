@@ -63,10 +63,8 @@ export function ChatListScreen({ state, onOpenSettings, onOpenRoom, onNewRoom, o
   onOpenGroupRoom: (roomId: string) => void;
 }) {
   const rows = rowsFromState(state);
-  const unreadNotifications = (state.notifications || []).filter(item => !item.read).length;
   const kakaoTheme = state.config.snsTheme === 'kakao';
   const headerActions = [
-    { label: '알림', icon: '!', onPress: onOpenNotifications, badge: unreadNotifications },
     { label: '새 개인채팅', icon: '1:1', onPress: onNewRoom },
     { label: '새 그룹채팅', icon: 'G', onPress: onNewGroupRoom },
     { label: '새 캐릭터', icon: '+', onPress: onNewCharacter },
@@ -81,7 +79,6 @@ export function ChatListScreen({ state, onOpenSettings, onOpenRoom, onNewRoom, o
             {headerActions.map(action => (
               <Pressable key={action.label} accessibilityLabel={action.label} onPress={action.onPress} style={[styles.roundIcon, !kakaoTheme && styles.roundIconDefault]}>
                 <Text style={[styles.roundIconText, action.icon.length > 1 && styles.roundIconTextSmall]}>{action.icon}</Text>
-                {action.badge && action.badge > 0 ? <Text style={styles.alertBadge}>{action.badge}</Text> : null}
               </Pressable>
             ))}
           </View>

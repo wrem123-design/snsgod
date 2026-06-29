@@ -1,25 +1,30 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
-import { SNSGodCharacter, SNSGodState } from '../types';
-import { findCharacter } from '../logic/stateHelpers';
+import { SNSGodCharacter, SNSGodMessage, SNSGodState } from '../types';
+import { findCharacter, roomMessages } from '../logic/stateHelpers';
 import { isRenderableMediaUri } from '../logic/media';
 
 function imageUri(value?: string) {
   return isRenderableMediaUri(value) ? value : '';
 }
 
-export function ProfileScreen({ state, characterId, onBack, onOpenChat, onOpenCall, onOpenSettings }: {
+export function ProfileScreen({ state, characterId, roomId, onBack, onOpenChat, onOpenCall, onOpenSettings }: {
   state: SNSGodState;
   characterId: string;
+  roomId?: string;
   onBack: () => void;
   onOpenChat: (character: SNSGodCharacter) => void;
   onOpenCall: (character: SNSGodCharacter) => void;
   onOpenSettings: (character: SNSGodCharacter) => void;
 }) {
   const [selectedHistoryImage, setSelectedHistoryImage] = useState('');
+  const [selectedChatImageId, setSelectedChatImageId] = useState('');
+  const [chatPromptOpen, setChatPromptOpen] = useState(false);
   const character = findCharacter(state, characterId);
+  const chatImages = useMemo(() => collectChatRoomImages(roomId ? roomMessages(state, roomId) : [], character?.name || '채팅'), [state, roomId, character?.name]);
+  const selectedChatImage = chatImages.find(item => item.id === selectedChatImageId) || chatImages[0];
   if (!character) {
     return (
       <View style={styles.empty}>
@@ -61,6 +66,31 @@ export function ProfileScreen({ state, characterId, onBack, onOpenChat, onOpenCa
             <Pressable onPress={() => onOpenSettings(character)} style={styles.actionButton}><Text style={styles.actionText}>설정</Text></Pressable>
           </View>
         </View>
+        {roomId ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>채팅 앨범</Text>
+            {chatImages.length ? (
+              <>
+                {selectedChatImage ? <Image source={{ uri: selectedChatImage.uri }} style={styles.chatAlbumLarge} resizeMode="contain" /> : null}
+                {selectedChatImage?.caption ? <Text style={styles.bodyText}>{selectedChatImage.caption}</Text> : null}
+                <Pressable onPress={() => setChatPromptOpen(value => !value)} style={styles.promptToggle}>
+                  <Text style={styles.promptToggleText}>{chatPromptOpen ? '프롬프트 접기' : '프롬프트 보기'}</Text>
+                </Pressable>
+                {chatPromptOpen ? <Text style={styles.promptText}>{selectedChatImage?.prompt || '프롬프트 없음'}</Text> : null}
+                <View style={styles.historyGrid}>
+                  {chatImages.map(item => (
+                    <Pressable key={item.id} onPress={() => { setSelectedChatImageId(item.id); setChatPromptOpen(false); }} style={styles.historyTile}>
+                      <Image source={{ uri: item.uri }} style={styles.historyImage} />
+                      <Text style={styles.historyLabel}>{item.title}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </>
+            ) : (
+              <Text style={styles.bodyText}>이 채팅방에 올라간 이미지가 아직 없습니다.</Text>
+            )}
+          </View>
+        ) : null}
         {history.length ? (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>프로필 앨범</Text>
@@ -80,6 +110,29 @@ export function ProfileScreen({ state, characterId, onBack, onOpenChat, onOpenCa
   );
 }
 
+type ProfileRoomImage = {
+  id: string;
+  uri: string;
+  title: string;
+  prompt: string;
+  caption: string;
+  createdAt: number;
+};
+
+function collectChatRoomImages(messages: SNSGodMessage[], characterName: string): ProfileRoomImage[] {
+  return messages
+    .filter(message => isRenderableMediaUri(message.mediaData))
+    .map(message => ({
+      id: message.id,
+      uri: String(message.mediaData || ''),
+      title: message.role === 'user' ? '내 사진' : `${characterName}`,
+      prompt: String(message.imagePrompt || '').trim(),
+      caption: String(message.imageCaption || '').replace(/이미지\s*생성\s*실패[^\n]*/gi, '').trim(),
+      createdAt: Number(message.createdAt || 0)
+    }))
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   header: { height: 72, paddingTop: 14, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.panel, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
@@ -89,7 +142,7 @@ const styles = StyleSheet.create({
   content: { paddingBottom: 24 },
   cover: { height: 190, backgroundColor: '#e9dccb', overflow: 'hidden' },
   coverFallback: { flex: 1, backgroundColor: '#eadfce' },
-  profileCard: { marginTop: -48, marginHorizontal: 16, alignItems: 'center', padding: 18, borderRadius: 16, backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
+  profileCard: { marginTop: -48, marginHorizontal: 16, alignItems: 'center', padding: 18, borderRadius: 16, backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(255,255,255,0.55)' },
   avatarWrap: { width: 102, height: 102, borderRadius: 51, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fffefa', borderWidth: 4, borderColor: '#fffefa', overflow: 'hidden' },
   profileImage: { width: 94, height: 94, borderRadius: 47 },
   name: { marginTop: 10, fontSize: 24, color: colors.text, fontWeight: '900' },
@@ -102,6 +155,10 @@ const styles = StyleSheet.create({
   card: { marginTop: 14, marginHorizontal: 16, padding: 14, borderRadius: 10, backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
   cardTitle: { color: colors.text, fontWeight: '900', marginBottom: 8 },
   bodyText: { color: colors.sub, lineHeight: 20 },
+  chatAlbumLarge: { width: '100%', height: 260, borderRadius: 10, backgroundColor: '#eee8dc', marginBottom: 10 },
+  promptToggle: { alignSelf: 'flex-start', marginTop: 8, marginBottom: 10, minHeight: 34, paddingHorizontal: 12, borderRadius: 17, backgroundColor: '#eee8dc', justifyContent: 'center' },
+  promptToggleText: { color: colors.text, fontWeight: '900' },
+  promptText: { marginBottom: 10, padding: 10, borderRadius: 8, backgroundColor: '#f4efe6', color: colors.sub, lineHeight: 19, fontWeight: '700' },
   historyLarge: { width: '100%', height: 260, borderRadius: 10, backgroundColor: '#eee8dc', marginBottom: 10 },
   historyGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   historyTile: { width: 82, padding: 5, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa' },

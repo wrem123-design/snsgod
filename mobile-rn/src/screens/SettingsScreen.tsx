@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Image, NativeModules, PermissionsAndroid, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Image, Linking, NativeModules, PermissionsAndroid, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
@@ -10,7 +10,7 @@ import { callLLMText } from '../logic/api';
 import { makeId } from '../logic/ids';
 import { isRenderableMediaUri, pickStickerDataUri } from '../logic/media';
 import { Avatar } from '../components/Avatar';
-import { fetchGrokAccounts, fetchGrokBilling, fetchGrokStatus, GrokBilling, GrokLocalAccount, GrokLocalStatus, grokBaseUrl, grokCloudBaseUrl, logoutGrokOAuth, selectGrokOAuth } from '../logic/grokLocal';
+import { fetchGrokAccounts, fetchGrokBilling, fetchGrokStatus, GrokBilling, GrokLocalAccount, GrokLocalStatus, grokBaseUrl, grokCloudBaseUrl, logoutGrokOAuth, selectGrokOAuth, startGrokLogin } from '../logic/grokLocal';
 import { createBackupPayload } from '../logic/backup';
 
 const PROVIDERS: ApiProvider[] = ['vertex', 'gemini', 'openai', 'anthropic', 'custom'];
@@ -85,6 +85,33 @@ const EVENT_PRESETS = [
 
 const TERMUX_GROK_COMMAND = "cd ~/grok && (pkill -f 'python app.py' 2>/dev/null || true) && FLASK_HOST=127.0.0.1 FLASK_PORT=5000 nohup python app.py > ~/grok/grok.log 2>&1 &";
 const TERMUX_GROK_LOGIN_COMMAND = 'cd ~/grok && hermes auth add xai-oauth';
+const CLOUD_GROK_LOGIN_COMMAND = 'cd /opt/snsgod-grok && hermes auth add xai-oauth';
+
+function grokLoginUrlFromPayload(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const record = payload as Record<string, unknown>;
+  const nested = typeof record.result === 'object' && record.result ? record.result as Record<string, unknown> : {};
+  const candidates = [
+    record.url,
+    record.loginUrl,
+    record.login_url,
+    record.authUrl,
+    record.auth_url,
+    nested.url,
+    nested.loginUrl,
+    nested.login_url,
+    nested.authUrl,
+    nested.auth_url
+  ];
+  return candidates.map(value => String(value || '').trim()).find(value => /^https?:\/\//i.test(value)) || '';
+}
+
+function grokLoginMessageFromPayload(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const record = payload as Record<string, unknown>;
+  const nested = typeof record.result === 'object' && record.result ? record.result as Record<string, unknown> : {};
+  return String(record.message || nested.message || record.detail || nested.detail || '').trim();
+}
 
 const TermuxBridge = NativeModules.TermuxBridge as undefined | {
   openTermux: () => Promise<string>;
@@ -540,17 +567,42 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     }
   }
 
-  async function runGrokAction(action: 'login' | 'select' | 'logout') {
-    if (imageProvider === 'grok-cloud' && action === 'login') {
-      const message = '클라우드 서버 로그인은 서버 SSH에서 Hermes OAuth를 진행해야 합니다. 앱에서는 상태 확인, OAuth 선택, 삭제만 원격 API로 시도합니다.';
+  async function startGrokOAuthLoginOnServer(baseUrl: string) {
+    try {
+      const payload = await startGrokLogin(baseUrl);
+      const loginUrl = grokLoginUrlFromPayload(payload);
+      await refreshGrokLocal();
+      if (loginUrl) {
+        const canOpen = await Linking.canOpenURL(loginUrl).catch(() => true);
+        if (canOpen) {
+          await Linking.openURL(loginUrl);
+          setStatus('Grok OAuth 로그인 페이지를 열었습니다. 로그인 후 다시 상태 확인을 눌러 주세요.');
+          Alert.alert('Grok 계정 추가', '브라우저에서 X 로그인을 완료한 뒤 앱으로 돌아와 상태 확인을 눌러 주세요.');
+          return;
+        }
+      }
+      const serverMessage = grokLoginMessageFromPayload(payload);
+      const message = serverMessage
+        ? `${serverMessage}\n\n이 클라우드 서버는 폰으로 열 로그인 URL을 반환하지 않습니다. 서버 SSH에서 아래 명령을 실행해야 합니다:\n${CLOUD_GROK_LOGIN_COMMAND}`
+        : `이 클라우드 서버는 폰으로 열 로그인 URL을 반환하지 않습니다. 서버 SSH에서 아래 명령을 실행해야 합니다:\n${CLOUD_GROK_LOGIN_COMMAND}`;
       setStatus(message);
-      Alert.alert('Cloud Grok OAuth', message);
-      return;
+      Alert.alert('Grok 계정 추가', message);
+    } catch (error) {
+      const message = `Grok 계정 추가 실패: ${error instanceof Error ? error.message : String(error)}`;
+      setStatus(message);
+      Alert.alert('Grok 계정 추가 실패', `${message}\n서버 주소가 맞는지, 서버가 /api/hermes/login을 지원하는지 확인해 주세요.`);
     }
+  }
+
+  async function runGrokAction(action: 'login' | 'select' | 'logout') {
     const baseUrl = imageProvider === 'grok-cloud' ? (grokCloudUrl.trim() || 'http://168.110.122.66') : (grokLocalBaseUrl.trim() || 'http://127.0.0.1:5000');
     try {
       if (action === 'login') {
-        await startGrokOAuthLoginInTermux();
+        if (imageProvider === 'grok-cloud') {
+          await startGrokOAuthLoginOnServer(baseUrl);
+        } else {
+          await startGrokOAuthLoginInTermux();
+        }
         return;
       }
       if (action === 'select') {
@@ -610,6 +662,19 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
       const message = await TermuxBridge.copyText(TERMUX_GROK_COMMAND);
       setStatus(`${message} Termux에 붙여넣고 Enter를 누르면 서버가 실행됩니다.`);
       Alert.alert('복사 완료', '서버 실행 명령을 복사했습니다. Termux에 붙여넣고 Enter를 누르세요.');
+    } catch (error) {
+      const message = `복사 실패: ${error instanceof Error ? error.message : String(error)}`;
+      setStatus(message);
+      Alert.alert('복사 실패', message);
+    }
+  }
+
+  async function copyCloudGrokLoginCommand() {
+    try {
+      if (!TermuxBridge) throw new Error('클립보드 브릿지가 준비되지 않았습니다. 앱을 재설치해 주세요.');
+      const message = await TermuxBridge.copyText(CLOUD_GROK_LOGIN_COMMAND);
+      setStatus(`${message} Oracle 서버 SSH에 붙여넣고 로그인 안내를 완료하세요.`);
+      Alert.alert('복사 완료', '클라우드 OAuth 명령을 복사했습니다. Oracle 서버 SSH에 붙여넣고 로그인 안내를 완료하세요.');
     } catch (error) {
       const message = `복사 실패: ${error instanceof Error ? error.message : String(error)}`;
       setStatus(message);
@@ -1073,7 +1138,11 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
               <TextInput value={grokCloudUrl} onChangeText={setGrokCloudUrl} style={styles.input} autoCapitalize="none" placeholder="http://168.110.122.66" placeholderTextColor="#9a9387" />
               <View style={styles.buttonRow}>
                 <Pressable onPress={refreshGrokLocal} style={[styles.secondaryInline, styles.rowButton]}><Text style={styles.secondaryText}>상태 확인</Text></Pressable>
+                <Pressable onPress={() => runGrokAction('login')} style={[styles.primaryInline, styles.rowButton]}><Text style={styles.primaryText}>계정 추가/재인증</Text></Pressable>
+              </View>
+              <View style={styles.buttonRow}>
                 <Pressable onPress={() => runGrokAction('select')} style={[styles.secondaryInline, styles.rowButton]}><Text style={styles.secondaryText}>OAuth 선택</Text></Pressable>
+                <Pressable onPress={() => runGrokAction('logout')} style={[styles.dangerInline, styles.rowButton]}><Text style={styles.dangerText}>삭제</Text></Pressable>
               </View>
               <View style={styles.statusBox}>
                 <Text style={styles.listTitle}>Cloud Grok 상태: {grokStatus?.tokenLabel || '확인 전'}</Text>
@@ -1081,6 +1150,29 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
                 <Text style={styles.listSub}>계정 {grokAccounts.length}개 · CREDIT {grokBilling?.remaining_percent ?? '--'}%</Text>
                 <View style={styles.creditTrack}><View style={[styles.creditFill, { width: `${Math.max(0, Math.min(100, Number(grokBilling?.remaining_percent || 0)))}%` }]} /></View>
               </View>
+              <View style={styles.termuxPanel}>
+                <View style={styles.sectionHeaderRow}>
+                  <Text style={styles.label}>클라우드 OAuth 복구</Text>
+                  <Pressable onPress={copyCloudGrokLoginCommand} style={styles.smallInline}><Text style={styles.secondaryText}>복사</Text></Pressable>
+                </View>
+                <Text style={styles.listSub}>현재 서버는 폰으로 열 로그인 URL을 반환하지 않습니다. "열린 창"은 클라우드 서버 쪽 창이라 폰에는 보이지 않습니다. Oracle 서버 SSH에서 아래 명령을 실행한 뒤 상태 확인을 누르세요.</Text>
+                <TextInput
+                  value={CLOUD_GROK_LOGIN_COMMAND}
+                  editable={false}
+                  selectTextOnFocus
+                  multiline
+                  style={[styles.input, styles.commandBox]}
+                  textAlignVertical="top"
+                />
+              </View>
+              {grokAccounts.length ? grokAccounts.map((account, index) => (
+                <View key={`${account.id || account.provider || 'cloud-account'}-${index}`} style={styles.eventRow}>
+                  <View style={styles.listBody}>
+                    <Text style={styles.listTitle}>{account.name || account.label || 'xAI Grok OAuth'}</Text>
+                    <Text style={styles.listSub}>{account.provider || 'xai-oauth'}{account.current ? ' · 현재 선택' : ''}</Text>
+                  </View>
+                </View>
+              )) : <Text style={styles.help}>토큰 오류가 뜨면 계정 추가/재인증을 누르고 로그인 후 상태 확인을 다시 누르세요.</Text>}
               <View style={styles.twoCols}>
                 <View style={styles.col}>
                   <Text style={styles.label}>해상도</Text>
@@ -1130,12 +1222,19 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
 
         <View style={[styles.card, activeSection !== 'user' && styles.hidden]}>
           <Text style={styles.cardTitle}>자동화</Text>
+          <Text style={styles.help}>앱이 켜져 있는 동안 약 60초마다 조건을 확인합니다. API 설정이 비어 있으면 자동 생성은 실행되지 않습니다.</Text>
           <SwitchLine label="전체 자동화" value={autoEnabled} onChange={setAutoEnabled} />
+          <Text style={styles.help}>전체 자동화: 아래 자동 메시지, 기념일, 프로필 이미지 변경, 전화 초대의 공통 전원입니다.</Text>
           <SwitchLine label="개인톡 먼저 말하기" value={privateFirst} onChange={setPrivateFirst} />
+          <Text style={styles.help}>개인톡 먼저 말하기: 사용자가 보내지 않아도 캐릭터가 빈도/주도성 설정에 따라 1:1 채팅을 먼저 시작합니다.</Text>
           <SwitchLine label="단톡 먼저 말하기" value={groupFirst} onChange={setGroupFirst} />
+          <Text style={styles.help}>단톡 먼저 말하기: 단톡방 참여 캐릭터 중 한 명이 방 빈도와 주도성 조건에 맞으면 먼저 말합니다.</Text>
           <SwitchLine label="랜덤 첫 메시지" value={randomDmEnabled} onChange={setRandomDmEnabled} />
+          <Text style={styles.help}>랜덤 첫 메시지: 아직 사용자가 말하지 않은 새 1:1 방에서 첫 인사를 자동으로 보냅니다.</Text>
           <SwitchLine label="SNS 자동 게시" value={snsAutoPostEnabled} onChange={setSnsAutoPostEnabled} />
+          <Text style={styles.help}>SNS 자동 게시: 일반 채팅 답장 뒤 메시지 수, 쿨다운, 확률 조건을 만족하면 Instagram 또는 X 게시물을 생성합니다.</Text>
           <SwitchLine label="캐릭터 먼저 전화" value={characterPhoneCallEnabled} onChange={setCharacterPhoneCallEnabled} />
+          <Text style={styles.help}>캐릭터 먼저 전화: 캐릭터 주도성과 빈도 조건에 따라 드물게 전화 카드 알림을 만듭니다.</Text>
           <View style={styles.twoCols}>
             <View style={styles.col}>
               <Text style={styles.label}>SNS 자동 게시 확률(%)</Text>

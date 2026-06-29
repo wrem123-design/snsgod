@@ -20,7 +20,6 @@ export function MenuHubScreen({ mode, onOpenSumGod, onOpenGallery, onOpenNotific
   const items: MenuItem[] = [
     { title: 'SumGod', subtitle: '커플 질문 다이어리', icon: 'S', onPress: onOpenSumGod },
     { title: '갤러리', subtitle: '저장된 이미지 보기', icon: '□', onPress: onOpenGallery },
-    { title: '알림 목록', subtitle: '최근 알림 10개 확인', icon: '!', onPress: onOpenNotifications },
     { title: '디버그', subtitle: '로그 확인과 앱 상태 재로드', icon: 'D', onPress: onOpenDebug }
   ];
 
@@ -29,7 +28,6 @@ export function MenuHubScreen({ mode, onOpenSumGod, onOpenGallery, onOpenNotific
       <View style={styles.header}>
         <Text style={styles.title}>ETC</Text>
         <View style={styles.headerActions}>
-          <Pressable accessibilityLabel="알림" onPress={onOpenNotifications} style={styles.roundIcon}><Text style={styles.roundIconText}>!</Text></Pressable>
           <Pressable accessibilityLabel="설정" onPress={onOpenSettings} style={styles.roundIcon}><Text style={styles.roundIconText}>⚙</Text></Pressable>
         </View>
       </View>

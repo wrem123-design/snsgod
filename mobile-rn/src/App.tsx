@@ -421,7 +421,6 @@ export default function App() {
       incomingTimerRef.current = null;
     }
     setIncomingCall(null);
-    await commit(markPhoneCardStatus(current, call.roomId, call.messageId, 'accepted'));
     navigate({ name: 'call', characterId: call.characterId, roomId: call.roomId, sourceMessageId: call.messageId, returnRoute: route });
   }
 
@@ -501,13 +500,14 @@ export default function App() {
         <ProfileScreen
           state={state}
           characterId={route.characterId}
+          roomId={route.returnRoomId}
           onBack={goBack}
           onOpenChat={openCharacterChat}
-          onOpenCall={character => navigate({ name: 'call', characterId: character.id, returnRoute: route })}
+          onOpenCall={character => navigate({ name: 'call', characterId: character.id, roomId: route.returnRoomId, returnRoute: route })}
           onOpenSettings={character => navigate({ name: 'characterSettings', characterId: character.id, returnRoomId: route.returnRoomId })}
         />
       ) : route.name === 'call' ? (
-        <CallScreen state={state} characterId={route.characterId} roomId={route.roomId} sourceMessageId={route.sourceMessageId} onBack={goBack} onChange={commit} />
+        <CallScreen state={state} characterId={route.characterId} roomId={route.roomId} sourceMessageId={route.sourceMessageId} onBack={goBack} onChange={commit} onRequestReply={requestReply} />
       ) : route.name === 'roomSettings' ? (
         <RoomSettingsScreen state={state} roomId={route.roomId} onChange={commit} onBack={goBack} />
       ) : route.name === 'groupRoomSettings' ? (

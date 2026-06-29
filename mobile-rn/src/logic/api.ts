@@ -4,7 +4,12 @@ import { KJUR } from 'jsrsasign';
 import { ApiProfile, ImageGenerationConfig, SNSGodCharacter, SNSGodState } from '../types';
 import { appendDebugLog } from './debugLog';
 
-type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+type ChatMessage = {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+  imageData?: string;
+  imageMimeType?: string;
+};
 
 type VertexServiceAccount = {
   type: string;
@@ -364,13 +369,56 @@ function recoverMessageContents(text: string): string[] {
   return results.slice(0, 6);
 }
 
+function imagePayloadFromDataUri(imageData?: string): { mimeType: string; data: string } | undefined {
+  const source = String(imageData || '').trim();
+  const match = source.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) return undefined;
+  return { mimeType: match[1] || 'image/jpeg', data: match[2].replace(/\s/g, '') };
+}
+
+function geminiPartsForMessage(message: ChatMessage): Record<string, unknown>[] {
+  const parts: Record<string, unknown>[] = [{ text: message.content }];
+  const image = imagePayloadFromDataUri(message.imageData);
+  if (image) {
+    parts.push({ inlineData: { mimeType: message.imageMimeType || image.mimeType, data: image.data } });
+  }
+  return parts;
+}
+
+function openAiInputForMessages(messages: ChatMessage[]): Record<string, unknown>[] {
+  return messages.map(message => {
+    const content: Record<string, unknown>[] = [{ type: 'input_text', text: message.content }];
+    if (message.imageData) content.push({ type: 'input_image', image_url: message.imageData });
+    return {
+      role: message.role === 'assistant' ? 'assistant' : message.role === 'system' ? 'system' : 'user',
+      content
+    };
+  });
+}
+
+function anthropicContentForMessage(message: ChatMessage): Record<string, unknown>[] {
+  const content: Record<string, unknown>[] = [{ type: 'text', text: message.content }];
+  const image = imagePayloadFromDataUri(message.imageData);
+  if (image) {
+    content.push({
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: message.imageMimeType || image.mimeType,
+        data: image.data
+      }
+    });
+  }
+  return content;
+}
+
 async function callGemini(profile: ApiProfile, key: string, messages: ChatMessage[]): Promise<string> {
   const endpoint = String(profile.apiEndpoint || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, '');
   const model = String(profile.apiModel || 'gemini-2.5-flash').replace(/^models\//, '');
   const system = messages.filter(message => message.role === 'system').map(message => message.content).join('\n\n');
   const contents = messages
     .filter(message => message.role !== 'system')
-    .map(message => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: [{ text: message.content }] }));
+    .map(message => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: geminiPartsForMessage(message) }));
   const response = await fetch(`${endpoint}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -465,7 +513,7 @@ async function callVertex(profile: ApiProfile, messages: ChatMessage[]): Promise
   const system = messages.filter(message => message.role === 'system').map(message => message.content).join('\n\n');
   const contents = messages
     .filter(message => message.role !== 'system')
-    .map(message => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: [{ text: message.content }] }));
+    .map(message => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: geminiPartsForMessage(message) }));
   const payload = {
     ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
     contents: contents.length ? contents : [{ role: 'user', parts: [{ text: 'Generate the next reply now.' }] }],
@@ -573,7 +621,7 @@ async function callOpenAI(profile: ApiProfile, key: string, messages: ChatMessag
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
     body: JSON.stringify({
       model: profile.apiModel || 'gpt-4.1-mini',
-      input: messages,
+      input: openAiInputForMessages(messages),
       max_output_tokens: Number(profile.maxTokens || 700),
       temperature: Number(profile.temperature || 0.85)
     })
@@ -586,7 +634,10 @@ async function callOpenAI(profile: ApiProfile, key: string, messages: ChatMessag
 
 async function callAnthropic(profile: ApiProfile, key: string, messages: ChatMessage[]): Promise<string> {
   const system = messages.find(message => message.role === 'system')?.content || '';
-  const bodyMessages = messages.filter(message => message.role !== 'system').map(message => ({ role: message.role === 'assistant' ? 'assistant' : 'user', content: message.content }));
+  const bodyMessages = messages.filter(message => message.role !== 'system').map(message => ({
+    role: message.role === 'assistant' ? 'assistant' : 'user',
+    content: anthropicContentForMessage(message)
+  }));
   const response = await fetch(String(profile.apiEndpoint || 'https://api.anthropic.com/v1/messages'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
@@ -717,15 +768,47 @@ function extractImageBase64(value: unknown): string | undefined {
   return undefined;
 }
 
-function imagePromptFor(config: ImageGenerationConfig, character: SNSGodCharacter | undefined, prompt: string, options: { usesReference?: boolean } = {}): string {
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function imagePromptWithoutCharacterName(prompt: string, character: SNSGodCharacter | undefined): string {
+  const name = String(character?.name || '').trim();
+  let next = String(prompt || '').trim();
+  if (!name) return next;
+  next = next
+    .replace(new RegExp(`\\b${escapeRegex(name)}(?:'s)?\\b`, 'gi'), '')
+    .replace(new RegExp(escapeRegex(name), 'g'), '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([,.;:])/g, '$1')
+    .replace(/([,(])\s+/g, '$1')
+    .replace(/^[\s,.;:，、-]+/, '')
+    .replace(/[\s,.;:，、-]+$/, '')
+    .trim();
+  return next || String(prompt || '').trim();
+}
+
+function samePromptText(a: string, b: string): boolean {
+  return a.replace(/\s+/g, ' ').trim().toLowerCase() === b.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodCharacter | undefined, prompt: string, options: { usesReference?: boolean } = {}): string {
   const prefix = config.promptPrefix || 'Create a realistic in-character phone photo. Natural lighting, casual composition, no text overlay.';
-  const profile = character?.prompt ? `Character profile: ${character.prompt}` : '';
-  const name = character?.name ? `Character name: ${character.name}` : '';
-  const reference = options.usesReference && character?.name
-    ? `Use the attached reference image as the identity reference for ${character.name}. Preserve the same face, hairstyle, and overall likeness while following the requested scene.`
-    : '';
+  const profilePhotoPrompt = character?.profileAvatarPrompt ? imagePromptWithoutCharacterName(character.profileAvatarPrompt, character) : '';
+  const requested = imagePromptWithoutCharacterName(prompt, character);
   const nsfw = config.nsfw ? 'NSFW/private fictional image is allowed when appropriate.' : 'Keep it safe and non-explicit.';
-  return [prefix, name, profile, reference, nsfw, `Requested image: ${prompt}`, config.negativePrompt ? `Avoid: ${config.negativePrompt}` : ''].filter(Boolean).join('\n');
+  if (options.usesReference) {
+    return [
+      'Use the attached reference image as the visual identity reference. Create the same person from the reference image, preserving face, hairstyle, and overall likeness.',
+      prefix,
+      `Requested scene: ${requested}`,
+      nsfw
+    ].filter(Boolean).join('\n');
+  }
+  const baseIdentity = profilePhotoPrompt && !samePromptText(profilePhotoPrompt, requested)
+    ? `Base visual identity from profile-photo prompt: ${profilePhotoPrompt}`
+    : '';
+  return [prefix, baseIdentity, `Requested image: ${requested}`, nsfw].filter(Boolean).join('\n');
 }
 
 function normalizeGrokBaseUrl(value?: string): string {

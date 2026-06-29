@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
-import { SNSDmThread, SNSGodCharacter, SNSGodState, SNSPost } from '../types';
+import { SNSDmMessage, SNSDmParticipant, SNSDmThread, SNSGodCharacter, SNSGodState, SNSPost } from '../types';
 import { generateSNSPost, generateSnsDmReply, snsOptionsFor } from '../logic/sns';
 import { makeId } from '../logic/ids';
-import { pickImageDataUri } from '../logic/media';
+import { isRenderableMediaUri, pickImageDataUri } from '../logic/media';
 
 export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications, onChange }: {
   state: SNSGodState;
@@ -23,8 +23,8 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
       recentPostAtByCharacter.set(post.characterId, Math.max(previous, Number(post.createdAt || 0)));
     });
   const sortedCharacters = availableCharacters
-    .map((character, index) => ({ character, index, recentAt: recentPostAtByCharacter.get(character.id) || 0 }))
-    .sort((a, b) => (b.recentAt - a.recentAt) || (a.index - b.index))
+    .map((character, index) => ({ character, index, recentAt: recentPostAtByCharacter.get(character.id) || 0, enabled: snsOptionsFor(state, platform, character).enabled !== false }))
+    .sort((a, b) => Number(b.enabled) - Number(a.enabled) || (b.recentAt - a.recentAt) || (a.index - b.index))
     .map(item => item.character);
   const [selectedCharacterId, setSelectedCharacterId] = useState('');
   const [loading, setLoading] = useState(false);
@@ -52,7 +52,6 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
     .slice()
     .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
   const dmThreads = (state.snsDmThreads || []).filter(thread => !selectedCharacterId || thread.characterId === selectedCharacterId);
-  const unreadNotifications = (state.notifications || []).filter(item => !item.read).length;
 
   useEffect(() => {
     if (selectedCharacterId && !availableCharacters.some(character => character.id === selectedCharacterId)) {
@@ -82,6 +81,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
       textOnly: draftTextOnly,
       noDM: draftNoDM,
       thirdPartyDM: draftThirdPartyDM,
+      enabled: activeSnsOptions.enabled !== false,
       autoComments: draftAutoComments,
       commentQty: draftCommentQty || '2-4',
       subject: draftSubject,
@@ -112,8 +112,33 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
     Alert.alert('저장 완료', `${selectedCharacter?.name || '선택 캐릭터'}의 ${platform === 'instagram' ? 'Instagram' : 'X'} SNS 옵션을 저장했습니다.`);
   }
 
+  async function toggleCharacterPlatform(character: SNSGodCharacter) {
+    const currentOptions = snsOptionsFor(state, platform, character);
+    const nextEnabled = currentOptions.enabled === false;
+    await onChange({
+      ...state,
+      characters: state.characters.map(item => item.id === character.id ? {
+        ...item,
+        snsOptions: {
+          ...(item.snsOptions || {}),
+          [platform]: {
+            ...(item.snsOptions?.[platform] || {}),
+            enabled: nextEnabled
+          }
+        }
+      } : item)
+    });
+    if (!nextEnabled && selectedCharacterId === character.id) {
+      setSelectedCharacterId('');
+    }
+  }
+
   async function generate() {
     if (!selectedCharacter || loading) return;
+    if (activeSnsOptions.enabled === false) {
+      Alert.alert('SNS 꺼짐', `${selectedCharacter.name}의 ${platform === 'instagram' ? 'Instagram' : 'X'} 활동이 꺼져 있습니다.`);
+      return;
+    }
     setLoading(true);
     try {
       const draftState = stateWithDraftOptions();
@@ -170,6 +195,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
       ...state,
       snsPosts: (state.snsPosts || []).map(post => post.id === postId ? {
         ...post,
+        replies: (post.replies || post.comments?.length || 0) + 1,
         comments: [...(post.comments || []), { id: makeId('comment'), author: state.config.userName || '나', content: trimmed, createdAt: Date.now() }]
       } : post)
     });
@@ -206,6 +232,10 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
 
   async function openSnsDm(post: SNSPost) {
     const character = state.characters.find(item => item.id === post.characterId);
+    if (snsOptionsFor(state, post.platform, character).noDM) {
+      Alert.alert('DM 꺼짐', `${character?.name || '이 캐릭터'}의 ${post.platform === 'instagram' ? 'Instagram' : 'X'} DM이 꺼져 있습니다.`);
+      return;
+    }
     const existing = (state.snsDmThreads || []).find(thread =>
       thread.postId === post.id
       && Number(thread.platformIndex || 0) === 0
@@ -221,6 +251,10 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
         kind: 'user',
         title: `${platform === 'instagram' ? 'Instagram' : 'X'} DM`,
         context: postContext(post),
+        participants: [
+          { id: 'user', name: state.config.userName || '나', role: 'user' },
+          { id: `character:${character.id}`, name: character.name, handle: character.handle, avatar: character.profileImage || character.avatar, role: 'character' }
+        ],
         messages: [],
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -242,7 +276,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
     && !thread.id.startsWith('postdm:')
   ) : undefined;
   const hubThirdPartyDms = hubPost ? [
-    ...(hubPost.dms || []).map((dm, index) => ({ id: String(dm.id || `postdm_${index}`), title: dm.title, messages: dm.messages })),
+    ...(hubPost.dms || []).map((dm, index) => ({ id: String(dm.id || `postdm_${index}`), title: dm.title, participants: dm.participants, messages: dm.messages })),
     ...(state.snsDmThreads || [])
       .filter(thread => thread.postId === hubPost.id && (thread.kind === 'thirdParty' || thread.messages.some(message => message.from === 'thirdParty')))
       .map(thread => ({
@@ -254,7 +288,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
   const activePostDmParts = activeDmId.startsWith('postdm:') ? activeDmId.split(':') : [];
   const activePostDmPost = activePostDmParts.length >= 3 ? (state.snsPosts || []).find(post => post.id === activePostDmParts[1]) : undefined;
   const activePostDmList = activePostDmPost ? [
-    ...(activePostDmPost.dms || []).map((dm, index) => ({ id: String(dm.id || `postdm_${index}`), title: dm.title, messages: dm.messages })),
+    ...(activePostDmPost.dms || []).map((dm, index) => ({ id: String(dm.id || `postdm_${index}`), title: dm.title, participants: dm.participants, messages: dm.messages })),
     ...(state.snsDmThreads || [])
       .filter(thread => thread.postId === activePostDmPost.id && (thread.kind === 'thirdParty' || thread.messages.some(message => message.from === 'thirdParty')))
       .map(thread => ({
@@ -266,28 +300,39 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
   const activePostDm = activePostDmPost
     ? activePostDmList.find(dm => `postdm:${activePostDmPost.id}:${dm.id}` === activeDmId)
     : undefined;
+  const activeUserThread = (state.snsDmThreads || []).find(item => item.id === activeDmId);
+  const activeUserThreadPost = activeUserThread?.postId ? (state.snsPosts || []).find(post => post.id === activeUserThread.postId) : undefined;
+  const activeReadOnlyThread = activePostDm && activePostDmPost
+    ? postDmToThread(activePostDm, activePostDmPost, state.characters.find(character => character.id === activePostDmPost.characterId))
+    : undefined;
 
   return (
     <View style={[styles.screen, platform === 'twitter' && styles.xScreen]}>
       {activeDmId ? (
         activePostDm ? (
-          <ReadOnlyDmModal
-            platform={platform}
-            title={activePostDm.title}
-            messages={activePostDm.messages}
-            onClose={() => setActiveDmId('')}
-          />
-        ) : (
           <DmModal
-            thread={(state.snsDmThreads || []).find(item => item.id === activeDmId)}
-            character={state.characters.find(character => character.id === (state.snsDmThreads || []).find(item => item.id === activeDmId)?.characterId)}
+            thread={activeReadOnlyThread}
+            post={activePostDmPost}
+            character={state.characters.find(character => character.id === activePostDmPost?.characterId)}
             platform={platform}
             userName={state.config.userName || '나'}
             value={dmText}
             onChangeText={setDmText}
             onClose={() => setActiveDmId('')}
             onSend={() => sendDmReply(true)}
-            onAiSend={() => sendDmReply(false)}
+            loading={loading}
+          />
+        ) : (
+          <DmModal
+            thread={activeUserThread}
+            post={activeUserThreadPost}
+            character={state.characters.find(character => character.id === activeUserThread?.characterId)}
+            platform={platform}
+            userName={state.config.userName || '나'}
+            value={dmText}
+            onChangeText={setDmText}
+            onClose={() => setActiveDmId('')}
+            onSend={() => sendDmReply(true)}
             loading={loading}
           />
         )
@@ -315,19 +360,15 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
           <Text style={[styles.subtitle, platform === 'twitter' && styles.xSubtitle]}>{selectedCharacter?.name || '전체'} · {posts.length} posts{activeSnsOptions.nsfw ? ' · NSFW 뒷계' : ''}</Text>
         </View>
         <View style={styles.headerActions}>
-          <Pressable accessibilityLabel="SNS 생성" onPress={() => setShowGenerator(value => !value)} style={[styles.actionPill, showGenerator && styles.actionPillActive]}>
-            <Text style={[styles.actionPillText, showGenerator && styles.actionPillTextActive]}>SNS 생성</Text>
+          <Pressable accessibilityLabel="SNS" onPress={() => setShowGenerator(value => !value)} style={[styles.actionPill, platform === 'twitter' && styles.xActionPill, showGenerator && styles.actionPillActive, platform === 'twitter' && showGenerator && styles.xActionPillActive]}>
+            <Text style={[styles.actionPillText, platform === 'twitter' && styles.xActionPillText, showGenerator && styles.actionPillTextActive, platform === 'twitter' && showGenerator && styles.xActionPillTextActive]}>SNS</Text>
           </Pressable>
           <Pressable accessibilityLabel="SNS DM" onPress={() => setShowDmList(value => !value)} style={[styles.roundIcon, platform === 'twitter' && styles.xRoundIcon, showDmList && styles.roundIconActive]}>
-            <Text style={[styles.roundIconText, showDmList && styles.roundIconTextActive]}>DM</Text>
+            <Text style={[styles.roundIconText, platform === 'twitter' && styles.xRoundIconText, showDmList && styles.roundIconTextActive]}>DM</Text>
             {dmThreads.some(thread => thread.unread) ? <Text style={styles.alertBadge}>{dmThreads.reduce((sum, thread) => sum + (thread.unread || 0), 0)}</Text> : null}
           </Pressable>
-          <Pressable accessibilityLabel="알림" onPress={onOpenNotifications} style={[styles.roundIcon, platform === 'twitter' && styles.xRoundIcon]}>
-            <Text style={styles.roundIconText}>!</Text>
-            {unreadNotifications > 0 ? <Text style={styles.alertBadge}>{unreadNotifications}</Text> : null}
-          </Pressable>
           <Pressable accessibilityLabel="설정" onPress={onOpenSettings} style={[styles.roundIcon, platform === 'twitter' && styles.xRoundIcon]}>
-            <Text style={styles.roundIconText}>⚙</Text>
+            <Text style={[styles.roundIconText, platform === 'twitter' && styles.xRoundIconText]}>⚙</Text>
           </Pressable>
         </View>
       </View>
@@ -339,12 +380,22 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
           keyExtractor={item => item.id}
           contentContainerStyle={styles.characterRailContent}
           ListHeaderComponent={<AllCharacterChip active={!selectedCharacterId} platform={platform} onPress={() => setSelectedCharacterId('')} />}
-          renderItem={({ item }) => <CharacterChip character={item} active={item.id === selectedCharacterId} platform={platform} onPress={() => setSelectedCharacterId(item.id === selectedCharacterId ? '' : item.id)} />}
+          renderItem={({ item }) => {
+            const enabled = snsOptionsFor(state, platform, item).enabled !== false;
+            return <CharacterChip character={item} active={item.id === selectedCharacterId} enabled={enabled} platform={platform} onPress={() => setSelectedCharacterId(item.id === selectedCharacterId ? '' : item.id)} />;
+          }}
         />
       </View>
 
       {showGenerator ? <View style={[styles.generator, platform === 'twitter' && styles.xGenerator]}>
-        <Text style={[styles.generatorTitle, platform === 'twitter' && styles.xPanelText]}>{selectedCharacter?.name || '캐릭터'} SNS 설정</Text>
+        <View style={styles.generatorTitleRow}>
+          <Text style={[styles.generatorTitle, platform === 'twitter' && styles.xPanelText]}>{selectedCharacter?.name || '캐릭터'} SNS 설정</Text>
+          {selectedCharacter ? (
+            <Pressable onPress={() => toggleCharacterPlatform(selectedCharacter)} style={[styles.generatorPower, activeSnsOptions.enabled !== false ? styles.generatorPowerOn : styles.generatorPowerOff]}>
+              <Text style={[styles.generatorPowerText, activeSnsOptions.enabled === false && styles.generatorPowerTextOff]}>{activeSnsOptions.enabled !== false ? 'ON' : 'OFF'}</Text>
+            </Pressable>
+          ) : null}
+        </View>
         <Text style={[styles.generatorSub, platform === 'twitter' && styles.xSubtitle]}>{platform === 'instagram' ? 'Instagram 전용' : 'X 전용'} · 댓글 {draftCommentQty || '2-4'} · {draftAutoComments ? 'AI 댓글 자동' : 'AI 댓글 끔'} · {draftAnonymous ? '익명계' : '공개계'}{draftNsfw ? ' · NSFW 뒷계' : ''}</Text>
         <View style={styles.settingGrid}>
           <TogglePill label="이 캐릭터 SNS 자동 생성 허용" value={snsAutoEnabled} onPress={() => setSnsAutoEnabled(value => !value)} />
@@ -369,9 +420,9 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
         <Text style={[styles.fieldLabel, platform === 'twitter' && styles.xSubtitle]}>소재</Text>
         <TextInput value={draftSubject} onChangeText={setDraftSubject} style={[styles.fieldInput, styles.subjectInput, platform === 'twitter' && styles.xInput]} placeholder="일상 잡담, 짧은 트윗, 방금 대화 등 원하는 방향" placeholderTextColor="#8c8c8c" multiline />
         <View style={styles.optionBadges}>
-          <Text style={styles.optionBadge}>{draftTextOnly ? '글만' : draftAutoImage ? '이미지 가능' : '이미지 끔'}</Text>
-          <Text style={styles.optionBadge}>{draftNoDM ? 'DM 끔' : draftThirdPartyDM ? '제3자 DM 허용' : 'DM 가능'}</Text>
-          <Text style={styles.optionBadge}>{platform === 'instagram' ? 'Instagram 별도 설정' : 'X 별도 설정'}</Text>
+          <Text style={[styles.optionBadge, platform === 'twitter' && styles.xOptionBadge]}>{draftTextOnly ? '글만' : draftAutoImage ? '이미지 가능' : '이미지 끔'}</Text>
+          <Text style={[styles.optionBadge, platform === 'twitter' && styles.xOptionBadge]}>{draftNoDM ? 'DM 끔' : draftThirdPartyDM ? '제3자 DM 허용' : 'DM 가능'}</Text>
+          <Text style={[styles.optionBadge, platform === 'twitter' && styles.xOptionBadge]}>{platform === 'instagram' ? 'Instagram 별도 설정' : 'X 별도 설정'}</Text>
         </View>
         {imageData ? <Image source={{ uri: imageData }} style={styles.pendingImage} /> : null}
         <View style={styles.generatorActions}>
@@ -404,9 +455,13 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
       <FlatList
         data={posts}
         keyExtractor={item => item.id}
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={[styles.feed, platform === 'instagram' && styles.instagramFeed, platform === 'twitter' && styles.twitterFeed]}
         ListEmptyComponent={<Text style={styles.emptyText}>아직 {selectedCharacter?.name || '이 캐릭터'}의 {platform === 'instagram' ? 'Instagram' : 'Twitter/X'} 게시물이 없습니다.</Text>}
-        renderItem={({ item }) => <PostCard platform={platform} post={item} character={state.characters.find(character => character.id === item.characterId)} onLike={() => likePost(item.id)} onDelete={() => deletePost(item.id)} onComment={content => addComment(item.id, content)} onOpenDm={() => openSnsDm(item)} />}
+        renderItem={({ item }) => {
+          const itemCharacter = state.characters.find(character => character.id === item.characterId);
+          return <PostCard platform={platform} post={item} character={itemCharacter} dmEnabled={!snsOptionsFor(state, item.platform, itemCharacter).noDM} onLike={() => likePost(item.id)} onDelete={() => deletePost(item.id)} onComment={content => addComment(item.id, content)} onOpenDm={() => openSnsDm(item)} />;
+        }}
       />
     </View>
   );
@@ -431,51 +486,225 @@ function AllCharacterChip({ active, platform, onPress }: { active: boolean; plat
   );
 }
 
-function CharacterChip({ character, active, platform, onPress }: { character: SNSGodCharacter; active: boolean; platform: SNSPost['platform']; onPress: () => void }) {
+function CharacterChip({ character, active, enabled, platform, onPress }: { character: SNSGodCharacter; active: boolean; enabled: boolean; platform: SNSPost['platform']; onPress: () => void }) {
   return (
-    <Pressable onPress={onPress} style={[styles.characterChip, active && styles.characterChipActive, platform === 'twitter' && styles.xCharacterChip, platform === 'twitter' && active && styles.xCharacterChipActive]}>
-      <Avatar character={character} size={52} />
-      <Text style={[styles.characterName, platform === 'twitter' && styles.xPanelText]} numberOfLines={1}>{character.name}</Text>
+    <Pressable onPress={onPress} style={[styles.characterChip, !enabled && styles.characterChipOff, active && styles.characterChipActive, platform === 'twitter' && styles.xCharacterChip, platform === 'twitter' && active && styles.xCharacterChipActive]}>
+      <View style={!enabled && styles.characterAvatarOff}>
+        <Avatar character={character} size={52} />
+      </View>
+      <Text style={[styles.characterName, !enabled && styles.characterNameOff, platform === 'twitter' && styles.xPanelText]} numberOfLines={1}>{character.name}</Text>
     </Pressable>
   );
 }
 
-type DmLikeMessage = { id?: string; from: string; author?: string; body: string; createdAt?: number };
+type DmLikeMessage = { id?: string; from: string; fromName?: string; author?: string; body: string; createdAt?: number };
+type NormalizedSnsDmThread = SNSDmThread & { kind: 'user' | 'thirdParty'; participants: SNSDmParticipant[]; messages: SNSDmMessage[] };
 
 function platformName(platform: SNSPost['platform']) {
   return platform === 'instagram' ? 'Instagram' : 'X';
 }
 
-function dmSenderName(message: DmLikeMessage, character?: SNSGodCharacter, userName = '나') {
+function dmAvatarUri(character?: SNSGodCharacter): string {
+  const uri = character?.profileImage || character?.avatar;
+  return isRenderableMediaUri(uri) ? String(uri) : '';
+}
+
+function cleanParticipantName(value: string | undefined) {
+  return String(value || '').replace(/^@/, '').trim();
+}
+
+function participantKey(value: string | undefined) {
+  return cleanParticipantName(value).toLowerCase();
+}
+
+function participantId(role: SNSDmParticipant['role'], name: string) {
+  return `${role}:${participantKey(name).replace(/[^a-z0-9가-힣_-]/gi, '_') || 'unknown'}`;
+}
+
+function userParticipant(userName: string): SNSDmParticipant {
+  return { id: 'user', name: userName || '나', role: 'user' };
+}
+
+function characterParticipant(character?: SNSGodCharacter): SNSDmParticipant {
+  return {
+    id: character ? `character:${character.id}` : 'character',
+    name: character?.name || '캐릭터',
+    handle: character?.handle,
+    avatar: character ? dmAvatarUri(character) : undefined,
+    role: 'character'
+  };
+}
+
+function thirdPartyParticipant(name: string): SNSDmParticipant {
+  const finalName = cleanParticipantName(name) || 'DM 상대';
+  return { id: participantId('thirdParty', finalName), name: finalName, role: 'thirdParty' };
+}
+
+function titleParticipants(title: string) {
+  const cleaned = String(title || '').replace(/\s+DM$/i, '').trim();
+  const arrow = cleaned.match(/^(.+?)\s*(?:↔|→|->|to)\s*(.+)$/i);
+  if (arrow) return [cleanParticipantName(arrow[1]), cleanParticipantName(arrow[2])].filter(Boolean).slice(0, 2);
+  const dm = cleaned.match(/^(.+?)\s+DM$/i);
+  return dm ? [cleanParticipantName(dm[1])] : [];
+}
+
+function isCharacterName(value: string | undefined, character?: SNSGodCharacter) {
+  const raw = participantKey(value);
+  if (!raw) return false;
+  return ['character', 'bot', participantKey(character?.id), participantKey(character?.name), participantKey(character?.handle)].filter(Boolean).includes(raw);
+}
+
+function isUserName(value: string | undefined, userName: string) {
+  const raw = participantKey(value);
+  return raw === 'user' || raw === 'me' || raw === participantKey(userName);
+}
+
+function findParticipant(participants: SNSDmParticipant[], raw: string | undefined) {
+  const key = participantKey(raw);
+  return participants.find(participant =>
+    participantKey(participant.id) === key
+    || participantKey(participant.name) === key
+    || participantKey(participant.handle) === key
+  );
+}
+
+function inferDmParticipants(thread: SNSDmThread, character: SNSGodCharacter | undefined, userName: string): SNSDmParticipant[] {
+  const result: SNSDmParticipant[] = [];
+  const add = (participant: SNSDmParticipant) => {
+    if (!result.some(item => item.id === participant.id || participantKey(item.name) === participantKey(participant.name))) result.push(participant);
+  };
+  if (thread.kind === 'user') add(userParticipant(userName));
+  (thread.participants || []).forEach(participant => add({
+    ...participant,
+    id: participant.id || participantId(participant.role || 'thirdParty', participant.name),
+    role: participant.role || 'thirdParty'
+  }));
+  const characterPart = characterParticipant(character);
+  add(characterPart);
+  titleParticipants(thread.title).forEach(name => {
+    if (isCharacterName(name, character)) add(characterPart);
+    else if (isUserName(name, userName)) add(userParticipant(userName));
+    else add(thirdPartyParticipant(name));
+  });
+  thread.messages.forEach(message => {
+    const raw = message.fromName || message.author || message.from;
+    if (isUserName(raw, userName)) add(userParticipant(userName));
+    else if (isCharacterName(raw, character)) add(characterPart);
+    else if (raw && raw !== 'thirdParty') add(thirdPartyParticipant(raw));
+  });
+  if (thread.kind !== 'user' && !result.some(item => item.role === 'thirdParty')) add(thirdPartyParticipant('DM 상대'));
+  return result;
+}
+
+function resolveSnsDmSender(message: DmLikeMessage, thread: NormalizedSnsDmThread, character: SNSGodCharacter | undefined, userName: string) {
+  const raw = message.fromName || message.author || message.from;
+  if (isUserName(raw, userName)) return thread.participants.find(item => item.role === 'user') || userParticipant(userName);
+  if (isCharacterName(raw, character)) return thread.participants.find(item => item.role === 'character') || characterParticipant(character);
+  return findParticipant(thread.participants, raw) || thirdPartyParticipant(raw || 'DM 상대');
+}
+
+function normalizeSnsDmThread(thread: SNSDmThread, post: SNSPost | undefined, character: SNSGodCharacter | undefined, userName: string): NormalizedSnsDmThread {
+  const kind = thread.kind === 'thirdParty' || thread.id.startsWith('postdm:') ? 'thirdParty' : 'user';
+  const participants = inferDmParticipants({ ...thread, kind }, character, userName);
+  const charPart = participants.find(item => item.role === 'character') || characterParticipant(character);
+  const thirdPart = participants.find(item => item.role === 'thirdParty');
+  const allCharacter = kind === 'thirdParty' && thread.messages.length > 1 && thread.messages.every(message => isCharacterName(message.fromName || message.author || message.from, character));
+  const messages = thread.messages.map((message, index) => {
+    const fallbackSender = allCharacter && thirdPart && index % 2 === 0 ? thirdPart : undefined;
+    return {
+      id: String(message.id || `${thread.id}_${index}`),
+      from: fallbackSender?.id || message.from || charPart.id,
+      fromName: fallbackSender?.name || message.fromName || message.author,
+      author: message.author,
+      body: message.body,
+      createdAt: Number(message.createdAt || Date.now())
+    };
+  });
+  return { ...thread, kind, participants, messages, context: thread.context || (post ? `${platformName(post.platform)} post by ${post.displayName || character?.name || 'Character'}: ${post.content}` : thread.context) };
+}
+
+function postDmToThread(dm: { id: string; title: string; participants?: SNSDmParticipant[]; messages: DmLikeMessage[] }, post: SNSPost, character?: SNSGodCharacter): SNSDmThread {
+  return {
+    id: `postdm:${post.id}:${dm.id}`,
+    postId: post.id,
+    platformIndex: 0,
+    characterId: post.characterId,
+    kind: 'thirdParty',
+    title: dm.title,
+    context: `${platformName(post.platform)} post by ${post.displayName || character?.name || 'Character'}: ${post.content}`,
+    participants: dm.participants,
+    messages: dm.messages.map((message, index) => ({
+      id: String(message.id || `postdmmsg_${index}`),
+      from: message.from,
+      fromName: message.fromName,
+      author: message.author,
+      body: message.body,
+      createdAt: Number(message.createdAt || Date.now())
+    })),
+    createdAt: Number(post.createdAt || Date.now()),
+    updatedAt: Number(post.createdAt || Date.now())
+  };
+}
+
+function dmThreadTitle(thread: NormalizedSnsDmThread, character?: SNSGodCharacter) {
+  if (thread.kind === 'user') return `나와 ${character?.name || '캐릭터'}의 DM`;
+  const visible = thread.participants.filter(item => item.role !== 'user').slice(0, 2);
+  if (visible.length >= 2) return `${visible[0].name} ↔ ${visible[1].name}`;
+  return `${character?.name || '캐릭터'}의 SNS DM`;
+}
+
+function dmSenderName(message: DmLikeMessage, character?: SNSGodCharacter, userName = '나', thread?: NormalizedSnsDmThread) {
+  if (thread) return resolveSnsDmSender(message, thread, character, userName).name;
   if (message.from === 'user') return userName;
   if (message.from === 'character') return character?.name || message.author || 'Character';
   if (message.from === 'thirdParty') return message.author || '제3자';
-  return message.author || message.from || '상대';
+  return message.author || message.fromName || message.from || '상대';
 }
 
-function isUserDmMessage(message: DmLikeMessage, userName = '나') {
-  return message.from === 'user' || message.from === userName || message.author === userName;
+function AvatarToken({ participant, character, size = 30 }: { participant: SNSDmParticipant; character?: SNSGodCharacter; size?: number }) {
+  const uri = participant.role === 'character' ? dmAvatarUri(character) || participant.avatar : participant.avatar;
+  return uri ? (
+    <Image source={{ uri }} style={[styles.dmAvatarPhoto, { width: size, height: size, borderRadius: size / 2 }]} />
+  ) : (
+    <View style={[styles.dmInitialAvatar, participant.role === 'thirdParty' && styles.dmThirdAvatar, { width: size, height: size, borderRadius: size / 2 }]}>
+      <Text style={styles.dmInitialText}>{participant.name.slice(0, 1)}</Text>
+    </View>
+  );
+}
+
+function DmAvatarStack({ participants, character }: { participants: SNSDmParticipant[]; character?: SNSGodCharacter }) {
+  return (
+    <View style={styles.dmAvatarStack}>
+      {participants.slice(0, 2).map((participant, index) => (
+        <View key={participant.id} style={[styles.dmAvatarStackItem, index > 0 && styles.dmAvatarStackOverlap]}>
+          <AvatarToken participant={participant} character={character} size={38} />
+        </View>
+      ))}
+    </View>
+  );
 }
 
 function DmCard({ thread, platform, character, userName }: { thread: SNSDmThread; platform: SNSPost['platform']; character?: SNSGodCharacter; userName: string }) {
-  const last = thread.messages[thread.messages.length - 1];
-  const sender = last ? dmSenderName(last, character, userName) : '새 대화';
-  const target = character?.name || thread.title;
+  const normalized = normalizeSnsDmThread(thread, undefined, character, userName);
+  const last = normalized.messages[normalized.messages.length - 1];
+  const sender = last ? dmSenderName(last, character, userName, normalized) : '새 대화';
   return (
     <View style={styles.dmCard}>
       <View style={styles.dmCardTop}>
-        <Text style={styles.dmPlatformPill}>{platformName(platform)}</Text>
+        <Text style={styles.dmPlatformPill}>{normalized.kind === 'thirdParty' ? '읽기 전용' : '내 DM'}</Text>
         {thread.unread ? <Text style={styles.dmBadge}>{thread.unread}</Text> : null}
       </View>
-      <Text style={styles.dmCardTitle} numberOfLines={1}>{target}</Text>
-      <Text style={styles.dmCardMeta} numberOfLines={1}>대상: {thread.title}</Text>
+      <DmAvatarStack participants={normalized.participants.filter(item => item.role !== 'user')} character={character} />
+      <Text style={styles.dmCardTitle} numberOfLines={1}>{dmThreadTitle(normalized, character)}</Text>
+      <Text style={styles.dmCardMeta} numberOfLines={1}>{platformName(platform)} · {normalized.kind === 'thirdParty' ? 'SNS-side DM' : '게시물에서 이어진 대화'}</Text>
       <Text style={styles.dmCardBody} numberOfLines={2}>{sender}: {last?.body || '새 SNS DM'}</Text>
     </View>
   );
 }
 
-function DmModal({ thread, character, platform, userName, value, onChangeText, onClose, onSend, onAiSend, loading }: {
+function DmModal({ thread, post, character, platform, userName, value, onChangeText, onClose, onSend, loading }: {
   thread?: SNSDmThread;
+  post?: SNSPost;
   character?: SNSGodCharacter;
   platform: SNSPost['platform'];
   userName: string;
@@ -483,79 +712,88 @@ function DmModal({ thread, character, platform, userName, value, onChangeText, o
   onChangeText: (value: string) => void;
   onClose: () => void;
   onSend: () => void;
-  onAiSend: () => void;
   loading: boolean;
 }) {
   if (!thread) return null;
+  const normalized = normalizeSnsDmThread(thread, post, character, userName);
+  const title = dmThreadTitle(normalized, character);
+  const visibleParticipants = normalized.kind === 'user'
+    ? [userParticipant(userName), characterParticipant(character)]
+    : normalized.participants.filter(item => item.role !== 'user').slice(0, 2);
+  const postAuthor = post?.displayName || character?.name || '캐릭터';
   return (
     <View style={styles.modal}>
-      <View style={[styles.dmPanel, platform === 'twitter' && styles.xDmPanel]}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.dmPanel, platform === 'twitter' && styles.xDmPanel]}>
         <View style={[styles.dmPanelHeader, platform === 'twitter' && styles.xDmPanelHeader]}>
           <View style={styles.dmHeaderIdentity}>
-            <Avatar character={character} size={38} />
+            <DmAvatarStack participants={visibleParticipants} character={character} />
             <View style={styles.dmHeaderText}>
-              <Text style={[styles.dmPanelTitle, platform === 'twitter' && styles.xDmPanelTitle]}>{character?.name || thread.title}</Text>
-              <Text style={[styles.dmPanelSub, platform === 'twitter' && styles.xDmPanelSub]}>{platformName(platform)} DM · 받는 사람 {character?.name || '상대'} · 보낸 사람 {userName}</Text>
+              <Text style={[styles.dmPanelTitle, platform === 'twitter' && styles.xDmPanelTitle]}>{title}</Text>
+              <Text style={[styles.dmPanelSub, platform === 'twitter' && styles.xDmPanelSub]}>{platformName(platform)} · {normalized.kind === 'thirdParty' ? 'SNS-side DM · 읽기 전용' : '게시물에서 이어진 대화'}</Text>
             </View>
           </View>
+          {normalized.kind === 'thirdParty' ? <Text style={styles.readOnlyBadge}>읽기 전용</Text> : null}
           <Pressable onPress={onClose} style={styles.dmPanelClose}><Text style={styles.dmPanelCloseText}>닫기</Text></Pressable>
         </View>
         <FlatList
-          data={thread.messages}
+          data={normalized.messages}
           keyExtractor={item => item.id}
+          keyboardShouldPersistTaps="handled"
+          ListHeaderComponent={(
+            <View style={[styles.dmPostContextCard, platform === 'twitter' && styles.xDmPostContextCard]}>
+              <View style={styles.dmPostContextTop}>
+                <Text style={styles.dmPlatformPill}>{platformName(platform)}</Text>
+                <Text style={styles.dmContextBadge}>{normalized.kind === 'thirdParty' ? 'SNS-side DM' : '내 DM'}</Text>
+                {normalized.kind === 'thirdParty' ? <Text style={styles.dmContextBadge}>읽기 전용</Text> : null}
+              </View>
+              <Text style={[styles.dmPostAuthor, platform === 'twitter' && styles.xPanelText]}>{postAuthor}</Text>
+              <Text style={[styles.dmPostPreview, platform === 'twitter' && styles.xSubtitle]} numberOfLines={2}>{post?.content || normalized.context || 'SNS 게시물에서 이어진 DM'}</Text>
+              {post?.image ? <Image source={{ uri: post.image }} style={styles.dmPostThumb} /> : null}
+            </View>
+          )}
+          ListFooterComponent={loading && normalized.kind === 'user' ? <TypingIndicator /> : null}
           contentContainerStyle={[styles.dmMessages, platform === 'twitter' && styles.xDmMessages]}
-          renderItem={({ item }) => (
-            <DmMessageBubble message={item} character={character} userName={userName} platform={platform} />
+          renderItem={({ item, index }) => (
+            <DmMessageBubble message={normalized.messages[index]} thread={normalized} character={character} userName={userName} platform={platform} previous={normalized.messages[index - 1]} />
           )}
         />
-        <View style={[styles.dmComposer, platform === 'twitter' && styles.xDmComposer]}>
-          <TextInput value={value} onChangeText={onChangeText} style={[styles.dmInput, platform === 'twitter' && styles.xDmInput]} placeholder={`${character?.name || '상대'}에게 DM`} placeholderTextColor="#aaa" />
-          <Pressable onPress={onSend} style={styles.dmSend}><Text style={styles.dmSendText}>보내기</Text></Pressable>
-          <Pressable onPress={onAiSend} disabled={loading} style={[styles.dmSend, styles.dmAiSend, loading && styles.disabled]}><Text style={styles.dmAiText}>저장만</Text></Pressable>
-        </View>
-      </View>
+        {normalized.kind === 'user' ? (
+          <View style={[styles.dmComposer, platform === 'twitter' && styles.xDmComposer]}>
+            <TextInput value={value} onChangeText={onChangeText} editable={!loading} style={[styles.dmInput, platform === 'twitter' && styles.xDmInput]} placeholder={`${character?.name || '상대'}에게 DM 보내기`} placeholderTextColor="#aaa" />
+            <Pressable onPress={onSend} disabled={loading || !value.trim()} style={[styles.dmSend, (loading || !value.trim()) && styles.disabled]}><Text style={styles.dmSendText}>{loading ? '답장 중...' : '보내기'}</Text></Pressable>
+          </View>
+        ) : (
+          <View style={[styles.dmReadOnlyFooter, platform === 'twitter' && styles.xDmComposer]}>
+            <Text style={[styles.dmReadOnlyText, platform === 'twitter' && styles.xSubtitle]}>이 DM은 SNS 게시물에 딸린 제3자 대화라 직접 답장할 수 없어요.</Text>
+          </View>
+        )}
+      </KeyboardAvoidingView>
     </View>
   );
 }
 
-function DmMessageBubble({ message, character, userName, platform }: { message: DmLikeMessage; character?: SNSGodCharacter; userName: string; platform: SNSPost['platform'] }) {
-  const mine = isUserDmMessage(message, userName);
+function DmMessageBubble({ message, thread, character, userName, platform, previous }: { message: SNSDmMessage; thread: NormalizedSnsDmThread; character?: SNSGodCharacter; userName: string; platform: SNSPost['platform']; previous?: SNSDmMessage }) {
+  const sender = resolveSnsDmSender(message, thread, character, userName);
+  const previousSender = previous ? resolveSnsDmSender(previous, thread, character, userName) : undefined;
+  const mine = sender.role === 'user' || (thread.kind === 'thirdParty' && sender.role === 'character');
+  const showAvatar = !mine && previousSender?.id !== sender.id;
+  const showLabel = thread.kind === 'thirdParty' || previousSender?.id !== sender.id;
   return (
     <View style={[styles.dmMessageRow, mine && styles.dmMessageRowMine]}>
-      {!mine ? <View style={styles.dmAvatarMini}><Text style={styles.dmAvatarMiniText}>{dmSenderName(message, character, userName).slice(0, 1)}</Text></View> : null}
-      <View style={[styles.dmBubble, mine ? styles.dmBubbleMine : styles.dmBubbleOther, platform === 'twitter' && !mine && styles.xDmBubbleOther, platform === 'twitter' && mine && styles.xDmBubbleMine]}>
-        <Text style={[styles.dmSpeaker, mine && styles.dmSpeakerMine, platform === 'twitter' && !mine && styles.xDmSpeaker]}>{mine ? `${userName} · 보낸 메시지` : `${dmSenderName(message, character, userName)} · 받은 메시지`}</Text>
+      {!mine ? <View style={styles.dmBubbleAvatarSlot}>{showAvatar ? <AvatarToken participant={sender} character={character} size={28} /> : null}</View> : null}
+      <View style={[styles.dmBubble, sender.role === 'thirdParty' ? styles.dmBubbleThirdParty : mine ? styles.dmBubbleMine : styles.dmBubbleOther, platform === 'twitter' && sender.role !== 'user' && styles.xDmBubbleOther, platform === 'twitter' && mine && styles.xDmBubbleMine]}>
+        {showLabel ? <Text style={[styles.dmSpeaker, mine && styles.dmSpeakerMine, platform === 'twitter' && !mine && styles.xDmSpeaker]}>{sender.name}</Text> : null}
         <Text style={[styles.dmBubbleText, platform === 'twitter' && !mine && styles.xDmBubbleText, platform === 'twitter' && mine && styles.xDmBubbleTextMine]}>{message.body}</Text>
       </View>
     </View>
   );
 }
 
-function ReadOnlyDmModal({ platform, title, messages, onClose }: {
-  platform: SNSPost['platform'];
-  title: string;
-  messages: { id?: string; from: string; body: string; createdAt?: number }[];
-  onClose: () => void;
-}) {
+function TypingIndicator() {
   return (
-    <View style={styles.modal}>
-      <View style={[styles.dmPanel, platform === 'twitter' && styles.xDmPanel]}>
-        <View style={[styles.dmPanelHeader, platform === 'twitter' && styles.xDmPanelHeader]}>
-          <View style={styles.dmHeaderText}>
-            <Text style={[styles.dmPanelTitle, platform === 'twitter' && styles.xDmPanelTitle]}>{title}</Text>
-            <Text style={[styles.dmPanelSub, platform === 'twitter' && styles.xDmPanelSub]}>{platformName(platform)} 읽기 전용 DM</Text>
-          </View>
-          <Pressable onPress={onClose} style={styles.dmPanelClose}><Text style={styles.dmPanelCloseText}>닫기</Text></Pressable>
-        </View>
-        <FlatList
-          data={messages}
-          keyExtractor={(item, index) => String(item.id || `${item.createdAt || 0}_${index}`)}
-          contentContainerStyle={[styles.dmMessages, platform === 'twitter' && styles.xDmMessages]}
-          renderItem={({ item }) => (
-            <DmMessageBubble message={item} userName="나" platform={platform} />
-          )}
-        />
-      </View>
+    <View style={styles.dmTypingPill}>
+      <ActivityIndicator size="small" color={colors.sub} />
+      <Text style={styles.dmTypingText}>답장 중...</Text>
     </View>
   );
 }
@@ -564,7 +802,7 @@ function SnsDmHubModal({ post, character, userThread, thirdPartyDms, onClose, on
   post: SNSPost;
   character?: SNSGodCharacter;
   userThread?: SNSDmThread;
-  thirdPartyDms: { id: string; title: string; messages: { id?: string; from: string; body: string; createdAt?: number }[] }[];
+  thirdPartyDms: { id: string; title: string; participants?: SNSDmParticipant[]; messages: DmLikeMessage[] }[];
   onClose: () => void;
   onOpenUserThread: (threadId: string) => void;
   onOpenThirdParty: (dmId: string) => void;
@@ -597,8 +835,8 @@ function SnsDmHubModal({ post, character, userThread, thirdPartyDms, onClose, on
           ) : null}
           {thirdPartyDms.map(dm => (
             <Pressable key={dm.id} onPress={() => onOpenThirdParty(dm.id)} style={styles.dmHubCard}>
-              <Text style={styles.dmHubCardKicker}>제3자 DM</Text>
-              <Text style={styles.dmHubCardTitle}>{dm.title}</Text>
+              <Text style={styles.dmHubCardKicker}>읽기 전용</Text>
+              <Text style={styles.dmHubCardTitle}>{dmThreadTitle(normalizeSnsDmThread(postDmToThread(dm, post, character), post, character, '나'), character)}</Text>
               <Text style={styles.dmHubCardBody} numberOfLines={2}>{dm.messages[dm.messages.length - 1] ? `${dm.messages[dm.messages.length - 1]?.from}: ${dm.messages[dm.messages.length - 1]?.body}` : '읽기 전용 DM'}</Text>
             </Pressable>
           ))}
@@ -609,11 +847,21 @@ function SnsDmHubModal({ post, character, userThread, thirdPartyDms, onClose, on
   );
 }
 
-function PostCard({ platform, post, character, onLike, onDelete, onComment, onOpenDm }: { platform: SNSPost['platform']; post: SNSPost; character?: SNSGodCharacter; onLike: () => void; onDelete: () => void; onComment: (content: string) => void; onOpenDm: () => void }) {
+function PostCard({ platform, post, character, dmEnabled, onLike, onDelete, onComment, onOpenDm }: { platform: SNSPost['platform']; post: SNSPost; character?: SNSGodCharacter; dmEnabled: boolean; onLike: () => void; onDelete: () => void; onComment: (content: string) => Promise<void> | void; onOpenDm: () => void }) {
   const [comment, setComment] = useState('');
-  function submitComment() {
-    onComment(comment);
-    setComment('');
+  const [submittingComment, setSubmittingComment] = useState(false);
+  async function submitComment() {
+    const trimmed = comment.trim();
+    if (!trimmed || submittingComment) return;
+    setSubmittingComment(true);
+    try {
+      await onComment(trimmed);
+      setComment('');
+    } catch (error) {
+      Alert.alert('댓글 작성 실패', error instanceof Error ? error.message : String(error));
+    } finally {
+      setSubmittingComment(false);
+    }
   }
   return (
     <View style={[styles.postCard, platform === 'instagram' && styles.instagramCard, platform === 'twitter' && styles.tweetCard]}>
@@ -651,18 +899,18 @@ function PostCard({ platform, post, character, onLike, onDelete, onComment, onOp
       <View style={[styles.postFooter, platform === 'twitter' && styles.xFooter]}>
         <Pressable onPress={onLike}><Text style={[styles.footerText, platform === 'twitter' && styles.xFooterText]}>{platform === 'twitter' ? `♡ ${post.likes || 0}` : `좋아요 ${post.likes || 0}개`}</Text></Pressable>
         <Text style={[styles.footerText, platform === 'twitter' && styles.xFooterText]}>{platform === 'twitter' ? `💬 ${post.replies || post.comments?.length || 0}` : `댓글 ${post.replies || post.comments?.length || 0}개`}</Text>
-        <Pressable onPress={onOpenDm}><Text style={[styles.footerText, platform === 'twitter' && styles.xFooterText]}>DM</Text></Pressable>
+        <Pressable onPress={onOpenDm} disabled={!dmEnabled}><Text style={[styles.footerText, platform === 'twitter' && styles.xFooterText, !dmEnabled && styles.footerTextDisabled]}>DM</Text></Pressable>
         {post.platform === 'twitter' ? <Text style={styles.xFooterText}>↗</Text> : null}
       </View>
       {(post.comments || []).slice(-5).map(item => (
         <View key={item.id} style={styles.commentRow}>
-          <Text style={styles.commentAuthor}>{item.author}</Text>
-          <Text style={styles.commentText}>{item.content}</Text>
+          <Text style={[styles.commentAuthor, platform === 'twitter' && styles.xCommentAuthor]}>{item.author}</Text>
+          <Text style={[styles.commentText, platform === 'twitter' && styles.xCommentText]}>{item.content}</Text>
         </View>
       ))}
       <View style={[styles.commentComposer, platform === 'twitter' && styles.xCommentComposer]}>
-        <TextInput value={comment} onChangeText={setComment} style={styles.commentInput} placeholder="댓글 달기" placeholderTextColor="#aaa" />
-        <Pressable onPress={submitComment} style={styles.commentButton}><Text style={styles.commentButtonText}>게시</Text></Pressable>
+        <TextInput value={comment} onChangeText={setComment} onSubmitEditing={submitComment} returnKeyType="send" style={[styles.commentInput, platform === 'twitter' && styles.xCommentInput]} placeholder="댓글 달기" placeholderTextColor={platform === 'twitter' ? '#9aa0a6' : '#aaa'} />
+        <Pressable onPress={submitComment} disabled={!comment.trim() || submittingComment} style={[styles.commentButton, platform === 'twitter' && styles.xCommentButton, (!comment.trim() || submittingComment) && styles.commentButtonDisabled]}><Text style={[styles.commentButtonText, platform === 'twitter' && styles.xCommentButtonText]}>{submittingComment ? '...' : '게시'}</Text></Pressable>
       </View>
     </View>
   );
@@ -685,54 +933,69 @@ const styles = StyleSheet.create({
   xHeader: { backgroundColor: '#000000', borderBottomColor: '#2f3336' },
   headerTitle: { flex: 1 },
   title: { fontSize: 18, fontWeight: '900', color: colors.text },
-  xTitle: { color: '#e7e9ea', fontSize: 21 },
+  xTitle: { color: '#ffffff', fontSize: 24 },
   xPanelText: { color: '#e7e9ea' },
   subtitle: { color: colors.sub, fontSize: 12, fontWeight: '700' },
-  xSubtitle: { color: '#71767b' },
+  xSubtitle: { color: '#9aa0a6' },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   actionPill: { minHeight: 38, paddingHorizontal: 12, borderRadius: 19, backgroundColor: '#eee8dc', borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
+  xActionPill: { backgroundColor: '#000000', borderColor: '#3a3f44' },
   actionPillActive: { backgroundColor: colors.accent, borderColor: '#c4a842' },
+  xActionPillActive: { backgroundColor: '#f5f0e6', borderColor: '#f5f0e6' },
   actionPillText: { color: colors.text, fontWeight: '900', fontSize: 12 },
+  xActionPillText: { color: '#c9d1d9' },
   actionPillTextActive: { color: '#241a00' },
+  xActionPillTextActive: { color: '#111111' },
   roundIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#eee8dc', borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', position: 'relative' },
-  xRoundIcon: { backgroundColor: '#000000', borderColor: '#2f3336' },
+  xRoundIcon: { backgroundColor: '#000000', borderColor: '#3a3f44' },
   roundIconActive: { backgroundColor: '#111', borderColor: '#111' },
   roundIconText: { color: colors.text, fontWeight: '900', fontSize: 13, lineHeight: 18 },
+  xRoundIconText: { color: '#c9d1d9' },
   roundIconTextActive: { color: '#fff' },
   alertBadge: { position: 'absolute', top: -3, right: -4, minWidth: 19, height: 19, borderRadius: 10, overflow: 'hidden', lineHeight: 19, textAlign: 'center', backgroundColor: colors.danger, color: '#fff', fontWeight: '900', fontSize: 11 },
   characterRail: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   xCharacterRail: { borderBottomColor: '#2f3336', backgroundColor: '#000000' },
-  characterRailContent: { paddingHorizontal: 12, paddingBottom: 12, gap: 10 },
-  characterChip: { width: 78, alignItems: 'center', gap: 6, padding: 8, borderRadius: 12 },
+  characterRailContent: { paddingHorizontal: 12, paddingBottom: 8, gap: 8 },
+  characterChip: { width: 76, alignItems: 'center', gap: 5, padding: 7, borderRadius: 12, position: 'relative' },
+  characterChipOff: { opacity: 0.48 },
   characterChipActive: { backgroundColor: '#fff1b8' },
   xCharacterChip: { borderRadius: 0 },
   xCharacterChipActive: { backgroundColor: '#101214' },
+  characterAvatarOff: { opacity: 0.6 },
   allCharacterAvatar: { width: 52, height: 52, borderRadius: 26, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
   xAllCharacterAvatar: { borderColor: '#2f3336', backgroundColor: '#000000' },
   allCharacterAvatarText: { color: colors.text, fontSize: 12, fontWeight: '900' },
   characterName: { fontSize: 12, color: colors.text, fontWeight: '900' },
-  generator: { margin: 12, padding: 14, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fff' },
+  characterNameOff: { color: colors.sub },
+  generator: { margin: 8, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fff' },
   xGenerator: { backgroundColor: '#080808', borderColor: '#2f3336' },
-  generatorTitle: { fontSize: 16, fontWeight: '900', color: colors.text },
-  generatorSub: { marginTop: 3, color: colors.sub, fontSize: 12 },
-  optionBadges: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
+  generatorTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  generatorTitle: { fontSize: 15, fontWeight: '900', color: colors.text },
+  generatorPower: { minWidth: 44, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
+  generatorPowerOn: { backgroundColor: '#ecfdf5', borderColor: '#9bd8b7' },
+  generatorPowerOff: { backgroundColor: '#f3f4f6', borderColor: '#d1d5db' },
+  generatorPowerText: { color: '#047857', fontSize: 11, fontWeight: '900' },
+  generatorPowerTextOff: { color: '#6b7280' },
+  generatorSub: { marginTop: 3, color: colors.sub, fontSize: 11, lineHeight: 16 },
+  optionBadges: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 8 },
   optionBadge: { paddingHorizontal: 9, paddingVertical: 5, borderRadius: 999, backgroundColor: '#eef4ff', color: '#305170', fontSize: 11, fontWeight: '900', overflow: 'hidden' },
-  settingGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
-  togglePill: { minHeight: 34, paddingHorizontal: 10, borderRadius: 17, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
+  xOptionBadge: { backgroundColor: '#14202a', color: '#b9d7ff' },
+  settingGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 9 },
+  togglePill: { minHeight: 30, paddingHorizontal: 8, borderRadius: 15, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
   togglePillOn: { backgroundColor: colors.accent, borderColor: '#c4a842' },
-  toggleText: { color: colors.sub, fontWeight: '900', fontSize: 12 },
+  toggleText: { color: colors.sub, fontWeight: '900', fontSize: 11 },
   toggleTextOn: { color: '#241a00' },
-  twoCols: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  twoCols: { flexDirection: 'row', gap: 8, marginTop: 8 },
   col: { flex: 1 },
-  fieldLabel: { marginTop: 10, marginBottom: 5, color: colors.sub, fontSize: 12, fontWeight: '900' },
-  fieldInput: { minHeight: 40, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', paddingHorizontal: 10, color: colors.text },
-  subjectInput: { minHeight: 64, paddingVertical: 9 },
+  fieldLabel: { marginTop: 8, marginBottom: 4, color: colors.sub, fontSize: 11, fontWeight: '900' },
+  fieldInput: { minHeight: 36, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', paddingHorizontal: 9, color: colors.text, fontSize: 13 },
+  subjectInput: { minHeight: 54, paddingVertical: 8 },
   xInput: { backgroundColor: '#000', borderColor: '#2f3336', color: '#e7e9ea' },
-  generatorActions: { flexDirection: 'row', gap: 8 },
-  primary: { marginTop: 12, minHeight: 42, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  generatorActions: { flexDirection: 'row', gap: 7 },
+  primary: { marginTop: 10, minHeight: 40, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
   primaryText: { color: '#241a00', fontWeight: '900' },
-  secondary: { marginTop: 10, minHeight: 40, borderRadius: 8, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fffefa' },
-  secondaryText: { color: colors.text, fontWeight: '900' },
+  secondary: { marginTop: 8, minHeight: 36, borderRadius: 8, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fffefa', paddingHorizontal: 8 },
+  secondaryText: { color: colors.text, fontWeight: '900', fontSize: 13 },
   pendingImage: { marginTop: 12, width: '100%', height: 180, borderRadius: 8, backgroundColor: '#eee' },
   feed: { padding: 12, gap: 14, paddingBottom: 28 },
   instagramFeed: { maxWidth: 720, alignSelf: 'center', width: '100%' },
@@ -778,25 +1041,39 @@ const styles = StyleSheet.create({
   tags: { paddingHorizontal: 16, paddingBottom: 14, color: '#77b8ff', fontWeight: '800' },
   xTags: { color: '#1d9bf0' },
   xStats: { minHeight: 36, paddingHorizontal: 16, flexDirection: 'row', gap: 14, alignItems: 'center', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#2f3336' },
-  xStatText: { color: '#71767b', fontWeight: '800' },
+  xStatText: { color: '#9aa0a6', fontWeight: '800' },
   postFooter: { minHeight: 44, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 16, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   xFooter: { borderTopColor: '#2f3336', justifyContent: 'space-between' },
   footerText: { color: colors.sub, fontWeight: '800' },
-  xFooterText: { color: '#71767b', fontWeight: '800' },
+  xFooterText: { color: '#b8bec5', fontWeight: '900' },
+  footerTextDisabled: { opacity: 0.34 },
   commentRow: { paddingHorizontal: 16, paddingVertical: 4, flexDirection: 'row', gap: 8 },
   commentAuthor: { color: colors.text, fontWeight: '900' },
+  xCommentAuthor: { color: '#e7e9ea' },
   commentText: { flex: 1, color: colors.text },
+  xCommentText: { color: '#d0d7de' },
   commentComposer: { flexDirection: 'row', gap: 8, padding: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   xCommentComposer: { borderTopColor: '#2f3336', backgroundColor: '#000000' },
   commentInput: { flex: 1, minHeight: 38, borderRadius: 19, paddingHorizontal: 12, backgroundColor: '#f7f5ef', color: colors.text },
+  xCommentInput: { backgroundColor: '#15181c', color: '#e7e9ea' },
   commentButton: { minWidth: 52, minHeight: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
+  xCommentButton: { backgroundColor: '#1d9bf0' },
+  commentButtonDisabled: { opacity: 0.45 },
   commentButtonText: { color: '#241a00', fontWeight: '900' },
+  xCommentButtonText: { color: '#ffffff' },
   modal: { ...StyleSheet.absoluteFillObject, zIndex: 20, backgroundColor: 'rgba(0,0,0,0.38)', justifyContent: 'flex-end' },
   dmPanel: { maxHeight: '88%', backgroundColor: '#ffffff', borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: 'hidden' },
   xDmPanel: { backgroundColor: '#000000' },
-  dmPanelHeader: { minHeight: 66, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#dbdbdb' },
+  dmPanelHeader: { minHeight: 70, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#dbdbdb' },
   xDmPanelHeader: { borderBottomColor: '#2f3336' },
   dmHeaderIdentity: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  dmHeaderPhoto: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#e9edf5' },
+  dmAvatarStack: { width: 56, minHeight: 42, flexDirection: 'row', alignItems: 'center' },
+  dmAvatarStackItem: { borderWidth: 2, borderColor: '#ffffff', borderRadius: 999, backgroundColor: '#ffffff' },
+  dmAvatarStackOverlap: { marginLeft: -18 },
+  dmInitialAvatar: { backgroundColor: '#edf2f7', alignItems: 'center', justifyContent: 'center' },
+  dmThirdAvatar: { backgroundColor: '#fff7ed' },
+  dmInitialText: { color: '#334155', fontSize: 13, fontWeight: '900' },
   dmHeaderText: { flex: 1, minWidth: 0 },
   dmHubHeaderLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 9 },
   dmHubSub: { marginTop: 2, color: colors.sub, fontSize: 11, fontWeight: '800' },
@@ -804,17 +1081,28 @@ const styles = StyleSheet.create({
   xDmPanelTitle: { color: '#e7e9ea' },
   dmPanelSub: { marginTop: 2, color: '#737373', fontSize: 11, fontWeight: '800' },
   xDmPanelSub: { color: '#71767b' },
+  readOnlyBadge: { marginRight: 6, paddingHorizontal: 9, paddingVertical: 5, borderRadius: 999, overflow: 'hidden', backgroundColor: '#fff1f2', color: '#be123c', fontSize: 11, fontWeight: '900' },
   dmPanelClose: { minHeight: 36, paddingHorizontal: 12, borderRadius: 18, backgroundColor: '#fff' },
   dmPanelCloseText: { lineHeight: 36, color: colors.text, fontWeight: '900' },
-  dmMessages: { padding: 12, gap: 9, backgroundColor: '#ffffff' },
+  dmMessages: { padding: 12, gap: 10, backgroundColor: '#ffffff' },
   xDmMessages: { backgroundColor: '#000000' },
-  dmMessageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 7 },
+  dmPostContextCard: { marginBottom: 10, padding: 11, borderRadius: 8, borderWidth: 1, borderColor: '#e5e7eb', backgroundColor: '#fbfaf7' },
+  xDmPostContextCard: { borderColor: '#2f3336', backgroundColor: '#080808' },
+  dmPostContextTop: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
+  dmContextBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, overflow: 'hidden', backgroundColor: '#ecfdf5', color: '#047857', fontSize: 10, fontWeight: '900' },
+  dmPostAuthor: { marginTop: 8, color: colors.text, fontWeight: '900' },
+  dmPostPreview: { marginTop: 3, color: colors.sub, lineHeight: 19, fontWeight: '700' },
+  dmPostThumb: { marginTop: 8, width: 74, height: 74, borderRadius: 8, backgroundColor: '#e5e7eb' },
+  dmMessageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 7, width: '100%' },
   dmMessageRowMine: { justifyContent: 'flex-end' },
+  dmBubbleAvatarSlot: { width: 30, alignItems: 'center' },
+  dmAvatarPhoto: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#e9edf5' },
   dmAvatarMini: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#e9edf5', alignItems: 'center', justifyContent: 'center' },
   dmAvatarMiniText: { color: '#334155', fontSize: 11, fontWeight: '900' },
-  dmBubble: { maxWidth: '78%', paddingHorizontal: 12, paddingVertical: 9 },
-  dmBubbleOther: { alignSelf: 'flex-start', borderRadius: 18, borderBottomLeftRadius: 5, backgroundColor: '#efefef' },
-  dmBubbleMine: { alignSelf: 'flex-end', borderRadius: 18, borderBottomRightRadius: 5, backgroundColor: '#3797f0' },
+  dmBubble: { maxWidth: '78%', paddingHorizontal: 13, paddingVertical: 9 },
+  dmBubbleOther: { alignSelf: 'flex-start', borderRadius: 18, borderBottomLeftRadius: 5, backgroundColor: '#f0f2f5' },
+  dmBubbleMine: { alignSelf: 'flex-end', borderRadius: 18, borderBottomRightRadius: 5, backgroundColor: '#377dff' },
+  dmBubbleThirdParty: { alignSelf: 'flex-start', borderRadius: 18, borderBottomLeftRadius: 5, borderWidth: 1, borderColor: 'rgba(0,0,0,0.06)', backgroundColor: '#ffffff' },
   xDmBubbleOther: { backgroundColor: '#202327' },
   xDmBubbleMine: { backgroundColor: '#1d9bf0' },
   dmSpeaker: { color: '#737373', fontSize: 10, fontWeight: '900', marginBottom: 3 },
@@ -831,6 +1119,10 @@ const styles = StyleSheet.create({
   dmAiSend: { backgroundColor: '#111' },
   dmSendText: { color: '#ffffff', fontWeight: '900' },
   dmAiText: { color: '#fff', fontWeight: '900' },
+  dmReadOnlyFooter: { padding: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#dbdbdb', backgroundColor: '#ffffff' },
+  dmReadOnlyText: { color: colors.sub, textAlign: 'center', lineHeight: 19, fontWeight: '800' },
+  dmTypingPill: { alignSelf: 'center', marginTop: 6, marginBottom: 2, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#f1f5f9' },
+  dmTypingText: { color: colors.sub, fontSize: 12, fontWeight: '900' },
   dmHubPostPreview: { margin: 12, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa' },
   dmHubPostLabel: { color: colors.sub, fontSize: 11, fontWeight: '900' },
   dmHubPostText: { marginTop: 5, color: colors.text, lineHeight: 20, fontWeight: '700' },

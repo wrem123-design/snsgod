@@ -4,7 +4,7 @@ import { colors } from '../theme';
 import { SNSGodCharacter, SNSGodState } from '../types';
 import { callLLMText, parseJsonObject } from '../logic/api';
 import { makeId } from '../logic/ids';
-import { DEFAULT_PROMPTS } from '../logic/prompts';
+import { DEFAULT_COVER_BACKGROUND_DIRECTION, DEFAULT_PROMPTS } from '../logic/prompts';
 import { createRoom } from '../logic/stateHelpers';
 
 type GeneratedCharacterProfile = {
@@ -63,6 +63,7 @@ export function NewCharacterScreen({ state, onBack, onCreate }: {
       avatarText: finalName.slice(0, 2),
       color: '#95e1d3',
       prompt: prompt.trim(),
+      profileCoverPrompt: DEFAULT_COVER_BACKGROUND_DIRECTION,
       firstMessage: firstMessage.trim(),
       enabled: true,
       proactiveEnabled: true,

@@ -1,12 +1,13 @@
-import { callLLM, generateImageDataUri } from './api';
+import { callLLM, callLLMText, generateImageDataUri, parseJsonObject } from './api';
 import { makeId } from './ids';
-import { DEFAULT_PROMPTS, proactiveInstruction, userNameFor, userProfileFor } from './prompts';
+import { DEFAULT_COVER_BACKGROUND_DIRECTION, DEFAULT_PROMPTS, proactiveInstruction, userNameFor, userProfileFor } from './prompts';
 import { appendMessage, findCharacter } from './stateHelpers';
 import { MAX_GROUP_ROOM_MESSAGES, MAX_SNS_DM_CONTEXT_MESSAGES } from './limits';
 import { GroupRoom, SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
 import { isRoomBusy } from './chatJobs';
 import { notifyRoomMessage, pushNotification } from './notifications';
 import { runDailyDiaryMemory } from './dailyDiary';
+import { characterReferenceImages, randomReferenceImage } from './imageReference';
 
 function minutesSince(timestamp?: number): number {
   if (!timestamp) return 9999;
@@ -194,6 +195,82 @@ function adjustedInitiative(state: SNSGodState, character: SNSGodCharacter, room
   return base;
 }
 
+async function recentCoverPromptFor(state: SNSGodState, character: SNSGodCharacter): Promise<string> {
+  const recentContext = recentCharacterActivityContext(state, character);
+  const extraDirection = String(character.profileCoverPrompt || DEFAULT_COVER_BACKGROUND_DIRECTION).trim();
+  try {
+    const { text } = await callLLMText(state, [
+      {
+        role: 'system',
+        content: [
+          'You write one concise English image-generation prompt for a fictional messenger profile cover.',
+          'Return raw JSON only: {"prompt":"..."}. No markdown, no explanation.',
+          'The cover must be based on the character\'s recent places, movements, errands, calls, chats, or implied current whereabouts.',
+          'Do not create a static personality mood board. Prefer a plausible recent location or trace of activity.',
+          'The image must be a personless wide cover/background: no humans, no face, no body, no silhouette, no character, no crowd, no text, no letters, no logo, no UI, no screenshot.',
+          'Use grounded environmental details. If recent activity is unclear, infer a subtle ordinary place from the latest chat/location instead of inventing a dramatic scene.',
+          'Prompt should be 35-80 words.'
+        ].join('\n')
+      },
+      {
+        role: 'user',
+        content: [
+          `Character name: ${character.name}`,
+          `Character profile:\n${character.prompt || '(empty)'}`,
+          `Character base location: ${character.locationName || state.config.locationName || 'Seoul'}`,
+          extraDirection ? `User cover direction:\n${extraDirection}` : '',
+          `Recent activity context:\n${recentContext || '(no recent activity)'}`
+        ].filter(Boolean).join('\n\n')
+      }
+    ]);
+    const parsed = parseJsonObject<{ prompt?: string; imagePrompt?: string }>(text);
+    const prompt = cleanCoverPrompt(parsed?.prompt || parsed?.imagePrompt || text);
+    if (prompt) return prompt;
+  } catch {
+    // Fall through to deterministic prompt so automation can still run.
+  }
+  return cleanCoverPrompt([
+    `personless wide messenger profile cover background based on ${character.name}'s recent whereabouts`,
+    recentContext || `ordinary place near ${character.locationName || state.config.locationName || 'Seoul'}`,
+    extraDirection,
+    'environmental still life, grounded recent activity trace, no people, no face, no body, no silhouette, no text, no logo, no UI'
+  ].filter(Boolean).join(', '));
+}
+
+function recentCharacterActivityContext(state: SNSGodState, character: SNSGodCharacter): string {
+  const rooms = state.chatRooms[character.id] || [];
+  const lines: string[] = [];
+  for (const room of rooms) {
+    const messages = (state.messages[room.id] || []).slice(-18);
+    for (const message of messages) {
+      if (message.callInvite) continue;
+      const who = message.role === 'user' ? userNameFor(state, character, room) : character.name;
+      const phone = message.phoneLog ? ` [phone: ${String(message.phoneLog)}${message.phoneSummaryContext ? `, ${String(message.phoneSummaryContext)}` : ''}]` : '';
+      const body = String(message.content || message.imageCaption || message.imagePrompt || '').replace(/\s+/g, ' ').trim();
+      if (body || phone) lines.push(`${who}: ${body}${phone}`.trim());
+    }
+  }
+  const logs = Array.isArray(state.callLogs) ? state.callLogs.slice(0, 6) : [];
+  for (const raw of logs) {
+    if (!raw || typeof raw !== 'object') continue;
+    const log = raw as Record<string, unknown>;
+    if (String(log.characterId || '') !== character.id) continue;
+    lines.push(`Call log: ${String(log.summary || log.title || log.status || '').replace(/\s+/g, ' ').trim()}`);
+  }
+  return lines.slice(-24).join('\n').slice(-2800);
+}
+
+function cleanCoverPrompt(value: string): string {
+  return String(value || '')
+    .replace(/```(?:json)?/gi, '')
+    .replace(/```/g, '')
+    .replace(/^\s*["']?(prompt|imagePrompt)["']?\s*[:=]\s*/i, '')
+    .replace(/^["']|["']$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 900);
+}
+
 async function runProfileImageAutomation(state: SNSGodState): Promise<SNSGodState | undefined> {
   if (state.config.autoEnabled === false || state.config.imageGeneration?.enabled !== true) return undefined;
   for (const character of state.characters) {
@@ -210,7 +287,7 @@ async function runProfileImageAutomation(state: SNSGodState): Promise<SNSGodStat
     try {
       if (shouldProfile) {
         const prompt = String(character.profileAvatarPrompt || `portrait profile photo, clear face, casual expression, messenger profile picture, ${character.name}. Character personality: ${character.prompt || ''}`);
-        const image = await generateImageDataUri(state, prompt, character, { referenceImage: String(character.profileReferenceImage || ''), kind: 'profile' });
+        const image = await generateImageDataUri(state, prompt, character, { referenceImage: randomReferenceImage(characterReferenceImages(character)), kind: 'profile' });
         const historyItem = { id: makeId('profile_image'), image, prompt, createdAt: now, kind: 'profile' as const };
         return {
           ...state,
@@ -224,7 +301,7 @@ async function runProfileImageAutomation(state: SNSGodState): Promise<SNSGodStat
         };
       }
       if (shouldCover) {
-        const prompt = String(character.profileCoverPrompt || `quiet mood cover background for ${character.name}, no people, no text. Character mood and personality: ${character.prompt || ''}`);
+        const prompt = await recentCoverPromptFor(state, character);
         const image = await generateImageDataUri(state, prompt, character, { kind: 'cover' });
         const historyItem = { id: makeId('profile_image'), image, prompt, createdAt: now, kind: 'cover' as const };
         return {

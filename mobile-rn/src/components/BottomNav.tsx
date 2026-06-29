@@ -27,7 +27,7 @@ export function BottomNav({ active, onSelect }: {
             onPress={() => onSelect(tab.key)}
             style={[styles.item, selected && styles.itemActive]}
           >
-            {tab.key === 'friends' ? <FriendIcon selected={selected} /> : <Text style={[styles.icon, selected && styles.iconActive]}>{tab.icon}</Text>}
+            {tab.key === 'friends' ? <FriendIcon selected={selected} /> : <Text style={[styles.icon, tab.key === 'twitter' && styles.twitterIcon, selected && styles.iconActive, selected && tab.key === 'twitter' && styles.twitterIconActive]}>{tab.icon}</Text>}
           </Pressable>
         );
       })}
@@ -64,7 +64,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center'
   },
   itemActive: {
-    backgroundColor: '#ffffff'
+    backgroundColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2
   },
   icon: {
     color: '#2e3135',
@@ -72,8 +76,18 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     lineHeight: 28
   },
+  twitterIcon: {
+    fontSize: 26,
+    lineHeight: 31,
+    color: '#111111'
+  },
   iconActive: {
     color: colors.danger
+  },
+  twitterIconActive: {
+    color: '#ff514d',
+    fontSize: 30,
+    lineHeight: 34
   },
   friendIcon: {
     width: 28,

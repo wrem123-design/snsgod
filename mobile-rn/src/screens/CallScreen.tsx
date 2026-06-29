@@ -1,91 +1,114 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, BackHandler, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Animated, BackHandler, Easing, ImageBackground, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
 import { callLLMText, parseJsonObject } from '../logic/api';
 import { appendMessage, findCharacter, findRoom, roomMessages } from '../logic/stateHelpers';
 import { makeId } from '../logic/ids';
 import { formatPhoneDuration, phoneSummaryFromLines } from '../logic/phone';
+import { isRenderableMediaUri } from '../logic/media';
 import { SNSGodState } from '../types';
 
 type CallLine = { id: string; speaker: 'user' | 'character' | 'system'; text: string; createdAt: number };
-type PhoneUiPhase = 'connecting' | 'character_typing' | 'awaiting_user' | 'user_sending' | 'ending';
-type InputMode = 'choices' | 'text';
-type PhoneTurn = { lines?: string[]; characterLines?: string[]; dialogue?: string[]; line?: string; content?: string; text?: string; choices?: string[]; options?: string[] };
+type CallPhase = 'dialing' | 'ringing' | 'connected' | 'character_typing' | 'awaiting_next' | 'awaiting_choice' | 'awaiting_text' | 'user_sending' | 'listening' | 'ending' | 'ended';
+type CallTurnUiMode = 'next' | 'choices' | 'input' | 'mixed';
+type PhoneTurn = {
+  lines?: string[];
+  characterLines?: string[];
+  dialogue?: string[];
+  line?: string;
+  content?: string;
+  text?: string;
+  choices?: string[];
+  options?: string[];
+  uiMode?: CallTurnUiMode;
+  allowDirectReply?: boolean;
+};
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack, onChange }: {
+export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack, onChange, onRequestReply }: {
   state: SNSGodState;
   characterId: string;
   roomId?: string;
   sourceMessageId?: string;
   onBack: () => void;
   onChange?: (next: SNSGodState) => Promise<void> | void;
+  onRequestReply?: (roomId: string, characterId: string, latestUserInput: string) => void;
 }) {
   const character = findCharacter(state, characterId);
   const room = findRoom(state, roomId);
   const userName = character ? String(room?.userAlias || character.userName || state.config.userName || '나') : '나';
   const [lines, setLines] = useState<CallLine[]>([]);
   const linesRef = useRef<CallLine[]>([]);
-  const [customText, setCustomText] = useState('');
-  const [phase, setPhase] = useState<PhoneUiPhase>('connecting');
-  const [inputMode, setInputMode] = useState<InputMode>('choices');
+  const [phase, setPhase] = useState<CallPhase>('dialing');
+  const [displayText, setDisplayText] = useState('');
+  const [currentSpeaker, setCurrentSpeaker] = useState<'character' | 'user' | 'system'>('system');
+  const [currentFullText, setCurrentFullText] = useState('연결 중...');
+  const [pages, setPages] = useState<string[]>([]);
+  const [pageIndex, setPageIndex] = useState(0);
   const [choices, setChoices] = useState<string[]>([]);
+  const [uiMode, setUiMode] = useState<CallTurnUiMode>('choices');
+  const [allowDirectReply, setAllowDirectReply] = useState(true);
+  const [draftText, setDraftText] = useState('');
   const [elapsedSec, setElapsedSec] = useState(0);
-  const [booted, setBooted] = useState(false);
-  const scrollRef = useRef<ScrollView | null>(null);
   const startedAtRef = useRef(Date.now());
+  const connectedAtRef = useRef<number | undefined>(undefined);
   const endingRef = useRef(false);
+  const bootedRef = useRef(false);
+  const typingTokenRef = useRef(0);
+  const ring = useRef(new Animated.Value(0)).current;
+  const cardFade = useRef(new Animated.Value(1)).current;
+  const backgroundUri = useMemo(() => {
+    const uri = character?.coverImage || character?.avatar || character?.profileImage;
+    return isRenderableMediaUri(uri) ? String(uri) : '';
+  }, [character?.coverImage, character?.avatar, character?.profileImage]);
 
   useEffect(() => {
     linesRef.current = lines;
-    requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
   }, [lines]);
 
   useEffect(() => {
-    const timer = setInterval(() => setElapsedSec(Math.floor((Date.now() - startedAtRef.current) / 1000)), 1000);
+    const timer = setInterval(() => setElapsedSec(Math.floor((Date.now() - (connectedAtRef.current || startedAtRef.current)) / 1000)), 1000);
     return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
+    const animation = Animated.loop(Animated.timing(ring, {
+      toValue: 1,
+      duration: phase === 'character_typing' ? 1150 : phase === 'dialing' || phase === 'ringing' ? 1400 : 2600,
+      easing: Easing.inOut(Easing.ease),
+      useNativeDriver: true
+    }));
+    ring.setValue(0);
+    animation.start();
+    return () => animation.stop();
+  }, [phase, ring]);
+
+  useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      void endCall();
+      void cancelCall();
       return true;
     });
     return () => subscription.remove();
   }, [character?.id, roomId, sourceMessageId]);
 
   useEffect(() => {
-    if (!onChange || !roomId || !sourceMessageId) return;
-    const roomMessages = state.messages[roomId] || [];
-    const target = roomMessages.find(message => message.id === sourceMessageId);
-    if (!target || target.callStatus === 'accepted') return;
-    void onChange({
-      ...state,
-      messages: {
-        ...state.messages,
-        [roomId]: roomMessages.map(message => message.id === sourceMessageId ? {
-          ...message,
-          callStatus: 'accepted',
-          callHandledAt: Date.now()
-        } : message)
-      }
-    });
-  }, []);
+    if (!character || bootedRef.current) return;
+    bootedRef.current = true;
+    void bootCall();
+  }, [character?.id]);
 
-  useEffect(() => {
-    if (!character || booted) return;
-    setBooted(true);
-    appendUiLine('system', '연결 중...');
-    const timer = setTimeout(() => {
-      appendUiLine('system', '통화 연결됨');
-      void requestCharacterTurn(linesRef.current, true);
-    }, 650);
-    return () => clearTimeout(timer);
-  }, [character?.id, booted]);
+  async function bootCall() {
+    await showSystemCard('연결 중...', 'dialing');
+    await sleep(700);
+    connectedAtRef.current = Date.now();
+    await showSystemCard('통화 연결됨', 'connected');
+    await sleep(450);
+    await requestCharacterTurn(linesRef.current, true);
+  }
 
-  function appendUiLine(speaker: CallLine['speaker'], text: string) {
+  function addLine(speaker: CallLine['speaker'], text: string) {
     const item = { id: makeId('callline'), speaker, text, createdAt: Date.now() };
     const next = [...linesRef.current, item];
     linesRef.current = next;
@@ -93,17 +116,70 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
     return next;
   }
 
-  function parsePhoneTurn(text: string): { lines: string[]; choices: string[] } {
+  async function fadeCardIn() {
+    cardFade.setValue(0);
+    Animated.timing(cardFade, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+  }
+
+  async function typeText(text: string, speaker: 'character' | 'user' | 'system', nextPhase: CallPhase) {
+    const token = typingTokenRef.current + 1;
+    typingTokenRef.current = token;
+    setCurrentSpeaker(speaker);
+    setCurrentFullText(text);
+    setDisplayText('');
+    await fadeCardIn();
+    const chars = Array.from(text);
+    let out = '';
+    for (const ch of chars) {
+      if (typingTokenRef.current !== token) return;
+      out += ch;
+      setDisplayText(out);
+      let delay = speaker === 'system' ? 12 : 24;
+      if (/[,.!?…。？！]/.test(ch)) delay += 115;
+      if (/\n/.test(ch)) delay += 150;
+      await sleep(delay);
+    }
+    setDisplayText(text);
+    setPhase(nextPhase);
+  }
+
+  async function showSystemCard(text: string, nextPhase: CallPhase) {
+    setPages([]);
+    setChoices([]);
+    setUiMode('next');
+    setAllowDirectReply(false);
+    setPhase(nextPhase === 'dialing' || nextPhase === 'connected' ? nextPhase : 'connected');
+    await typeText(text, 'system', nextPhase);
+  }
+
+  async function showCharacterPage(nextPages: string[], index: number, nextChoices: string[], mode: CallTurnUiMode, directReplyAllowed: boolean) {
+    const text = nextPages[index] || '여보세요?';
+    setPages(nextPages);
+    setPageIndex(index);
+    setChoices(nextChoices);
+    setUiMode(mode);
+    setAllowDirectReply(directReplyAllowed);
+    setPhase('character_typing');
+    await typeText(text, 'character', index < nextPages.length - 1 ? 'awaiting_next' : mode === 'next' ? 'awaiting_next' : mode === 'input' ? 'awaiting_text' : 'awaiting_choice');
+    addLine('character', text);
+  }
+
+  function parsePhoneTurn(text: string): { lines: string[]; choices: string[]; uiMode: CallTurnUiMode; allowDirectReply: boolean } {
     const parsed = parseJsonObject<PhoneTurn>(text);
     const sourceLines = parsed
       ? parsed.lines || parsed.characterLines || parsed.dialogue || [parsed.line || parsed.content || parsed.text || '']
       : [text];
     const parsedChoices = parsed?.choices || parsed?.options || [];
-    const nextLines = sourceLines.map(item => String(item || '').trim()).filter(Boolean).slice(0, 4);
+    const nextLines = sourceLines.map(item => String(item || '').trim()).filter(Boolean).slice(0, 3);
     const nextChoices = parsedChoices.map(item => String(item || '').trim()).filter(Boolean).slice(0, 3);
+    const mode = parsed?.uiMode === 'next' || parsed?.uiMode === 'input' || parsed?.uiMode === 'mixed' || parsed?.uiMode === 'choices'
+      ? parsed.uiMode
+      : nextChoices.length >= 2 ? 'choices' : 'next';
     return {
       lines: nextLines.length ? nextLines : ['여보세요?'],
-      choices: nextChoices.length >= 2 ? nextChoices : ['응, 듣고 있어.', '조금 더 말해줘.', '나중에 다시 통화하자.']
+      choices: nextChoices.length >= 2 ? nextChoices : ['응, 듣고 있어.', '조금 더 말해줘.', '나중에 다시 통화하자.'],
+      uiMode: mode === 'mixed' ? 'choices' : mode,
+      allowDirectReply: parsed?.allowDirectReply !== false
     };
   }
 
@@ -129,8 +205,10 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
 
   async function requestCharacterTurn(baseLines: CallLine[], firstTurn = false) {
     if (!character || phase === 'ending') return;
-    setPhase('character_typing');
+    setPhase('listening');
     setChoices([]);
+    setUiMode('next');
+    setAllowDirectReply(false);
     try {
       const transcript = baseLines
         .filter(item => item.speaker !== 'system')
@@ -142,15 +220,15 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
           content: [
             `You are ${character.name} in a private live phone call with ${userName}.`,
             `Phone call language: ${character.language || state.config.language || 'Korean'}.`,
-            'Return raw JSON only: {"lines":["character spoken line 1","character spoken line 2"],"choices":["user reply option 1","user reply option 2","user reply option 3"]}.',
-            'Lines must contain 2-4 short spoken live phone lines. No narration, no action descriptions, no speaker labels, no phone-call markers, no SNS posts.',
+            'Return raw JSON only: {"lines":["short spoken line 1","short spoken line 2"],"choices":["user reply option 1","user reply option 2","user reply option 3"],"uiMode":"next|choices|input|mixed","allowDirectReply":true}.',
+            'Lines must contain 1-3 short spoken live phone lines. Each line is shown as one card page. No narration, no action descriptions, no speaker labels, no phone-call markers, no SNS posts.',
             'Choices must be concise, varied, and directly reply to the spoken lines.',
-            'If the user input is emotionally ambiguous, infer natural spoken intent. Do not treat it as narration.',
+            firstTurn ? 'For the first connected turn, uiMode may be next if the character is starting with a short greeting.' : 'Use choices when the user should answer meaningfully.',
             `Character profile:\n${character.prompt || '(empty)'}`,
             `User profile:\n${state.config.userDescription || '(empty)'}`,
             room?.relationshipNote ? `Room relationship/context note:\n${room.relationshipNote}` : '',
             `Recent messenger chat before this call:\n${recentChatContext() || '(empty)'}`
-          ].join('\n\n')
+          ].filter(Boolean).join('\n\n')
         },
         {
           role: 'user',
@@ -162,16 +240,9 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
         }
       ]);
       const turn = parsePhoneTurn(result.text);
-      for (const text of turn.lines) {
-        await sleep(linesRef.current.some(item => item.speaker === 'character') ? 520 : 180);
-        appendUiLine('character', text);
-      }
-      setChoices(turn.choices);
-      setPhase('awaiting_user');
-    } catch (error) {
-      setPhase('awaiting_user');
-      setChoices(['다시 말해줘.', '괜찮아?', '나중에 다시 통화하자.']);
-      Alert.alert('전화 응답 실패', error instanceof Error ? error.message : String(error));
+      await showCharacterPage(turn.lines, 0, turn.choices, turn.uiMode, turn.allowDirectReply);
+    } catch {
+      await showCharacterPage(['잠깐만... 목소리 들려?'], 0, ['다시 말해줘.', '괜찮아?', '나중에 다시 통화하자.'], 'choices', true);
     }
   }
 
@@ -210,35 +281,70 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
 
   async function submitUserText(text: string) {
     const trimmed = text.trim();
-    if (!trimmed || phase === 'character_typing' || phase === 'user_sending' || phase === 'ending') return;
-    const next = appendUiLine('user', trimmed);
-    setCustomText('');
-    setInputMode('choices');
+    if (!trimmed || phase === 'character_typing' || phase === 'user_sending' || phase === 'listening' || phase === 'ending') return;
+    setPhase('user_sending');
+    setDraftText('');
+    setCurrentSpeaker('user');
+    setCurrentFullText(trimmed);
+    setDisplayText(trimmed);
+    const next = addLine('user', trimmed);
+    setUiMode('next');
     setChoices([]);
     if (looksLikeHangup(trimmed)) {
+      await sleep(250);
       await endCall(undefined, next);
       return;
     }
-    setPhase('user_sending');
-    await sleep(150);
+    await sleep(350);
     await requestCharacterTurn(next);
   }
 
+  async function nextPage() {
+    if (phase !== 'awaiting_next') return;
+    if (pageIndex < pages.length - 1) {
+      await showCharacterPage(pages, pageIndex + 1, choices, uiMode, allowDirectReply);
+      return;
+    }
+    setPhase('awaiting_choice');
+    setUiMode('choices');
+  }
+
   async function endCall(finalUserText?: string, providedLines?: CallLine[]) {
-    if (endingRef.current) return;
+    if (endingRef.current || !character) return;
     endingRef.current = true;
     setPhase('ending');
-    let finalLines = providedLines || (finalUserText?.trim() ? appendUiLine('user', finalUserText.trim()) : linesRef.current);
+    typingTokenRef.current += 1;
+    let finalLines = providedLines || (finalUserText?.trim() ? addLine('user', finalUserText.trim()) : linesRef.current);
     let conversationLines = finalLines.filter(item => item.speaker !== 'system');
-    if (conversationLines.length && character) {
+    if (!conversationLines.length && onChange && roomId && !sourceMessageId) {
+      const missedContent = `${character.name}에게 부재중 전화를 남겼습니다.`;
+      await showSystemCard('통화 종료 중...', 'ending');
+      await onChange(appendMessage(state, roomId, {
+        id: makeId('msg'),
+        role: 'user',
+        characterId: character.id,
+        content: missedContent,
+        createdAt: Date.now(),
+        phoneLog: 'missed',
+        callDirection: 'outgoing',
+        sourceMode: 'phone'
+      }));
+      onRequestReply?.(roomId, character.id, missedContent);
+      setPhase('ended');
+      onBack();
+      return;
+    }
+    if (conversationLines.length) {
       const goodbye = await requestGoodbyeLine(finalLines);
-      finalLines = appendUiLine('character', goodbye || '알겠어. 나중에 다시 전화할게.');
+      const goodbyeLine = goodbye || '알겠어. 나중에 다시 전화할게.';
+      await typeText(goodbyeLine, 'character', 'ending');
+      finalLines = addLine('character', goodbyeLine);
       conversationLines = finalLines.filter(item => item.speaker !== 'system');
-      await sleep(850);
+      await sleep(700);
     }
     const endedAt = Date.now();
-    if (onChange && character) {
-      const startedAt = conversationLines[0]?.createdAt || startedAtRef.current;
+    if (onChange) {
+      const startedAt = conversationLines[0]?.createdAt || connectedAtRef.current || startedAtRef.current;
       const summaryLines = conversationLines.map(item => ({ speaker: item.speaker, text: item.text }));
       const summary = phoneSummaryFromLines(character.name, userName, summaryLines);
       const log = {
@@ -281,89 +387,128 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
       }
       await onChange(next);
     }
+    setPhase('ended');
+    onBack();
+  }
+
+  async function cancelCall() {
+    if (endingRef.current) return;
+    endingRef.current = true;
+    typingTokenRef.current += 1;
+    setPhase('ended');
+    if (onChange && roomId && sourceMessageId) {
+      const roomMessageList = state.messages[roomId] || [];
+      const target = roomMessageList.find(message => message.id === sourceMessageId);
+      if (target && target.callStatus !== 'accepted') {
+        await onChange({
+          ...state,
+          messages: {
+            ...state.messages,
+            [roomId]: roomMessageList.map(message => message.id === sourceMessageId ? {
+              ...message,
+              callStatus: 'rejected',
+              callHandledAt: Date.now()
+            } : message)
+          }
+        });
+      }
+    }
     onBack();
   }
 
   if (!character) {
     return (
-      <View style={styles.screen}>
+      <View style={styles.fallbackScreen}>
         <Text style={styles.name}>캐릭터를 찾을 수 없습니다.</Text>
         <Pressable onPress={onBack} style={styles.endButton}><Text style={styles.endText}>나가기</Text></Pressable>
       </View>
     );
   }
 
-  const busy = phase === 'connecting' || phase === 'character_typing' || phase === 'user_sending' || phase === 'ending';
-  const status = phase === 'connecting'
-    ? '연결 중'
-    : phase === 'character_typing'
-      ? `${character.name}이 말하는 중...`
-      : phase === 'user_sending'
-        ? `${character.name}이 듣는 중...`
-        : phase === 'ending'
-          ? '통화 종료 중...'
-          : '내 응답을 기다리는 중';
-
+  const status = statusText(phase, character.name);
+  const canAct = phase === 'awaiting_choice' || phase === 'awaiting_next' || phase === 'awaiting_text';
+  const ringScale = ring.interpolate({ inputRange: [0, 0.5, 1], outputRange: [1, phase === 'dialing' || phase === 'ringing' ? 1.1 : 1.055, 1] });
+  const ringOpacity = ring.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.14, phase === 'character_typing' ? 0.38 : 0.26, 0.14] });
   return (
-    <View style={styles.screen}>
-      <View style={styles.header}>
-        <Pressable onPress={() => endCall()} style={styles.headerButton}><Text style={styles.headerButtonText}>‹</Text></Pressable>
-        <Text style={styles.headerTitle}>SNSGod 통화</Text>
-        <View style={styles.headerButton} />
-      </View>
-      <View style={styles.hero}>
-        <View style={[styles.avatarRing, phase === 'character_typing' && styles.avatarRingSpeaking]}>
-          <Avatar character={character} size={104} />
+    <ImageBackground source={backgroundUri ? { uri: backgroundUri } : undefined} blurRadius={24} style={styles.screen}>
+      <View style={styles.overlay} />
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.stage}>
+        <View style={styles.header}>
+          <Pressable onPress={() => cancelCall()} style={styles.headerButton}><Text style={styles.headerButtonText}>‹</Text></Pressable>
+          <View style={styles.headerButton} />
+          <View style={styles.headerButton} />
         </View>
-        <Text style={styles.name}>{character.name}</Text>
-        <Text style={styles.status}>{status}</Text>
-        <Text style={styles.duration}>통화 연결됨 · {formatElapsed(elapsedSec)}</Text>
-      </View>
-      <ScrollView ref={scrollRef} style={styles.log} contentContainerStyle={styles.logContent}>
-        {lines.map(item => item.speaker === 'system' ? (
-          <Text key={item.id} style={styles.systemLine}>{item.text}</Text>
-        ) : (
-          <View key={item.id} style={[styles.lineBubble, item.speaker === 'user' ? styles.userLine : styles.characterLine]}>
-            <Text style={[styles.lineSpeaker, item.speaker === 'user' && styles.userSpeaker]}>{item.speaker === 'user' ? userName : character.name}</Text>
-            <Text style={[styles.lineText, item.speaker === 'user' && styles.userLineText]}>{item.text}</Text>
+        <View style={styles.hero}>
+          <View style={styles.avatarStage}>
+            <Animated.View style={[styles.ringOuter, { opacity: ringOpacity, transform: [{ scale: ringScale }] }]} />
+            <Animated.View style={[styles.ringMiddle, { opacity: ringOpacity, transform: [{ scale: ringScale }] }]} />
+            <View style={[styles.avatarRing, phase === 'character_typing' && styles.avatarRingSpeaking]}>
+              <Avatar character={character} size={116} />
+            </View>
           </View>
-        ))}
-        {phase === 'character_typing' ? <Text style={styles.systemLine}>{character.name}이 말하는 중...</Text> : null}
-      </ScrollView>
-      <View style={styles.replyArea}>
-        {inputMode === 'choices' ? (
-          <>
-            {phase === 'awaiting_user' ? choices.map(option => (
-              <Pressable key={option} onPress={() => submitUserText(option)} style={styles.choiceButton}>
-                <Text style={styles.choiceText}>{option}</Text>
-              </Pressable>
-            )) : <View style={styles.loadingRow}><ActivityIndicator color="#edf2f6" /><Text style={styles.loadingText}>{status}</Text></View>}
-            <Pressable onPress={() => setInputMode('text')} disabled={phase !== 'awaiting_user'} style={[styles.textModeButton, phase !== 'awaiting_user' && styles.disabled]}>
+          <Text style={styles.name}>{character.name}</Text>
+          <Text style={styles.status}>{status}</Text>
+          <Text style={styles.duration}>통화 연결됨 · {formatElapsed(elapsedSec)}</Text>
+        </View>
+        <Animated.View style={[styles.turnCard, { opacity: cardFade }]}>
+          <Text style={styles.turnText}>{displayText || currentFullText}</Text>
+          {phase === 'character_typing' ? <Text style={styles.cursor}>▌</Text> : null}
+        </Animated.View>
+        <View style={styles.actionArea}>
+          {phase === 'listening' || phase === 'user_sending' ? (
+            <View style={styles.loadingRow}><ActivityIndicator color="#edf2f6" /><Text style={styles.loadingText}>{status}</Text></View>
+          ) : null}
+          {phase === 'awaiting_next' ? (
+            <Pressable onPress={nextPage} style={styles.choiceButton}>
+              <Text style={styles.choiceText}>다음</Text>
+            </Pressable>
+          ) : null}
+          {phase === 'awaiting_choice' ? choices.map(option => (
+            <Pressable key={option} onPress={() => submitUserText(option)} style={styles.choiceButton}>
+              <Text style={styles.choiceText}>{option}</Text>
+            </Pressable>
+          )) : null}
+          {allowDirectReply && canAct && phase !== 'awaiting_text' ? (
+            <Pressable onPress={() => setPhase('awaiting_text')} style={styles.textModeButton}>
               <Text style={styles.textModeText}>직접 답하기</Text>
             </Pressable>
-          </>
-        ) : (
-          <View style={styles.directBox}>
-            <TextInput
-              value={customText}
-              onChangeText={setCustomText}
-              style={styles.input}
-              placeholder="직접 답변 입력..."
-              placeholderTextColor="#a8b2bd"
-              multiline
-            />
-            <Pressable onPress={() => submitUserText(customText)} style={[styles.sendButton, (!customText.trim() || busy) && styles.disabled]} disabled={!customText.trim() || busy}>
-              <Text style={styles.sendText}>보내기</Text>
-            </Pressable>
-            <Pressable onPress={() => setInputMode('choices')} style={styles.backToChoices}>
-              <Text style={styles.textModeText}>선택지로 돌아가기</Text>
-            </Pressable>
-          </View>
-        )}
+          ) : null}
+          {phase === 'awaiting_text' ? (
+            <View style={styles.directBox}>
+              <TextInput
+                value={draftText}
+                onChangeText={setDraftText}
+                style={styles.input}
+                placeholder="직접 답하기"
+                placeholderTextColor="#a8b2bd"
+                multiline
+              />
+              <Pressable onPress={() => submitUserText(draftText)} style={[styles.sendButton, !draftText.trim() && styles.disabled]} disabled={!draftText.trim()}>
+                <Text style={styles.sendText}>전송</Text>
+              </Pressable>
+              <Pressable onPress={() => setPhase(choices.length ? 'awaiting_choice' : 'awaiting_next')} style={styles.backToChoices}>
+                <Text style={styles.textModeText}>접기</Text>
+              </Pressable>
+            </View>
+          ) : null}
+        </View>
         <Pressable onPress={() => endCall()} style={styles.endButton}><Text style={styles.endText}>끊기</Text></Pressable>
-      </View>
-    </View>
+      </KeyboardAvoidingView>
+    </ImageBackground>
   );
+}
+
+function statusText(phase: CallPhase, characterName: string) {
+  if (phase === 'dialing') return '연결 중...';
+  if (phase === 'ringing') return '벨이 울리는 중...';
+  if (phase === 'connected') return '통화 연결됨';
+  if (phase === 'character_typing') return `${characterName}이 말하는 중...`;
+  if (phase === 'listening' || phase === 'user_sending') return '듣는 중...';
+  if (phase === 'awaiting_next') return '다음으로 진행 가능';
+  if (phase === 'awaiting_text') return '직접 답하기';
+  if (phase === 'ending') return '통화 종료 중';
+  if (phase === 'ended') return '통화 종료됨';
+  return '내 응답을 기다리는 중';
 }
 
 function formatElapsed(seconds: number) {
@@ -373,40 +518,38 @@ function formatElapsed(seconds: number) {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#27313b', paddingHorizontal: 20, paddingBottom: 14 },
-  header: { minHeight: 52, paddingTop: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  screen: { flex: 1, backgroundColor: '#1f2933' },
+  fallbackScreen: { flex: 1, backgroundColor: '#27313b', padding: 20, justifyContent: 'center' },
+  overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(13,18,24,0.68)' },
+  stage: { flex: 1, paddingHorizontal: 20, paddingBottom: 14 },
+  header: { minHeight: 54, paddingTop: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerButton: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
   headerButtonText: { color: '#edf2f6', fontSize: 34, lineHeight: 36, fontWeight: '700' },
-  headerTitle: { color: '#edf2f6', fontSize: 16, fontWeight: '900' },
-  hero: { alignItems: 'center', paddingTop: 12, paddingBottom: 14 },
-  avatarRing: { width: 122, height: 122, borderRadius: 61, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: 'rgba(237,242,246,0.18)' },
-  avatarRingSpeaking: { borderColor: 'rgba(243,221,114,0.55)', backgroundColor: 'rgba(243,221,114,0.06)' },
-  name: { marginTop: 14, fontSize: 30, color: '#fff', fontWeight: '900', textAlign: 'center' },
+  hero: { alignItems: 'center', paddingTop: 8, paddingBottom: 18 },
+  avatarStage: { width: 164, height: 164, alignItems: 'center', justifyContent: 'center' },
+  ringOuter: { position: 'absolute', width: 160, height: 160, borderRadius: 80, borderWidth: 1, borderColor: 'rgba(237,242,246,0.68)' },
+  ringMiddle: { position: 'absolute', width: 142, height: 142, borderRadius: 71, borderWidth: 1, borderColor: 'rgba(243,221,114,0.72)' },
+  avatarRing: { width: 128, height: 128, borderRadius: 64, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: 'rgba(237,242,246,0.24)', backgroundColor: 'rgba(255,255,255,0.04)' },
+  avatarRingSpeaking: { borderColor: 'rgba(243,221,114,0.7)', backgroundColor: 'rgba(243,221,114,0.08)' },
+  name: { marginTop: 8, fontSize: 30, color: '#fff', fontWeight: '900', textAlign: 'center' },
   status: { marginTop: 6, color: '#d8e1e9', fontSize: 15, lineHeight: 21, textAlign: 'center', fontWeight: '800' },
-  duration: { marginTop: 8, paddingHorizontal: 12, paddingVertical: 5, borderRadius: 14, overflow: 'hidden', color: 'rgba(255,255,255,0.76)', backgroundColor: 'rgba(255,255,255,0.08)', fontSize: 12, fontWeight: '800' },
-  log: { alignSelf: 'stretch', flex: 1 },
-  logContent: { paddingVertical: 12, gap: 10 },
-  systemLine: { alignSelf: 'center', maxWidth: '86%', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '800', textAlign: 'center' },
-  lineBubble: { maxWidth: '78%', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 13 },
-  characterLine: { alignSelf: 'flex-start', backgroundColor: 'rgba(57,71,89,0.92)' },
-  userLine: { alignSelf: 'flex-end', backgroundColor: '#f3dd72' },
-  lineSpeaker: { color: 'rgba(255,255,255,0.64)', fontSize: 11, fontWeight: '900', marginBottom: 4 },
-  userSpeaker: { color: 'rgba(31,28,10,0.58)' },
-  lineText: { color: '#fff', fontSize: 16, lineHeight: 24, fontWeight: '700' },
-  userLineText: { color: '#201b06' },
-  replyArea: { alignSelf: 'stretch', gap: 10, paddingTop: 10 },
-  choiceButton: { minHeight: 50, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#edf2f6' },
+  duration: { marginTop: 8, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999, overflow: 'hidden', color: 'rgba(255,255,255,0.78)', backgroundColor: 'rgba(255,255,255,0.1)', fontSize: 12, fontWeight: '800' },
+  turnCard: { alignSelf: 'center', width: '88%', minHeight: 132, borderRadius: 20, paddingHorizontal: 22, paddingVertical: 20, backgroundColor: 'rgba(0,0,0,0.52)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.09)', justifyContent: 'center' },
+  turnText: { color: '#ffffff', fontSize: 19, lineHeight: 29, fontWeight: '800' },
+  cursor: { position: 'absolute', right: 18, bottom: 14, color: '#f3dd72', fontSize: 16, fontWeight: '900' },
+  actionArea: { flex: 1, justifyContent: 'flex-end', gap: 8, paddingTop: 14, paddingBottom: 10 },
+  choiceButton: { minHeight: 48, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#edf2f6' },
   choiceText: { color: '#26313c', fontWeight: '900', fontSize: 15, textAlign: 'center', lineHeight: 20 },
-  loadingRow: { minHeight: 50, borderRadius: 20, flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.08)' },
+  loadingRow: { minHeight: 54, borderRadius: 16, flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.08)' },
   loadingText: { color: '#edf2f6', fontWeight: '800' },
   textModeButton: { minHeight: 38, alignItems: 'center', justifyContent: 'center' },
   textModeText: { color: 'rgba(255,255,255,0.78)', fontWeight: '900' },
   directBox: { gap: 8 },
-  input: { minHeight: 46, maxHeight: 96, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 10, color: '#fff', backgroundColor: '#3a4652', fontSize: 15 },
-  sendButton: { height: 46, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#edf2f6' },
+  input: { minHeight: 48, maxHeight: 98, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 10, color: '#fff', backgroundColor: 'rgba(58,70,82,0.95)', fontSize: 15 },
+  sendButton: { height: 46, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f3dd72' },
   sendText: { color: colors.text, fontWeight: '900', fontSize: 15 },
-  backToChoices: { minHeight: 34, alignItems: 'center', justifyContent: 'center' },
+  backToChoices: { minHeight: 32, alignItems: 'center', justifyContent: 'center' },
   disabled: { opacity: 0.5 },
-  endButton: { height: 54, borderRadius: 27, alignItems: 'center', justifyContent: 'center', backgroundColor: '#ff6b6b' },
-  endText: { color: '#fff', fontWeight: '900', fontSize: 17 }
+  endButton: { height: 58, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: '#ff5f61' },
+  endText: { color: '#fff', fontWeight: '900', fontSize: 18 }
 });

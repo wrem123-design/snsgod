@@ -4,6 +4,10 @@ import { colors } from '../theme';
 import { SNSGodRoom, SNSGodState } from '../types';
 import { deleteRoom, findCharacter, findRoom, updateRoom } from '../logic/stateHelpers';
 import { isRandomRoom, removeRandomChatRoom } from '../logic/randomChat';
+import { callLLMText } from '../logic/api';
+
+const SUMMARY_START = '[자동 대화 요약]';
+const SUMMARY_END = '[/자동 대화 요약]';
 
 export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
   state: SNSGodState;
@@ -14,6 +18,8 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
   const room = findRoom(state, roomId);
   const character = findCharacter(state, room?.characterId);
   const [draft, setDraft] = useState<SNSGodRoom | null>(room ? { ...room } : null);
+  const [summarizing, setSummarizing] = useState(false);
+  const [status, setStatus] = useState('');
 
   if (!room || !draft) {
     return (
@@ -30,7 +36,7 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
       name: draft.name.trim() || '기본 채팅',
       userAlias: String(draft.userAlias || '').trim(),
       relationshipNote: String(draft.relationshipNote || '').trim(),
-      roomPrompt: String(draft.roomPrompt || '').trim()
+      roomPrompt: normalizeRoomPromptForSave(String(draft.roomPrompt || '').trim())
     }));
     onBack();
   }
@@ -54,6 +60,69 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
     ]);
   }
 
+  async function summarizeCurrentRoom() {
+    if (!draft || !room || !character || summarizing) return;
+    const transcript = roomTranscript(state, room, draft, character.name);
+    if (!transcript) {
+      Alert.alert('대화 요약', '요약할 대화가 아직 없습니다.');
+      return;
+    }
+    setSummarizing(true);
+    setStatus('현재 방 대화를 요약하는 중...');
+    try {
+      const { text, keyIndex } = await callLLMText(state, [
+        {
+          role: 'system',
+          content: [
+            'Summarize this private chat room into durable relationship memory for future roleplay replies.',
+            'Write in Korean. Return plain text only. No markdown table, no JSON.',
+            'Focus on facts the characters should remember: relationship changes, promises, nicknames, boundaries, emotional events, unresolved topics, preferences, important phone-call memories, and recurring inside jokes.',
+            'Do not include trivial line-by-line recap. Do not invent facts. If uncertain, phrase it as uncertain.',
+            'Keep it compact but useful, around 8-16 bullet lines.'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: [
+            `Room: ${room.name}`,
+            `User visible name: ${String(draft.userAlias || state.config.userName || '나')}`,
+            `Character: ${character.name}`,
+            draft.relationshipNote ? `Existing room relationship note:\n${draft.relationshipNote}` : '',
+            draft.roomPrompt ? `Existing additional room prompt:\n${draft.roomPrompt}` : '',
+            `Current room conversation:\n${transcript}`
+          ].filter(Boolean).join('\n\n')
+        }
+      ]);
+      const summary = cleanSummary(text);
+      if (!summary) throw new Error('요약 결과가 비어 있습니다.');
+      const roomPrompt = replaceAutoSummaryBlock(String(draft.roomPrompt || ''), summary);
+      const nextDraft = { ...draft, roomPrompt };
+      setDraft(nextDraft);
+      const activeProfile = state.config.apiProfiles[state.config.apiType] || {};
+      await onChange(updateRoom({
+        ...state,
+        config: {
+          ...state.config,
+          apiProfiles: {
+            ...state.config.apiProfiles,
+            [state.config.apiType]: { ...activeProfile, apiKeyIndex: keyIndex }
+          }
+        }
+      }, roomId, {
+        name: nextDraft.name.trim() || '기본 채팅',
+        userAlias: String(nextDraft.userAlias || '').trim(),
+        relationshipNote: String(nextDraft.relationshipNote || '').trim(),
+        roomPrompt: String(nextDraft.roomPrompt || '').trim()
+      }));
+      setStatus('대화 요약을 추가 방 프롬프트에 저장했습니다.');
+    } catch (error) {
+      setStatus(`대화 요약 실패: ${error instanceof Error ? error.message : String(error)}`);
+      Alert.alert('대화 요약 실패', error instanceof Error ? error.message : String(error));
+    } finally {
+      setSummarizing(false);
+    }
+  }
+
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
@@ -68,13 +137,138 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
           <Field label="방 이름" value={draft.name} onChangeText={value => set('name', value)} />
           <Field label="이 방에서 나를 부를 이름" value={String(draft.userAlias || '')} onChangeText={value => set('userAlias', value)} help="예: 오빠, 선배, 찐따. 빈칸이면 캐릭터 설정의 내 이름, 그것도 빈칸이면 기본 내 프로필 이름을 씁니다." />
           <Field label="이 채팅방에서만 적용할 관계/호칭 메모" value={String(draft.relationshipNote || '')} onChangeText={value => set('relationshipNote', value)} multiline help="단어만 써도 되지만, 보통 “나를 찐따라고 부름”, “서로 오래 알고 지낸 전 연인처럼 말함”처럼 문장으로 쓰는 게 확실합니다." />
-          <Field label="추가 방 프롬프트" value={String(draft.roomPrompt || '')} onChangeText={value => set('roomPrompt', value)} multiline />
+          <View style={styles.summaryBox}>
+            <View style={styles.summaryHeader}>
+              <Text style={styles.summaryTitle}>방 대화 히스토리</Text>
+              <Pressable onPress={summarizeCurrentRoom} disabled={summarizing} style={[styles.summaryButton, summarizing && styles.disabled]}>
+                <Text style={styles.summaryButtonText}>{summarizing ? '요약 중...' : '현재 대화 요약'}</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.help}>누르면 이 방의 대화를 AI가 관계 기억으로 압축해서 아래 관계 요약에 저장합니다. 다시 누르면 자동 요약 블록만 최신 내용으로 교체됩니다.</Text>
+            {status ? <Text style={styles.status}>{status}</Text> : null}
+          </View>
+          <Field label="관계 요약" value={String(draft.roomPrompt || '')} onChangeText={value => set('roomPrompt', value)} multiline />
         </View>
         <Pressable onPress={save} style={styles.primary}><Text style={styles.primaryText}>방 설정 저장</Text></Pressable>
         <Pressable onPress={confirmDelete} style={styles.danger}><Text style={styles.dangerText}>채팅방 삭제</Text></Pressable>
       </ScrollView>
     </View>
   );
+}
+
+function roomTranscript(state: SNSGodState, room: SNSGodRoom, draft: SNSGodRoom, characterName: string) {
+  const userName = String(draft.userAlias || state.config.userName || '나');
+  return (state.messages[room.id] || []).slice(-220).map(message => {
+    const speaker = message.role === 'user' ? userName : message.role === 'character' ? characterName : '시스템';
+    const pieces = [
+      message.content,
+      message.imageCaption ? `사진 설명: ${message.imageCaption}` : '',
+      message.mediaData ? '사진/미디어 첨부 있음' : '',
+      message.phoneLog ? phoneLogText(message) : ''
+    ].map(value => String(value || '').trim()).filter(Boolean);
+    return pieces.length ? `${speaker}: ${pieces.join(' / ')}` : '';
+  }).filter(Boolean).join('\n');
+}
+
+function phoneLogText(message: { [key: string]: unknown; content?: string; phoneLog?: unknown }) {
+  const summary = String(message.phoneSummaryContext || '').trim();
+  const startedAt = Number(message.phoneStartedAt || 0);
+  const endedAt = Number(message.phoneEndedAt || 0);
+  const duration = startedAt && endedAt && endedAt > startedAt ? ` / 통화 시간: ${Math.round((endedAt - startedAt) / 1000)}초` : '';
+  return [
+    `통화 기록: ${String(message.content || message.phoneLog || '').trim()}`,
+    summary ? `통화 대화 내용 요약: ${summary}` : '',
+    duration.trim()
+  ].filter(Boolean).join(' / ');
+}
+
+function cleanSummary(value: string) {
+  const text = String(value || '')
+    .replace(/```[\s\S]*?```/g, match => match.replace(/```[a-z]*|```/gi, '').trim())
+    .replace(/^\s*(요약|summary)\s*[:：]\s*/i, '')
+    .trim();
+  return summaryFromJsonish(text) || normalizePlainSummary(text);
+}
+
+function normalizePlainSummary(value: string) {
+  return String(value || '')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => line.replace(/^[-*•]\s*/, '- '))
+    .join('\n')
+    .trim();
+}
+
+function summaryFromJsonish(value: string) {
+  const source = String(value || '').trim();
+  const candidates = [
+    source,
+    sliceJsonCandidate(source, '[', ']'),
+    sliceJsonCandidate(source, '{', '}')
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      const lines = summaryValueToLines(JSON.parse(candidate)).filter(Boolean);
+      if (lines.length) return lines.join('\n');
+    } catch {
+      // The model sometimes returns plain text; keep falling back gracefully.
+    }
+  }
+  return '';
+}
+
+function sliceJsonCandidate(source: string, open: string, close: string) {
+  const start = source.indexOf(open);
+  const end = source.lastIndexOf(close);
+  return start >= 0 && end > start ? source.slice(start, end + 1) : '';
+}
+
+function summaryValueToLines(value: unknown): string[] {
+  if (typeof value === 'string') return value.trim() ? [toSummaryLine('', value)] : [];
+  if (Array.isArray(value)) return value.flatMap(item => summaryValueToLines(item));
+  if (!value || typeof value !== 'object') return [];
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, item]) => {
+    if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+      return [toSummaryLine(key, String(item))];
+    }
+    return summaryValueToLines(item);
+  });
+}
+
+function toSummaryLine(key: string, value: string) {
+  const text = String(value || '').trim().replace(/[。]+$/g, '.');
+  if (!text) return '';
+  const label = summaryLabelFor(key);
+  return label ? `- ${label}: ${text}` : `- ${text}`;
+}
+
+function summaryLabelFor(key: string) {
+  const normalized = key.toLowerCase();
+  if (!normalized || /^fact_\d+$/.test(normalized)) return '';
+  if (normalized === 'summary') return '요약';
+  if (/^preference/.test(normalized)) return '선호';
+  if (/^promise/.test(normalized)) return '약속';
+  if (/^boundary/.test(normalized)) return '경계';
+  if (/^unresolved/.test(normalized)) return '미해결';
+  if (/inside_joke|joke/.test(normalized)) return '둘만의 에피소드';
+  if (/memory/.test(normalized)) return '기억';
+  return '';
+}
+
+function normalizeRoomPromptForSave(prompt: string) {
+  return String(prompt || '').replace(
+    /\[자동 대화 요약\]([\s\S]*?)\[\/자동 대화 요약\]/g,
+    (_match, body) => `${SUMMARY_START}\n${cleanSummary(String(body || ''))}\n${SUMMARY_END}`
+  ).trim();
+}
+
+function replaceAutoSummaryBlock(prompt: string, summary: string) {
+  const block = `${SUMMARY_START}\n${summary.trim()}\n${SUMMARY_END}`;
+  const cleaned = String(prompt || '')
+    .replace(/\n?\[자동 대화 요약\][\s\S]*?\[\/자동 대화 요약\]\n?/g, '\n')
+    .trim();
+  return [cleaned, block].filter(Boolean).join('\n\n');
 }
 
 function Field({ label, value, onChangeText, help, multiline }: { label: string; value: string; onChangeText: (value: string) => void; help?: string; multiline?: boolean }) {
@@ -98,6 +292,13 @@ const styles = StyleSheet.create({
   content: { padding: 14, gap: 14 },
   card: { backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 14, gap: 10 },
   cardTitle: { fontSize: 17, fontWeight: '900', color: colors.text },
+  summaryBox: { gap: 8, borderWidth: 1, borderColor: colors.border, borderRadius: 8, backgroundColor: '#fff8e5', padding: 12 },
+  summaryHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  summaryTitle: { flex: 1, color: colors.text, fontWeight: '900', fontSize: 14 },
+  summaryButton: { minHeight: 38, paddingHorizontal: 12, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  summaryButtonText: { color: '#241a00', fontWeight: '900' },
+  disabled: { opacity: 0.55 },
+  status: { color: colors.text, fontSize: 12, lineHeight: 18, fontWeight: '800' },
   field: { gap: 6 },
   label: { fontSize: 12, color: colors.sub, fontWeight: '900' },
   input: { minHeight: 44, borderWidth: 1, borderColor: colors.border, borderRadius: 7, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: '#fffefa', color: colors.text, fontSize: 15 },

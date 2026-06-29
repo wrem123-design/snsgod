@@ -143,6 +143,7 @@ export type SNSGodCharacter = {
   profileImage?: string;
   coverImage?: string;
   profileReferenceImage?: string;
+  profileReferenceImages?: string[];
   profileImageHistory?: { id: string; image: string; prompt?: string; createdAt: number; kind?: 'profile' | 'cover' }[];
   lastProfilePhotoChangeAt?: number;
   lastCoverPhotoChangeAt?: number;
@@ -251,7 +252,24 @@ export type SNSPost = {
   bookmarks?: number;
   views?: number;
   comments?: { id: string; author: string; handle?: string; content: string; createdAt: number; likes?: number; ai?: boolean }[];
-  dms?: { id?: string; title: string; messages: { id?: string; from: string; body: string; createdAt?: number }[] }[];
+  dms?: { id?: string; title: string; participants?: SNSDmParticipant[]; messages: { id?: string; from: string; fromName?: string; body: string; createdAt?: number }[] }[];
+};
+
+export type SNSDmParticipant = {
+  id: string;
+  name: string;
+  handle?: string;
+  avatar?: string;
+  role: 'user' | 'character' | 'thirdParty';
+};
+
+export type SNSDmMessage = {
+  id: string;
+  from: string;
+  fromName?: string;
+  author?: string;
+  body: string;
+  createdAt: number;
 };
 
 export type SNSDmThread = {
@@ -262,7 +280,8 @@ export type SNSDmThread = {
   kind?: 'user' | 'thirdParty';
   title: string;
   context?: string;
-  messages: { id: string; from: 'user' | 'character' | 'thirdParty'; author?: string; body: string; createdAt: number }[];
+  participants?: SNSDmParticipant[];
+  messages: SNSDmMessage[];
   createdAt: number;
   updatedAt?: number;
   unread?: number;

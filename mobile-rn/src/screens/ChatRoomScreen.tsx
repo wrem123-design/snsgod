@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, FlatList, Image, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Image, KeyboardAvoidingView, NativeModules, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
 import { SNSGodMessage, SNSGodState, Sticker } from '../types';
@@ -8,6 +8,21 @@ import { appendMessage, findCharacter, findRoom, roomMessages } from '../logic/s
 import { isRenderableMediaUri, pickImageDataUri } from '../logic/media';
 import { formatMessageTime } from '../logic/time';
 import { markRoomRead } from '../logic/notifications';
+import { generateImageDataUri, imagePromptFor, imagePromptWithoutCharacterName } from '../logic/api';
+import { characterReferenceImageForPrompt } from '../logic/imageReference';
+
+const TermuxBridge = NativeModules.TermuxBridge as undefined | {
+  copyText: (text: string) => Promise<string>;
+};
+
+type RoomImageItem = {
+  id: string;
+  uri: string;
+  title: string;
+  prompt: string;
+  caption: string;
+  createdAt: number;
+};
 
 export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurrent, onOpenRoomSettings, onOpenCharacterSettings, onOpenProfile, randomMode, onLeaveRandomRoom, onPromoteRandomRoom, onOpenCall, onRequestReply }: {
   state: SNSGodState;
@@ -27,6 +42,9 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [showStickers, setShowStickers] = useState(false);
+  const [viewerImage, setViewerImage] = useState<RoomImageItem | null>(null);
+  const [regeneratingImageId, setRegeneratingImageId] = useState('');
+  const [imageRetryDraft, setImageRetryDraft] = useState<{ messageId: string; prompt: string } | null>(null);
   const listRef = useRef<FlatList<SNSGodMessage>>(null);
   const room = findRoom(state, roomId);
   const character = findCharacter(state, room?.characterId);
@@ -137,6 +155,76 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
     });
   }
 
+  async function retryFailedReply(message: SNSGodMessage) {
+    if (!room || !character) return;
+    const index = messages.findIndex(item => item.id === message.id);
+    const previousUserMessage = messages.slice(0, index < 0 ? undefined : index).reverse().find(item => item.role === 'user');
+    if (!previousUserMessage) {
+      Alert.alert('재생성 실패', '다시 답장할 사용자 메시지를 찾지 못했습니다.');
+      return;
+    }
+    await commitCurrent(current => ({
+      ...current,
+      messages: {
+        ...current.messages,
+        [room.id]: (current.messages[room.id] || []).filter(item => item.id !== message.id)
+      }
+    }));
+    const promptText = [
+      previousUserMessage.content || (previousUserMessage.mediaData ? '사진을 보냈습니다.' : ''),
+      previousUserMessage.mediaData ? '[사용자가 사진을 보냈습니다.]' : ''
+    ].filter(Boolean).join('\n');
+    onRequestReply(room.id, character.id, promptText, { randomMode: isRandomRoom });
+  }
+
+  function openImageRetryEditor(message: SNSGodMessage) {
+    if (!room || !character || !message.imagePrompt || regeneratingImageId) return;
+    setImageRetryDraft({
+      messageId: message.id,
+      prompt: imagePromptWithoutCharacterName(String(message.imagePrompt || ''), character)
+    });
+  }
+
+  async function submitImageRetryPrompt() {
+    if (!room || !character || !imageRetryDraft || regeneratingImageId) return;
+    const prompt = imagePromptWithoutCharacterName(imageRetryDraft.prompt, character);
+    if (!prompt) {
+      Alert.alert('프롬프트 필요', '수정할 이미지 프롬프트를 입력해 주세요.');
+      return;
+    }
+    const targetMessage = messages.find(item => item.id === imageRetryDraft.messageId);
+    if (!targetMessage) {
+      Alert.alert('이미지 재생성 실패', '재생성할 메시지를 찾지 못했습니다.');
+      setImageRetryDraft(null);
+      return;
+    }
+    setRegeneratingImageId(targetMessage.id);
+    try {
+      const mediaData = await generateImageDataUri(state, prompt, character, {
+        referenceImage: characterReferenceImageForPrompt(character, prompt),
+        kind: 'general'
+      });
+      await commitCurrent(current => ({
+        ...current,
+        messages: {
+          ...current.messages,
+          [room.id]: (current.messages[room.id] || []).map(item => item.id === targetMessage.id ? {
+            ...item,
+            imagePrompt: prompt,
+            mediaData,
+            mediaType: 'image',
+            imageCaption: cleanImageFailureCaption(String(item.imageCaption || ''))
+          } : item)
+        }
+      }));
+      setImageRetryDraft(null);
+    } catch (error) {
+      Alert.alert('이미지 재생성 실패', error instanceof Error ? error.message : String(error));
+    } finally {
+      setRegeneratingImageId('');
+    }
+  }
+
   if (!room || !character) {
     return (
       <View style={styles.empty}>
@@ -145,6 +233,11 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
       </View>
     );
   }
+
+  const retryReferencePreview = imageRetryDraft ? characterReferenceImageForPrompt(character, imageRetryDraft.prompt) : undefined;
+  const retryFinalPrompt = imageRetryDraft
+    ? imagePromptFor(state.config.imageGeneration || {}, character, imageRetryDraft.prompt, { usesReference: Boolean(retryReferencePreview) })
+    : '';
 
   return (
     <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -182,10 +275,21 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
         onContentSizeChange={() => scrollToLatest(false)}
         onLayout={() => scrollToLatest(false)}
         ListHeaderComponent={room.name !== '기본 채팅' ? <View style={styles.roomNotice}><Text style={styles.roomNoticeText}>{room.name}</Text></View> : null}
-        renderItem={({ item }) => <MessageBubble message={item} character={character} userStickers={state.userStickers || []} roomId={room.id} onOpenCall={onOpenCall} onRejectCall={rejectCall} />}
+        renderItem={({ item }) => <MessageBubble message={item} character={character} userStickers={state.userStickers || []} roomId={room.id} onOpenCall={onOpenCall} onRejectCall={rejectCall} onRetryFailed={retryFailedReply} onOpenImage={setViewerImage} onRetryImage={openImageRetryEditor} regeneratingImageId={regeneratingImageId} />}
         ListFooterComponent={typing ? <TypingBubble character={character} /> : null}
       />
 
+      {viewerImage ? <ImageViewer item={viewerImage} onClose={() => setViewerImage(null)} /> : null}
+      {imageRetryDraft ? (
+        <ImagePromptRetryEditor
+          prompt={imageRetryDraft.prompt}
+          finalPrompt={retryFinalPrompt}
+          busy={Boolean(regeneratingImageId)}
+          onChangePrompt={prompt => setImageRetryDraft(current => current ? { ...current, prompt } : current)}
+          onCancel={() => setImageRetryDraft(null)}
+          onSubmit={submitImageRetryPrompt}
+        />
+      ) : null}
       {showStickers ? <StickerTray stickers={state.userStickers || []} onPick={sendSticker} /> : null}
       <View style={styles.composer}>
         <Pressable onPress={() => setShowStickers(value => !value)} disabled={sending} style={[styles.attachButton, sending && styles.sendDisabled]}><Text style={styles.attachText}>스티커</Text></Pressable>
@@ -239,20 +343,181 @@ function StickerTray({ stickers, onPick }: { stickers: Sticker[]; onPick: (stick
   );
 }
 
-function MessageBubble({ message, character, userStickers, roomId, onOpenCall, onRejectCall }: {
+function collectRoomImages(messages: SNSGodMessage[], characterName: string): RoomImageItem[] {
+  return messages
+    .filter(message => isRenderableMediaUri(message.mediaData))
+    .map(message => ({
+      id: message.id,
+      uri: String(message.mediaData || ''),
+      title: message.role === 'user' ? '내가 보낸 사진' : `${characterName}의 사진`,
+      prompt: String(message.imagePrompt || '').trim(),
+      caption: cleanImageFailureCaption(String(message.imageCaption || '')).trim(),
+      createdAt: Number(message.createdAt || 0)
+    }))
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+function cleanImageFailureCaption(value: string): string {
+  return String(value || '')
+    .split('\n')
+    .filter(line => !/이미지\s*생성\s*실패/i.test(line))
+    .join('\n')
+    .trim();
+}
+
+function hasImageGenerationFailure(message: SNSGodMessage): boolean {
+  return Boolean(message.imagePrompt && !message.mediaData && /이미지\s*생성\s*실패/i.test(String(message.imageCaption || '')));
+}
+
+function imageItemFromMessage(message: SNSGodMessage, characterName: string): RoomImageItem | undefined {
+  if (!isRenderableMediaUri(message.mediaData)) return undefined;
+  return {
+    id: message.id,
+    uri: String(message.mediaData || ''),
+    title: message.role === 'user' ? '내가 보낸 사진' : `${characterName}의 사진`,
+    prompt: String(message.imagePrompt || '').trim(),
+    caption: cleanImageFailureCaption(String(message.imageCaption || '')).trim(),
+    createdAt: Number(message.createdAt || 0)
+  };
+}
+
+function RoomAlbum({ images, characterName, onClose, onOpenImage }: {
+  images: RoomImageItem[];
+  characterName: string;
+  onClose: () => void;
+  onOpenImage: (item: RoomImageItem) => void;
+}) {
+  return (
+    <View style={styles.albumPanel}>
+      <View style={styles.albumHeader}>
+        <View>
+          <Text style={styles.albumTitle}>{characterName} 앨범</Text>
+          <Text style={styles.albumSubtitle}>{images.length}장</Text>
+        </View>
+        <Pressable onPress={onClose} style={styles.albumClose}><Text style={styles.albumCloseText}>닫기</Text></Pressable>
+      </View>
+      {images.length ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.albumStrip}>
+          {images.map(item => (
+            <Pressable key={item.id} onPress={() => onOpenImage(item)} style={styles.albumTile}>
+              <Image source={{ uri: item.uri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+            </Pressable>
+          ))}
+        </ScrollView>
+      ) : (
+        <Text style={styles.albumEmpty}>이 채팅방에 저장된 사진이 없습니다.</Text>
+      )}
+    </View>
+  );
+}
+
+function ImageViewer({ item, onClose }: { item: RoomImageItem; onClose: () => void }) {
+  const [promptOpen, setPromptOpen] = useState(false);
+  const prompt = item.prompt || '프롬프트 없음';
+  return (
+    <View style={styles.viewerOverlay}>
+      <View style={styles.viewerHeader}>
+        <View style={styles.viewerTitleBlock}>
+          <Text style={styles.viewerTitle}>{item.title}</Text>
+          <Text style={styles.viewerSubtitle}>{new Date(item.createdAt).toLocaleString()}</Text>
+        </View>
+        <Pressable onPress={onClose} style={styles.viewerClose}><Text style={styles.viewerCloseText}>닫기</Text></Pressable>
+      </View>
+      <Image source={{ uri: item.uri }} style={styles.viewerImage} resizeMode="contain" />
+      {item.caption ? <Text style={styles.viewerCaption}>{item.caption}</Text> : null}
+      <Pressable onPress={() => setPromptOpen(value => !value)} style={styles.viewerPromptToggle}>
+        <Text style={styles.viewerPromptToggleText}>{promptOpen ? '프롬프트 접기' : '프롬프트 보기'}</Text>
+      </Pressable>
+      {promptOpen ? (
+        <ScrollView style={styles.viewerPromptBox} contentContainerStyle={styles.viewerPromptContent}>
+          <Text style={styles.viewerPromptText}>{prompt}</Text>
+        </ScrollView>
+      ) : null}
+    </View>
+  );
+}
+
+function ImagePromptRetryEditor({ prompt, finalPrompt, busy, onChangePrompt, onCancel, onSubmit }: {
+  prompt: string;
+  finalPrompt: string;
+  busy: boolean;
+  onChangePrompt: (prompt: string) => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <View style={styles.promptEditorOverlay}>
+      <View style={styles.promptEditorPanel}>
+        <Text style={styles.promptEditorTitle}>이미지 프롬프트 수정</Text>
+        <Text style={styles.promptEditorHelp}>검열로 거부된 표현을 순화하거나 구체적인 장면으로 바꾼 뒤 다시 생성하세요.</Text>
+        <TextInput
+          value={prompt}
+          onChangeText={onChangePrompt}
+          style={styles.promptEditorInput}
+          multiline
+          editable={!busy}
+          textAlignVertical="top"
+          placeholder="이미지 프롬프트"
+          placeholderTextColor="#8a8174"
+        />
+        <Text style={styles.promptEditorFinalLabel}>최종 전송 프롬프트</Text>
+        <ScrollView style={styles.promptEditorFinalBox} contentContainerStyle={styles.promptEditorFinalContent}>
+          <Text selectable style={styles.promptEditorFinalText}>{finalPrompt || '프롬프트 없음'}</Text>
+        </ScrollView>
+        <View style={styles.promptEditorActions}>
+          <Pressable onPress={onCancel} disabled={busy} style={[styles.promptEditorSecondary, busy && styles.sendDisabled]}>
+            <Text style={styles.promptEditorSecondaryText}>취소</Text>
+          </Pressable>
+          <Pressable onPress={onSubmit} disabled={busy || !prompt.trim()} style={[styles.promptEditorPrimary, (busy || !prompt.trim()) && styles.sendDisabled]}>
+            {busy ? <ActivityIndicator color="#241a00" size="small" /> : <Text style={styles.promptEditorPrimaryText}>생성</Text>}
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function MessageBubble({ message, character, userStickers, roomId, onOpenCall, onRejectCall, onRetryFailed, onOpenImage, onRetryImage, regeneratingImageId }: {
   message: SNSGodMessage;
   character: NonNullable<ReturnType<typeof findCharacter>>;
   userStickers: Sticker[];
   roomId: string;
   onOpenCall?: (characterId: string, roomId?: string, messageId?: string) => void;
   onRejectCall?: (message: SNSGodMessage) => void;
+  onRetryFailed?: (message: SNSGodMessage) => void;
+  onOpenImage?: (item: RoomImageItem) => void;
+  onRetryImage?: (message: SNSGodMessage) => void;
+  regeneratingImageId?: string;
 }) {
   const [promptOpen, setPromptOpen] = useState(false);
   const mine = message.role === 'user';
   const system = message.role === 'system';
   const sticker = message.sticker ? (mine ? userStickers : character.stickers || []).find(item => String(item.id) === String(message.sticker)) : undefined;
+  const copyValue = [message.content, message.imageCaption].filter(Boolean).join('\n').trim();
+  const imageItem = imageItemFromMessage(message, character.name);
+  const imageFailed = hasImageGenerationFailure(message);
+  const regenerating = regeneratingImageId === message.id;
+  async function copyMessageText() {
+    if (!copyValue) return;
+    try {
+      if (!TermuxBridge) throw new Error('클립보드 브릿지가 준비되지 않았습니다.');
+      await TermuxBridge.copyText(copyValue);
+      Alert.alert('복사 완료', '말풍선 텍스트를 복사했습니다.');
+    } catch (error) {
+      Alert.alert('복사 실패', error instanceof Error ? error.message : String(error));
+    }
+  }
   if (system) {
-    return <View style={styles.systemBubble}><Text style={styles.systemText}>{message.content}</Text></View>;
+    return (
+      <Pressable onLongPress={copyMessageText} delayLongPress={380} style={styles.systemBubble}>
+        <Text style={styles.systemText}>{message.content}</Text>
+        {message.failed ? (
+          <Pressable accessibilityLabel="답장 재생성" onPress={() => onRetryFailed?.(message)} style={styles.retryButton}>
+            <Text style={styles.retryButtonText}>!</Text>
+          </Pressable>
+        ) : null}
+      </Pressable>
+    );
   }
   return (
     <View style={[styles.messageRow, mine && styles.messageRowMine]}>
@@ -263,7 +528,7 @@ function MessageBubble({ message, character, userStickers, roomId, onOpenCall, o
           <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text>
         </View>
       ) : null}
-      <View style={[styles.bubble, mine ? styles.myBubble : styles.theirBubble]}>
+      <Pressable onLongPress={copyMessageText} delayLongPress={380} style={[styles.bubble, mine ? styles.myBubble : styles.theirBubble]}>
         {message.callInvite ? (
           <View style={styles.callCard}>
             <Text style={styles.callTitle}>{String(message.callTitle || message.mediaName || `${character.name} 전화`)}</Text>
@@ -284,7 +549,9 @@ function MessageBubble({ message, character, userStickers, roomId, onOpenCall, o
         {sticker?.data || sticker?.mediaData ? <Image source={{ uri: sticker.data || sticker.mediaData || '' }} style={styles.stickerImage} resizeMode="contain" /> : message.sticker ? <Text style={styles.stickerText}>스티커 · {sticker?.name || message.sticker}</Text> : null}
         {message.mediaData ? (
           <View style={styles.messageImageWrap}>
-            <Image source={{ uri: message.mediaData }} style={styles.messageImage} resizeMode="cover" />
+            <Pressable onPress={() => imageItem && onOpenImage?.(imageItem)}>
+              <Image source={{ uri: message.mediaData }} style={styles.messageImage} resizeMode="cover" />
+            </Pressable>
             {message.imagePrompt ? (
               <Pressable accessibilityLabel={promptOpen ? '이미지 프롬프트 접기' : '이미지 프롬프트 펼치기'} onPress={() => setPromptOpen(value => !value)} style={styles.promptToggle}>
                 <Text style={styles.promptToggleText}>{promptOpen ? '⌃' : '⌄'}</Text>
@@ -294,7 +561,12 @@ function MessageBubble({ message, character, userStickers, roomId, onOpenCall, o
         ) : null}
         {message.imagePrompt && promptOpen ? <Text style={styles.imageHint}>이미지 프롬프트: {message.imagePrompt}</Text> : null}
         {message.imageCaption ? <Text style={styles.imageHint}>{message.imageCaption}</Text> : null}
-      </View>
+        {imageFailed ? (
+          <Pressable accessibilityLabel="이미지 재생성" onPress={() => onRetryImage?.(message)} disabled={regenerating} style={[styles.imageRetryButton, regenerating && styles.sendDisabled]}>
+            {regenerating ? <ActivityIndicator color="#073d24" size="small" /> : <Text style={styles.imageRetryButtonText}>↻</Text>}
+          </Pressable>
+        ) : null}
+      </Pressable>
       {!mine ? <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text> : null}
     </View>
   );
@@ -344,6 +616,8 @@ const styles = StyleSheet.create({
   promptToggle: { position: 'absolute', right: 6, bottom: 6, width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(86,92,99,0.78)' },
   promptToggleText: { color: '#e5e7eb', fontSize: 16, lineHeight: 20, fontWeight: '900' },
   imageHint: { marginTop: 6, fontSize: 12, color: colors.sub },
+  imageRetryButton: { marginTop: 7, alignSelf: 'flex-start', width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#22c55e', borderWidth: 2, borderColor: '#dcfce7' },
+  imageRetryButtonText: { color: '#073d24', fontSize: 16, lineHeight: 18, fontWeight: '900' },
   callCard: { minWidth: 190, gap: 6 },
   callTitle: { color: colors.text, fontSize: 15, fontWeight: '900' },
   callBody: { color: colors.sub, fontSize: 12, fontWeight: '700' },
@@ -353,8 +627,47 @@ const styles = StyleSheet.create({
   callButtonText: { color: '#fff', fontWeight: '900' },
   callRejectText: { color: colors.text, fontWeight: '900' },
   callStatus: { marginTop: 4, color: colors.sub, fontSize: 12, fontWeight: '900' },
-  systemBubble: { alignSelf: 'center', maxWidth: '88%', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: 'rgba(255,255,255,0.45)' },
+  systemBubble: { alignSelf: 'center', maxWidth: '88%', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: 'rgba(255,255,255,0.45)', position: 'relative' },
   systemText: { color: '#4f5a62', fontSize: 12, fontWeight: '700' },
+  retryButton: { position: 'absolute', right: -8, top: -8, width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.danger, borderWidth: 2, borderColor: '#fff' },
+  retryButtonText: { color: '#fff', fontSize: 13, lineHeight: 16, fontWeight: '900' },
+  albumPanel: { maxHeight: 168, paddingTop: 10, paddingBottom: 10, backgroundColor: '#f7f2e9', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  albumHeader: { paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  albumTitle: { color: colors.text, fontSize: 15, fontWeight: '900' },
+  albumSubtitle: { marginTop: 1, color: colors.sub, fontSize: 11, fontWeight: '800' },
+  albumClose: { minHeight: 32, paddingHorizontal: 12, borderRadius: 16, backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border, justifyContent: 'center' },
+  albumCloseText: { color: colors.text, fontWeight: '900' },
+  albumStrip: { paddingHorizontal: 12, paddingTop: 9, gap: 8 },
+  albumTile: { width: 82, height: 82, borderRadius: 8, overflow: 'hidden', backgroundColor: '#e8dfd0', borderWidth: 1, borderColor: '#d9cbb8' },
+  albumEmpty: { paddingHorizontal: 12, paddingTop: 12, color: colors.sub, fontWeight: '800' },
+  viewerOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 30, backgroundColor: '#101214', padding: 12 },
+  viewerHeader: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  viewerTitleBlock: { flex: 1, minWidth: 0 },
+  viewerTitle: { color: '#fff', fontSize: 17, fontWeight: '900' },
+  viewerSubtitle: { marginTop: 2, color: 'rgba(255,255,255,0.72)', fontSize: 11, fontWeight: '800' },
+  viewerClose: { minHeight: 38, paddingHorizontal: 14, borderRadius: 19, backgroundColor: '#fff', justifyContent: 'center' },
+  viewerCloseText: { color: '#111', fontWeight: '900' },
+  viewerImage: { width: '100%', flex: 1, borderRadius: 8, backgroundColor: '#050607' },
+  viewerCaption: { marginTop: 9, color: 'rgba(255,255,255,0.82)', fontSize: 13, lineHeight: 19, fontWeight: '700' },
+  viewerPromptToggle: { marginTop: 10, minHeight: 40, borderRadius: 20, backgroundColor: '#f7f2e9', alignItems: 'center', justifyContent: 'center' },
+  viewerPromptToggleText: { color: colors.text, fontWeight: '900' },
+  viewerPromptBox: { marginTop: 8, maxHeight: 132, borderRadius: 8, backgroundColor: '#f7f2e9' },
+  viewerPromptContent: { padding: 10 },
+  viewerPromptText: { color: colors.text, fontSize: 13, lineHeight: 19, fontWeight: '700' },
+  promptEditorOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 35, backgroundColor: 'rgba(17,18,20,0.54)', padding: 14, justifyContent: 'center' },
+  promptEditorPanel: { borderRadius: 18, padding: 14, backgroundColor: '#f7f2e9', borderWidth: 1, borderColor: colors.border },
+  promptEditorTitle: { color: colors.text, fontSize: 18, fontWeight: '900' },
+  promptEditorHelp: { marginTop: 5, color: colors.sub, fontSize: 12, lineHeight: 17, fontWeight: '800' },
+  promptEditorInput: { marginTop: 12, minHeight: 132, maxHeight: 220, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', color: colors.text, fontSize: 14, lineHeight: 20 },
+  promptEditorFinalLabel: { marginTop: 10, color: colors.text, fontSize: 12, fontWeight: '900' },
+  promptEditorFinalBox: { marginTop: 6, maxHeight: 128, borderRadius: 10, borderWidth: 1, borderColor: '#d8cbb9', backgroundColor: '#eee8dc' },
+  promptEditorFinalContent: { paddingHorizontal: 10, paddingVertical: 8 },
+  promptEditorFinalText: { color: '#4a4338', fontSize: 11, lineHeight: 16, fontWeight: '700' },
+  promptEditorActions: { marginTop: 12, flexDirection: 'row', gap: 8 },
+  promptEditorSecondary: { flex: 1, minHeight: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
+  promptEditorSecondaryText: { color: colors.text, fontWeight: '900' },
+  promptEditorPrimary: { flex: 1, minHeight: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
+  promptEditorPrimaryText: { color: '#241a00', fontWeight: '900' },
   composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 10, backgroundColor: '#f7f2e9', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   stickerTray: { maxHeight: 144, paddingHorizontal: 10, paddingVertical: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 8, backgroundColor: '#f7f2e9', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   stickerTrayItem: { width: 72, borderRadius: 10, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', padding: 6, alignItems: 'center' },

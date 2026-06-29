@@ -1,5 +1,6 @@
-import { callLLM, generateImageDataUri } from './api';
+import { callLLM, generateImageDataUri, imagePromptWithoutCharacterName } from './api';
 import { beginChatJob, cancelChatJob, endChatJob, isCurrentChatJob, tryLockGeneratingRoom } from './chatJobs';
+import { shouldAllowChatImageGeneration } from './chatImageGuard';
 import { characterReferenceImageForPrompt } from './imageReference';
 import { makeId } from './ids';
 import { isRenderableMediaUri } from './media';
@@ -187,6 +188,7 @@ export async function startReplyJob(input: StartReplyJobInput) {
 
     if (!reply.messages.length) throw new Error('모델 응답에서 표시할 메시지를 찾지 못했습니다. ETC > 디버그에서 llm.response 원문을 확인하세요.');
     const bubbles = normalizeReplyMessagesForStyle(reply.messages, promptTarget.character);
+    let deliveredCount = 0;
     for (const bubble of bubbles) {
       await sleep(bubbleDelayMs(promptTarget.character, bubble.delay ?? reply.reactionDelay));
       if (!isCurrentChatJob(input.roomId, jobId)) return;
@@ -194,9 +196,30 @@ export async function startReplyJob(input: StartReplyJobInput) {
       if (!latestForBubble) return;
       const phone = phoneCardFromReply(input.getState() || promptState, latestForBubble.character, bubble, 'reply');
       let mediaData = '';
-      if (bubble.imagePrompt && input.getState()?.config.imageGeneration?.enabled !== false) {
+      const imageState = input.getState() || promptState;
+      const imageAllowed = shouldAllowChatImageGeneration({
+        state: imageState,
+        roomId: input.roomId,
+        characterId: latestForBubble.character.id,
+        latestUserText: input.latestUserInput,
+        sourceMode: 'reply',
+        imagePrompt: bubble.imagePrompt
+      });
+      if (!imageAllowed && bubble.imagePrompt) {
+        void appendDebugLog('chat.image.blocked', JSON.stringify({
+          roomId: input.roomId,
+          characterId: latestForBubble.character.id,
+          latestUserText: input.latestUserInput,
+          imagePrompt: bubble.imagePrompt,
+          imageCaption: bubble.imageCaption,
+          reason: 'no_explicit_image_intent'
+        }), 'info');
+        bubble.imagePrompt = undefined;
+        bubble.imageCaption = undefined;
+      }
+      if (bubble.imagePrompt && imageAllowed) {
+        bubble.imagePrompt = imagePromptWithoutCharacterName(bubble.imagePrompt, latestForBubble.character);
         try {
-          const imageState = input.getState() || promptState;
           mediaData = await generateImageDataUri(imageState, bubble.imagePrompt, latestForBubble.character, {
             referenceImage: characterReferenceImageForPrompt(latestForBubble.character, bubble.imagePrompt),
             kind: 'general'
@@ -206,7 +229,8 @@ export async function startReplyJob(input: StartReplyJobInput) {
           bubble.imageCaption = `${bubble.imageCaption || ''}\n이미지 생성 실패: ${error instanceof Error ? error.message : String(error)}`.trim();
         }
       }
-      if (phone.textContent || bubble.sticker || bubble.imagePrompt || bubble.imageCaption || isRenderableMediaUri(mediaData)) {
+      const shouldAppendBubble = Boolean(phone.textContent?.trim()) || Boolean(bubble.sticker) || isRenderableMediaUri(mediaData) || Boolean(bubble.imageCaption?.trim());
+      if (shouldAppendBubble) {
         const message: SNSGodMessage = {
           id: makeId('msg'),
           role: 'character',
@@ -214,16 +238,27 @@ export async function startReplyJob(input: StartReplyJobInput) {
           content: phone.textContent || '',
           createdAt: Date.now(),
           sticker: bubble.sticker,
-          imagePrompt: bubble.imagePrompt,
-          imageCaption: bubble.imageCaption,
+          imagePrompt: mediaData || (imageAllowed && bubble.imageCaption?.trim()) ? bubble.imagePrompt : undefined,
+          imageCaption: mediaData || (imageAllowed && bubble.imageCaption?.trim()) ? bubble.imageCaption : undefined,
           mediaData: mediaData || undefined,
           mediaType: mediaData ? 'image' : undefined
         };
         await input.commitCurrent(current => appendMessage(current, input.roomId, message));
+        deliveredCount += 1;
       }
       if (phone.card) {
         await input.commitCurrent(current => appendMessage(current, input.roomId, phone.card as SNSGodMessage));
+        deliveredCount += 1;
       }
+    }
+    if (deliveredCount === 0 && isCurrentChatJob(input.roomId, jobId)) {
+      await input.commitCurrent(current => appendMessage(current, input.roomId, {
+        id: makeId('msg'),
+        role: 'character',
+        characterId: promptTarget.character.id,
+        content: '응, 방금 말 계속 생각하고 있었어.',
+        createdAt: Date.now()
+      }));
     }
 
     if (!isCurrentChatJob(input.roomId, jobId)) return;

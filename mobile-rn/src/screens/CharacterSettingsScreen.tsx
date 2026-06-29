@@ -5,7 +5,9 @@ import { CalendarEvent, LoreEntry, SNSGodCharacter, SNSGodRoom, SNSGodState } fr
 import { clampNumber, makeId } from '../logic/ids';
 import { findCharacter, updateCharacter } from '../logic/stateHelpers';
 import { isRenderableMediaUri, pickImageDataUri } from '../logic/media';
-import { generateImageDataUri } from '../logic/api';
+import { callLLMText, generateImageDataUri, imagePromptWithoutCharacterName, parseJsonObject } from '../logic/api';
+import { DEFAULT_COVER_BACKGROUND_DIRECTION } from '../logic/prompts';
+import { characterReferenceImages, randomReferenceImage } from '../logic/imageReference';
 
 type CharacterSection = 'basic' | 'reply' | 'profile' | 'time' | 'calendar' | 'lore' | 'stickers' | 'prompt';
 
@@ -96,6 +98,7 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
   const [loreKeys, setLoreKeys] = useState('');
   const [loreContent, setLoreContent] = useState('');
   const [inlineStatus, setInlineStatus] = useState('');
+  const [promptGenerating, setPromptGenerating] = useState<'avatar' | ''>('');
 
   if (!character || !draft) {
     return (
@@ -173,7 +176,7 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
     setDraft(prev => prev ? { ...prev, [key]: value } : prev);
   }
 
-  async function chooseImage(key: 'avatar' | 'coverImage' | 'profileReferenceImage') {
+  async function chooseImage(key: 'avatar' | 'coverImage') {
     try {
       const image = await pickImageDataUri();
       if (!image) return;
@@ -204,8 +207,8 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
     try {
       const prompt = kind === 'avatar'
         ? String(draft.profileAvatarPrompt || `portrait profile photo, clear face, casual expression, messenger profile picture, ${draft.name}`)
-        : String(draft.profileCoverPrompt || `quiet mood cover background for ${draft.name}, no people, no text`);
-      const referenceImage = kind === 'avatar' ? String(draft.profileReferenceImage || '') : '';
+        : String(draft.profileCoverPrompt || DEFAULT_COVER_BACKGROUND_DIRECTION);
+      const referenceImage = kind === 'avatar' ? randomReferenceImage(normalizedReferenceImages(draft)) || '' : '';
       const image = await generateImageDataUri(state, prompt, draft, { referenceImage, kind: kind === 'avatar' ? 'profile' : 'cover' });
       const historyItem = { id: makeId('profile_image'), image, prompt, createdAt: Date.now(), kind: kind === 'avatar' ? 'profile' as const : 'cover' as const };
       if (kind === 'avatar') {
@@ -216,6 +219,73 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
     } catch (error) {
       Alert.alert('AI 이미지 생성 실패', error instanceof Error ? error.message : String(error));
     }
+  }
+
+  async function generateImagePrompt() {
+    if (!draft || promptGenerating) return;
+    setPromptGenerating('avatar');
+    setInlineStatus('프로필사진 프롬프트를 작성 중입니다.');
+    try {
+      const { text } = await callLLMText(state, [
+        {
+          role: 'system',
+          content: [
+            'You write concise English image-generation prompts for a fictional messenger app.',
+            'Return raw JSON only: {"prompt":"..."}. No markdown, no explanation.',
+            'Create a BASE identity prompt for future profile-photo generation, not a one-time scene prompt. Extract only stable visual identity from the character profile: face shape, facial impression, eyes, hair color/style if clearly described, approximate adult age impression, expression range, and overall aura. Do NOT lock in specific clothing, accessories, jewelry, bags, uniforms, brands, pose, camera angle, background, location, season, activity, lighting gimmick, or repeated outfit details. Keep clothing generic and non-binding if unavoidable, such as variable simple casual clothing. The prompt must remain reusable across many future images without forcing the same outfit or scene. Keep it safe, non-explicit, and identity-consistent.',
+            'Prompt should be one compact English paragraph or comma-separated tag sentence, 35-80 words.',
+            'If appearance is unclear, infer a grounded non-specific look from the profile without contradicting it.'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: [
+            `Character profile prompt:\n${draft.prompt || '(empty)'}`,
+            draft.profileMessage ? `Profile message:\n${draft.profileMessage}` : '',
+            draft.statusMessage ? `Status message:\n${draft.statusMessage}` : '',
+            `Location: ${draft.locationName || state.config.locationName || 'Seoul'}`,
+            `Existing profile photo prompt:\n${draft.profileAvatarPrompt || '(empty)'}`
+          ].filter(Boolean).join('\n\n')
+        }
+      ]);
+      const prompt = imagePromptWithoutCharacterName(cleanGeneratedImagePrompt(text), draft);
+      if (!prompt) throw new Error('AI 응답에서 이미지 프롬프트를 찾지 못했습니다.');
+      set('profileAvatarPrompt', prompt);
+      setInlineStatus('프로필사진 프롬프트를 자동 작성했습니다.');
+    } catch (error) {
+      Alert.alert('프롬프트 작성 실패', error instanceof Error ? error.message : String(error));
+      setInlineStatus(`프롬프트 작성 실패: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setPromptGenerating('');
+    }
+  }
+
+  async function chooseReferenceImage(index?: number) {
+    try {
+      const image = await pickImageDataUri();
+      if (!image) return;
+      setDraft(prev => {
+        if (!prev) return prev;
+        const next = [...normalizedReferenceImages(prev)];
+        if (typeof index === 'number') {
+          next[index] = image;
+        } else if (next.length < 3) {
+          next.push(image);
+        }
+        const compact = next.filter(Boolean).slice(0, 3);
+        return { ...prev, profileReferenceImages: compact, profileReferenceImage: compact[0] || '' };
+      });
+    } catch (error) {
+      Alert.alert('레퍼런스 선택 실패', error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function removeReferenceImage(index: number) {
+    setDraft(prev => {
+      if (!prev) return prev;
+      const compact = normalizedReferenceImages(prev).filter((_, itemIndex) => itemIndex !== index).slice(0, 3);
+      return { ...prev, profileReferenceImages: compact, profileReferenceImage: compact[0] || '' };
+    });
   }
 
   function applyCalendarPreset(preset: typeof CALENDAR_PRESETS[number]) {
@@ -334,15 +404,15 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
               onClear={() => setDraft(prev => prev ? { ...prev, avatar: '', profileImage: '' } : prev)}
               onGenerate={() => generateProfileImage('avatar')}
             />
-            <ImageField
-              label="프로필 생성 레퍼런스 원본"
-              value={String(draft.profileReferenceImage || '')}
-              onChoose={() => chooseImage('profileReferenceImage')}
-              onClear={() => set('profileReferenceImage', '')}
+            <ReferenceImagesField
+              values={normalizedReferenceImages(draft)}
+              onAdd={() => chooseReferenceImage()}
+              onReplace={index => chooseReferenceImage(index)}
+              onRemove={removeReferenceImage}
             />
             <ImageField label="프로필 배경 사진" value={draft.coverImage} onChoose={() => chooseImage('coverImage')} onClear={() => set('coverImage', '')} onGenerate={() => generateProfileImage('coverImage')} wide />
-            <Field label="프로필사진 프롬프트" value={String(draft.profileAvatarPrompt || '')} onChangeText={value => set('profileAvatarPrompt', value)} multiline />
-            <Field label="배경사진 프롬프트" value={String(draft.profileCoverPrompt || '')} onChangeText={value => set('profileCoverPrompt', value)} multiline />
+            <Field label="프로필사진 프롬프트" value={String(draft.profileAvatarPrompt || '')} onChangeText={value => set('profileAvatarPrompt', value)} multiline actionLabel={promptGenerating === 'avatar' ? '작성 중' : 'AI 작성'} onAction={() => generateImagePrompt()} actionDisabled={Boolean(promptGenerating)} />
+            <Field label="배경사진 지시문" value={String(draft.profileCoverPrompt || '')} onChangeText={value => set('profileCoverPrompt', value)} multiline help="AI 작성은 사용하지 않습니다. 자동 배경 변경은 최근 대화, 통화, 캐릭터 행적을 기준으로 만들며, 여기는 원하면 추가 방향만 적습니다." />
             <SwitchRow label="상태메시지 자동 변경" value={draft.statusMessageAutoChange !== false} onValueChange={value => set('statusMessageAutoChange', value)} />
             <SwitchRow label="프로필사진 자동 변경" value={draft.profilePhotoAutoChange === true} onValueChange={value => set('profilePhotoAutoChange', value)} />
             <SwitchRow label="배경사진 자동 변경" value={draft.coverPhotoAutoChange === true} onValueChange={value => set('coverPhotoAutoChange', value)} />
@@ -448,10 +518,13 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
 
 function normalizeDraft(character: SNSGodCharacter): SNSGodCharacter {
   const unifiedProfileImage = character.avatar || character.profileImage || '';
+  const profileReferenceImages = normalizedReferenceImages(character);
   return {
     ...character,
     avatar: unifiedProfileImage,
     profileImage: unifiedProfileImage,
+    profileReferenceImages,
+    profileReferenceImage: profileReferenceImages[0] || '',
     language: String(character.language || 'inherit'),
     color: String(character.color || '#8bd3dd'),
     messageStyle: character.messageStyle || 'balanced',
@@ -478,10 +551,15 @@ function normalizeDraft(character: SNSGodCharacter): SNSGodCharacter {
     statusMessageChangeChance: Number(character.statusMessageChangeChance ?? 40),
     profilePhotoChangeChance: Number(character.profilePhotoChangeChance ?? 5),
     coverPhotoChangeChance: Number(character.coverPhotoChangeChance ?? 5),
+    profileCoverPrompt: String(character.profileCoverPrompt || DEFAULT_COVER_BACKGROUND_DIRECTION),
     weatherEnabled: character.weatherEnabled !== false,
     timeContextEnabled: character.timeContextEnabled !== false,
     calendarEvents: (character.calendarEvents || []).map(normalizeCalendarEvent)
   };
+}
+
+function normalizedReferenceImages(character: SNSGodCharacter): string[] {
+  return characterReferenceImages(character).slice(0, 3);
 }
 
 function normalizeCalendarEvent(event: Partial<CalendarEvent>): CalendarEvent {
@@ -498,6 +576,18 @@ function validChoice(value: string, options: string[][], fallback: string) {
   return options.some(([key]) => key === value) ? value : fallback;
 }
 
+function cleanGeneratedImagePrompt(text: string) {
+  const parsed = parseJsonObject<{ prompt?: string; imagePrompt?: string; profilePrompt?: string; coverPrompt?: string }>(text);
+  const raw = parsed?.prompt || parsed?.imagePrompt || parsed?.profilePrompt || text;
+  return String(raw || '')
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/```$/i, '')
+    .replace(/^\s*["']?(prompt|imagePrompt|profilePrompt|coverPrompt)["']?\s*[:=]\s*/i, '')
+    .replace(/^[{["'\s]+|[}\]"'\s]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function parseStickers(text: string) {
   return text.split('\n').map(item => item.trim()).filter(Boolean).map((line, index) => {
     const [id, name, description, data] = line.split('|').map(part => part.trim());
@@ -509,10 +599,17 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return <View style={styles.card}><Text style={styles.cardTitle}>{title}</Text>{children}</View>;
 }
 
-function Field({ label, value, onChangeText, help, multiline }: { label: string; value: string; onChangeText: (value: string) => void; help?: string; multiline?: boolean }) {
+function Field({ label, value, onChangeText, help, multiline, actionLabel, onAction, actionDisabled }: { label: string; value: string; onChangeText: (value: string) => void; help?: string; multiline?: boolean; actionLabel?: string; onAction?: () => void; actionDisabled?: boolean }) {
   return (
     <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
+      <View style={styles.fieldHeader}>
+        <Text style={styles.label}>{label}</Text>
+        {onAction ? (
+          <Pressable onPress={onAction} disabled={actionDisabled} style={[styles.inlineAction, actionDisabled && styles.inlineActionDisabled]}>
+            <Text style={styles.inlineActionText}>{actionLabel || 'AI 작성'}</Text>
+          </Pressable>
+        ) : null}
+      </View>
       <TextInput value={value} onChangeText={onChangeText} style={[styles.input, multiline && styles.textarea]} multiline={multiline} textAlignVertical={multiline ? 'top' : 'center'} />
       {help ? <Text style={styles.help}>{help}</Text> : null}
     </View>
@@ -610,6 +707,38 @@ function ImageField({ label, value, onChoose, onClear, onGenerate, wide }: { lab
   );
 }
 
+function ReferenceImagesField({ values, onAdd, onReplace, onRemove }: { values: string[]; onAdd: () => void; onReplace: (index: number) => void; onRemove: (index: number) => void }) {
+  return (
+    <View style={styles.field}>
+      <View style={styles.fieldHeader}>
+        <Text style={styles.label}>프로필 생성 레퍼런스 원본</Text>
+        <Text style={styles.help}>{values.length}/3</Text>
+      </View>
+      <View style={styles.referenceGrid}>
+        {[0, 1, 2].map(index => {
+          const value = values[index];
+          return (
+            <View key={index} style={styles.referenceSlot}>
+              {value ? <Image source={{ uri: value }} style={styles.referenceImage} /> : <View style={styles.referenceEmpty}><Text style={styles.emptyPreviewText}>비어 있음</Text></View>}
+              <View style={styles.referenceActions}>
+                <Pressable onPress={() => value ? onReplace(index) : onAdd()} style={styles.referenceButton}>
+                  <Text style={styles.referenceButtonText}>{value ? '수정' : '추가'}</Text>
+                </Pressable>
+                {value ? (
+                  <Pressable onPress={() => onRemove(index)} style={[styles.referenceButton, styles.referenceDelete]}>
+                    <Text style={styles.referenceDeleteText}>삭제</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+          );
+        })}
+      </View>
+      <Text style={styles.help}>최대 3장까지 등록합니다. 얼굴/전신 이미지 생성 때 매번 등록된 사진 중 1장을 랜덤으로 참조합니다.</Text>
+    </View>
+  );
+}
+
 function StickerPreview({ text }: { text: string }) {
   const stickers = parseStickers(text).slice(0, 12);
   if (!stickers.length) return <Text style={styles.help}>등록된 스티커가 없습니다.</Text>;
@@ -674,7 +803,11 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: 17, fontWeight: '900', color: colors.text },
   subhead: { marginTop: 8, color: colors.text, fontSize: 15, fontWeight: '900' },
   field: { gap: 6 },
+  fieldHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   label: { fontSize: 12, color: colors.sub, fontWeight: '900' },
+  inlineAction: { minHeight: 28, paddingHorizontal: 9, borderRadius: 14, borderWidth: 1, borderColor: '#d2c6b5', backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
+  inlineActionDisabled: { opacity: 0.55 },
+  inlineActionText: { color: colors.text, fontSize: 11, fontWeight: '900' },
   sliderHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
   sliderValue: { minWidth: 34, textAlign: 'right', color: colors.text, fontWeight: '900', fontSize: 13 },
   sliderTrack: { height: 30, borderRadius: 15, backgroundColor: '#eee8dc', borderWidth: 1, borderColor: colors.border, justifyContent: 'center', overflow: 'hidden' },
@@ -705,6 +838,15 @@ const styles = StyleSheet.create({
   imageButtons: { flex: 1, gap: 8 },
   imageButton: { minHeight: 38, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
   imageButtonText: { color: colors.text, fontWeight: '900' },
+  referenceGrid: { flexDirection: 'row', gap: 8 },
+  referenceSlot: { flex: 1, minWidth: 0, padding: 7, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', gap: 7 },
+  referenceImage: { width: '100%', aspectRatio: 1, borderRadius: 8, backgroundColor: '#eee8dc' },
+  referenceEmpty: { width: '100%', aspectRatio: 1, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#eee8dc', alignItems: 'center', justifyContent: 'center' },
+  referenceActions: { gap: 6 },
+  referenceButton: { minHeight: 30, borderRadius: 7, borderWidth: 1, borderColor: colors.border, backgroundColor: '#f7f2e9', alignItems: 'center', justifyContent: 'center' },
+  referenceButtonText: { color: colors.text, fontSize: 12, fontWeight: '900' },
+  referenceDelete: { borderColor: '#f0b7b7', backgroundColor: '#fff1f1' },
+  referenceDeleteText: { color: colors.danger, fontSize: 12, fontWeight: '900' },
   stickerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   stickerTile: { width: 74, padding: 6, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center' },
   stickerImage: { width: 48, height: 48, borderRadius: 8 },

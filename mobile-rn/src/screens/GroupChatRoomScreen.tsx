@@ -2,13 +2,15 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, Image, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
-import { callLLMText, generateImageDataUri, parseJsonObject } from '../logic/api';
+import { callLLMText, generateImageDataUri, imagePromptWithoutCharacterName, parseJsonObject } from '../logic/api';
 import { makeId } from '../logic/ids';
 import { formatMessageTime } from '../logic/time';
 import { MAX_CONTEXT_MESSAGES, MAX_GROUP_ROOM_MESSAGES } from '../logic/limits';
 import { SNSGodCharacter, SNSGodMessage, SNSGodState, Sticker } from '../types';
 import { markRoomRead } from '../logic/notifications';
 import { beginChatJob, endChatJob, isCurrentChatJob, tryLockGeneratingRoom } from '../logic/chatJobs';
+import { shouldAllowChatImageGeneration } from '../logic/chatImageGuard';
+import { appendDebugLog } from '../logic/debugLog';
 import { isRenderableMediaUri } from '../logic/media';
 import { characterReferenceImageForPrompt } from '../logic/imageReference';
 
@@ -89,6 +91,9 @@ function buildGroupPrompt(state: SNSGodState, roomId: string, participants: SNSG
   const system = [
     'This is a private fictional group messenger. Stay in character and return JSON only.',
     'Return only valid JSON: {"messages":[{"characterId":"one allowed id","content":"short Korean chat bubble","sticker":"","imagePrompt":"","imageCaption":""}]}. Do not wrap it in markdown.',
+    state.config.imageGeneration?.enabled === false
+      ? 'Image sending is disabled. Do not include imagePrompt or imageCaption.'
+      : 'Image sending is strictly opt-in. Include imagePrompt when the latest user message explicitly asks for a photo, selfie, picture, image, visual, drawing, outfit, face, appearance, scene, or asks someone to show/send/take a photo. If the user asks situational questions about food, cafe, outside, travel, scenery, outfit, wearing, or what someone is doing, one relevant phone-photo imagePrompt is allowed occasionally, but not every time. Never add random selfies or atmospheric images during ordinary group chat.',
     'Write 1 to 4 messages. Usually only 1 to 3 members reply. Not everyone needs to answer.',
     'Every message must include characterId from the allowed member list. Do not use outside speakers.',
     'Do not expose JSON keys as visible chat text. Do not echo, rewrite, summarize, or delete the latest user message.',
@@ -240,7 +245,28 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
         if (!isCurrentChatJob(roomId, jobId)) return;
         let mediaData = '';
         const imageState = stateRef.current;
-        if (item.imagePrompt && imageState.config.imageGeneration?.enabled !== false) {
+        const imageAllowed = shouldAllowChatImageGeneration({
+          state: imageState,
+          roomId,
+          characterId: speaker.id,
+          latestUserText: content,
+          sourceMode: 'reply',
+          imagePrompt: item.imagePrompt
+        });
+        if (!imageAllowed && item.imagePrompt) {
+          void appendDebugLog('chat.image.blocked', JSON.stringify({
+            roomId,
+            characterId: speaker.id,
+            latestUserText: content,
+            imagePrompt: item.imagePrompt,
+            imageCaption: item.imageCaption,
+            reason: 'no_explicit_image_intent'
+          }), 'info');
+          item.imagePrompt = undefined;
+          item.imageCaption = undefined;
+        }
+        if (item.imagePrompt && imageAllowed) {
+          item.imagePrompt = imagePromptWithoutCharacterName(item.imagePrompt, speaker);
           try {
             mediaData = await generateImageDataUri(imageState, item.imagePrompt, speaker, {
               referenceImage: characterReferenceImageForPrompt(speaker, item.imagePrompt),
@@ -250,9 +276,23 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
             item.imageCaption = `${item.imageCaption || ''}\n이미지 생성 실패: ${error instanceof Error ? error.message : String(error)}`.trim();
           }
         }
-        const characterMessage: SNSGodMessage = { id: makeId('msg'), role: 'character', characterId: speaker.id, content: String(item.content || '').trim(), createdAt: Date.now(), sticker: item.sticker, imagePrompt: item.imagePrompt, imageCaption: item.imageCaption, mediaData: mediaData || undefined, mediaType: mediaData ? 'image' : undefined };
-        await commitCurrent(current => appendGroupMessage(current, roomId, characterMessage));
-        deliveredCount += 1;
+        const shouldAppendBubble = Boolean(String(item.content || '').trim()) || Boolean(item.sticker) || isRenderableMediaUri(mediaData) || Boolean(item.imageCaption?.trim());
+        if (shouldAppendBubble) {
+          const characterMessage: SNSGodMessage = {
+            id: makeId('msg'),
+            role: 'character',
+            characterId: speaker.id,
+            content: String(item.content || '').trim(),
+            createdAt: Date.now(),
+            sticker: item.sticker,
+            imagePrompt: mediaData || (imageAllowed && item.imageCaption?.trim()) ? item.imagePrompt : undefined,
+            imageCaption: mediaData || (imageAllowed && item.imageCaption?.trim()) ? item.imageCaption : undefined,
+            mediaData: mediaData || undefined,
+            mediaType: mediaData ? 'image' : undefined
+          };
+          await commitCurrent(current => appendGroupMessage(current, roomId, characterMessage));
+          deliveredCount += 1;
+        }
         setTypingCharacters(prev => prev.filter(value => value.id !== speaker.id));
       }
     } catch (error) {

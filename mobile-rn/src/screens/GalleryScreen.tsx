@@ -32,7 +32,7 @@ function collectGalleryItems(state: SNSGodState): GalleryItem[] {
         uri,
         prompt,
         createdAt: Number(history.createdAt || 0),
-        source: history.kind === 'cover' ? '프로필 커버 AI 생성' : '프로필 사진 AI 생성'
+        source: history.kind === 'cover' ? '프로필 커버' : '프로필'
       });
     }
   }
@@ -48,7 +48,7 @@ function collectGalleryItems(state: SNSGodState): GalleryItem[] {
       uri,
       prompt,
       createdAt: Number(post.createdAt || 0),
-      source: post.platform === 'instagram' ? 'Instagram AI 이미지' : 'X AI 이미지'
+      source: post.platform === 'instagram' ? 'Instagram' : 'X'
     });
   }
   for (const [roomId, messages] of Object.entries(state.messages || {})) {
@@ -64,7 +64,7 @@ function collectGalleryItems(state: SNSGodState): GalleryItem[] {
         uri,
         prompt,
         createdAt: Number(message.createdAt || 0),
-        source: '채팅 AI 이미지'
+        source: '채팅'
       });
     }
   }

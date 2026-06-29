@@ -1,4 +1,4 @@
-import { callLLMText, generateImageDataUri, parseJsonObject } from './api';
+import { callLLMText, generateImageDataUri, imagePromptWithoutCharacterName, parseJsonObject } from './api';
 import { appendDebugLog } from './debugLog';
 import { characterReferenceImageForPrompt } from './imageReference';
 import { makeId } from './ids';
@@ -43,7 +43,11 @@ type GeneratedSns = {
   stats?: GeneratedPlatform['stats'];
   imagePrompt?: string;
   imageCaption?: string;
-  dms?: { title?: string; messages?: { from?: string; body?: string; content?: string }[] }[];
+  dms?: {
+    title?: string;
+    participants?: { id?: string; name?: string; handle?: string; avatar?: string; role?: 'user' | 'character' | 'thirdParty' }[];
+    messages?: { from?: string; fromName?: string; body?: string; content?: string }[];
+  }[];
 };
 
 const autoPostingRooms = new Set<string>();
@@ -65,6 +69,7 @@ export function snsOptionsFor(state: SNSGodState, platform: SNSPost['platform'],
     textOnly: false,
     noDM: false,
     thirdPartyDM: false,
+    enabled: true,
     autoComments: true,
     commentQty: '2-4',
     subject: '',
@@ -105,7 +110,7 @@ function fallbackSnsText(character: SNSGodCharacter, platform: SNSPost['platform
 }
 
 function fallbackSnsImagePrompt(character: SNSGodCharacter, text: string): string {
-  return `Natural phone photo for ${character.name}, matching this social post mood: ${cleanSnsText(text).slice(0, 160) || 'quiet daily moment'}, no text overlay, no watermark`;
+  return `Natural phone photo matching this social post mood: ${cleanSnsText(text).slice(0, 160) || 'quiet daily moment'}, no text overlay, no watermark`;
 }
 
 function ensureNsfwTag(prompt: string): string {
@@ -220,9 +225,17 @@ function toPostDms(generated: GeneratedSns): NonNullable<SNSPost['dms']> {
   return (generated.dms || []).map(thread => ({
     id: makeId('snsdm'),
     title: String(thread.title || '다른 DM'),
+    participants: (thread.participants || []).map(participant => ({
+      id: String(participant.id || participant.name || makeId('dmuser')),
+      name: String(participant.name || participant.id || 'DM 상대'),
+      handle: participant.handle ? String(participant.handle).replace(/^@/, '') : undefined,
+      avatar: participant.avatar ? String(participant.avatar) : undefined,
+      role: (participant.role === 'character' || participant.role === 'user' ? participant.role : 'thirdParty') as 'user' | 'character' | 'thirdParty'
+    })).filter(participant => participant.name),
     messages: (thread.messages || []).map(message => ({
       id: makeId('snsdmmsg'),
       from: String(message.from || 'Follower'),
+      fromName: message.fromName ? String(message.fromName) : undefined,
       body: cleanSnsText(message.body || message.content || ''),
       createdAt: Date.now()
     })).filter(message => message.body),
@@ -239,11 +252,15 @@ function ensureThirdPartyDms(
   const preview = cleanSnsText(post.content).slice(0, 80);
   return [{
     id: makeId('snsdm'),
-    title: '팔로워 DM',
+    title: `팔로워 ↔ ${character.name}`,
+    participants: [
+      { id: 'third:follower', name: '팔로워', role: 'thirdParty' },
+      { id: `character:${character.id}`, name: character.name, handle: character.handle, avatar: character.profileImage || character.avatar, role: 'character' }
+    ],
     messages: [
       {
         id: makeId('snsdmmsg'),
-        from: 'Follower',
+        from: '팔로워',
         body: preview ? `방금 글 봤는데, ${preview}` : '방금 올린 글 봤어. 분위기 좋다.',
         createdAt: Date.now()
       },
@@ -335,6 +352,7 @@ async function applySnsImagePolicy(state: SNSGodState, posts: SNSPost[], charact
     }
     if (!next.imagePrompt) next.imagePrompt = fallbackSnsImagePrompt(character, next.content || rawText);
     if (sns.nsfw && next.imagePrompt) next.imagePrompt = ensureNsfwTag(next.imagePrompt);
+    if (next.imagePrompt) next.imagePrompt = imagePromptWithoutCharacterName(next.imagePrompt, character);
     if (!next.image && next.imagePrompt && state.config.imageGeneration?.enabled) {
       try {
         next.image = await generateImageDataUri(state, next.imagePrompt, character, {
@@ -367,7 +385,8 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
     'Make the post feel like an actual private/back-account SNS update: specific, indirect, character-authored, and socially readable.',
     'Do not write a generic fallback diary line. Use clean timeline, phone summary, character profile, mood, image, place/time, relationship beat, or inside joke.',
     'Never include phone-call UI artifacts, JSON keys, call markers, or direct messenger reply wording in the visible SNS text.',
-    'Return only JSON: {"platforms":[{"platform":"twitter|instagram","displayName":"","handle":"","text":"","hashtags":[""],"stats":{"views":0,"likes":0,"replies":0,"reposts":0,"bookmarks":0},"comments":[{"name":"","handle":"","body":"","likes":0}],"imagePrompt":"","imageCaption":""}],"dms":[{"title":"","messages":[{"from":"","body":""}]}]}.',
+    'Return only JSON: {"platforms":[{"platform":"twitter|instagram","displayName":"","handle":"","text":"","hashtags":[""],"stats":{"views":0,"likes":0,"replies":0,"reposts":0,"bookmarks":0},"comments":[{"name":"","handle":"","body":"","likes":0}],"imagePrompt":"","imageCaption":""}],"dms":[{"title":"A ↔ B","participants":[{"name":"","role":"thirdParty|character"}],"messages":[{"from":"","body":""}]}]}.',
+    'For every DM message, from must be one of the participant display names. Do not make every message from the character. Create a plausible back-and-forth conversation.',
     `Target platform: ${targetPlatform}.`,
     `Current time context: ${timeContextForSns(state)}.`,
     dailyMicro ? 'Daily micro mode: no strong recent chat direction exists, so write a short ordinary daily/private account post. Set imagePrompt empty unless the user attached an image.' : '',
@@ -442,6 +461,7 @@ export async function maybeCreateAutoSNSPost(state: SNSGodState, character: SNSG
   const chance = Math.max(0, Math.min(100, Number(config.snsAutoChance ?? config.autoSnsChance ?? 40)));
   if (Math.random() * 100 >= chance) return state;
   const platform = Math.random() > 0.5 ? 'instagram' : 'twitter';
+  if (snsOptionsFor(state, platform, character).enabled === false) return state;
   autoPostingRooms.add(roomId);
   try {
     return await generateSNSPost(state, character, platform, { roomId, manual: false });

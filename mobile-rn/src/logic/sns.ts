@@ -422,6 +422,11 @@ async function applySnsImagePolicy(state: SNSGodState, posts: SNSPost[], charact
         });
       } catch (error) {
         await appendDebugLog('sns.image', `SNS image generation failed: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+        next = {
+          ...next,
+          imageGenerationFailed: true,
+          imageCaption: `이미지 생성 실패: ${error instanceof Error ? error.message : String(error)}`
+        };
       }
     }
     result.push(next);

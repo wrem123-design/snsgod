@@ -293,6 +293,7 @@ export type SNSPost = {
   generationFailed?: boolean;
   generationError?: string;
   generationRoomId?: string;
+  imageGenerationFailed?: boolean;
 };
 
 export type SNSDmParticipant = {

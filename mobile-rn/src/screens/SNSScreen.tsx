@@ -918,6 +918,9 @@ function PostCard({ platform, post, character, dmEnabled, onLike, onDelete, onCo
   const [comment, setComment] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
   const failed = post.generationFailed === true;
+  const imageFailed = !failed && (post.imageGenerationFailed === true || (Boolean(post.imagePrompt) && !post.image));
+  const blankPost = !failed && !post.image && !String(post.content || '').trim();
+  const recoverable = failed || imageFailed || blankPost;
   async function submitComment() {
     const trimmed = comment.trim();
     if (!trimmed || submittingComment) return;
@@ -943,18 +946,18 @@ function PostCard({ platform, post, character, dmEnabled, onLike, onDelete, onCo
           <Text style={[styles.more, platform === 'twitter' && styles.xMore]}>...</Text>
         </Pressable>
       </View>
-      {failed ? (
+      {recoverable ? (
         <Pressable accessibilityLabel="SNS 재생성" onPress={onRetryFailed} style={[styles.snsFailureBody, platform === 'twitter' && styles.xSnsFailureBody]}>
-          <Text style={[styles.snsFailureText, platform === 'twitter' && styles.xSnsFailureText]} numberOfLines={2}>SNS 생성 실패</Text>
+          <Text style={[styles.snsFailureText, platform === 'twitter' && styles.xSnsFailureText]} numberOfLines={2}>{failed ? 'SNS 생성 실패' : imageFailed ? '이미지 생성 실패' : '빈 게시물'}</Text>
           <View style={styles.snsRetryButton}>
             <Text style={styles.snsRetryButtonText}>!</Text>
           </View>
           <Text style={[styles.snsFailureHint, platform === 'twitter' && styles.xSnsFailureText]}>눌러서 재생성</Text>
         </Pressable>
       ) : null}
-      {!failed && (platform === 'instagram' ? (
+      {!failed && !blankPost && (platform === 'instagram' ? (
         <>
-          {post.image ? <Image source={{ uri: post.image }} style={styles.postImage} /> : <View style={styles.instagramTextOnly}><Text style={styles.instagramTextOnlyText}>{post.content}</Text></View>}
+          {post.image ? <Image source={{ uri: post.image }} style={styles.postImage} /> : imageFailed ? null : <View style={styles.instagramTextOnly}><Text style={styles.instagramTextOnlyText}>{post.content}</Text></View>}
           <View style={styles.instagramActions}>
             <Pressable onPress={onLike}><Text style={styles.instagramAction}>♡</Text></Pressable>
             <Text style={styles.instagramAction}>◌</Text>
@@ -967,7 +970,7 @@ function PostCard({ platform, post, character, dmEnabled, onLike, onDelete, onCo
         </>
       ) : (
         <>
-          <Text style={styles.tweetContent}>{post.content}</Text>
+          {post.content ? <Text style={styles.tweetContent}>{post.content}</Text> : null}
           {post.image ? <Image source={{ uri: post.image }} style={styles.tweetImage} /> : null}
         </>
       ))}

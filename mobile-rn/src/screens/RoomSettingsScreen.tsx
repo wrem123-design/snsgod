@@ -46,7 +46,7 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
   }
 
   function confirmDelete() {
-    Alert.alert('채팅방 삭제', '이 채팅방의 메시지와 안읽음 기록을 삭제할까요?', [
+    Alert.alert('채팅방 삭제', '이 채팅방 자체를 삭제할까요? 메시지와 안읽음 기록도 함께 삭제되며 되돌릴 수 없습니다.', [
       { text: '취소', style: 'cancel' },
       {
         text: '삭제',
@@ -55,6 +55,21 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
           const next = isRandomRoom(state, room) ? removeRandomChatRoom(state, roomId) : deleteRoom(state, roomId);
           await onChange(next);
           onBack();
+        }
+      }
+    ]);
+  }
+
+  function confirmCleanRoom() {
+    const count = state.messages[roomId]?.length || 0;
+    Alert.alert('방 청소', `이 방의 대화내역 ${count}개를 모두 지울까요?\n\n방 설정과 관계 요약은 유지됩니다. 필요하면 먼저 "현재 대화 요약"을 누르고 저장한 뒤 청소하세요.`, [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '청소',
+        style: 'destructive',
+        onPress: async () => {
+          await onChange(cleanRoomConversation(state, roomId));
+          setStatus('방 대화내역을 비웠습니다.');
         }
       }
     ]);
@@ -150,10 +165,28 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
           <Field label="관계 요약" value={String(draft.roomPrompt || '')} onChangeText={value => set('roomPrompt', value)} multiline />
         </View>
         <Pressable onPress={save} style={styles.primary}><Text style={styles.primaryText}>방 설정 저장</Text></Pressable>
-        <Pressable onPress={confirmDelete} style={styles.danger}><Text style={styles.dangerText}>채팅방 삭제</Text></Pressable>
+        <View style={styles.dangerRow}>
+          <Pressable onPress={confirmCleanRoom} style={styles.cleanButton}><Text style={styles.cleanText}>방 청소</Text></Pressable>
+          <Pressable onPress={confirmDelete} style={styles.danger}><Text style={styles.dangerText}>채팅방 삭제</Text></Pressable>
+        </View>
       </ScrollView>
     </View>
   );
+}
+
+function cleanRoomConversation(state: SNSGodState, roomId: string): SNSGodState {
+  const messages = { ...state.messages, [roomId]: [] };
+  const unreadCounts = { ...state.unreadCounts };
+  delete unreadCounts[roomId];
+  const pendingReplies = { ...(state.pendingReplies || {}) };
+  delete pendingReplies[roomId];
+  return {
+    ...state,
+    messages,
+    unreadCounts,
+    pendingReplies,
+    notifications: (state.notifications || []).filter(item => item.roomId !== roomId && item.target?.roomId !== roomId)
+  };
 }
 
 function roomTranscript(state: SNSGodState, room: SNSGodRoom, draft: SNSGodRoom, characterName: string) {
@@ -306,7 +339,10 @@ const styles = StyleSheet.create({
   help: { color: colors.sub, fontSize: 12, lineHeight: 18 },
   primary: { minHeight: 48, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
   primaryText: { color: '#241a00', fontWeight: '900', fontSize: 16 },
-  danger: { minHeight: 48, borderRadius: 8, borderWidth: 1, borderColor: '#f0b7b7', backgroundColor: '#fff1f1', alignItems: 'center', justifyContent: 'center' },
+  dangerRow: { flexDirection: 'row', gap: 10 },
+  cleanButton: { flex: 1, minHeight: 48, borderRadius: 8, borderWidth: 1, borderColor: '#d8c6a8', backgroundColor: '#fffaf0', alignItems: 'center', justifyContent: 'center' },
+  cleanText: { color: colors.text, fontWeight: '900', fontSize: 16 },
+  danger: { flex: 1, minHeight: 48, borderRadius: 8, borderWidth: 1, borderColor: '#f0b7b7', backgroundColor: '#fff1f1', alignItems: 'center', justifyContent: 'center' },
   dangerText: { color: colors.danger, fontWeight: '900', fontSize: 16 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg, padding: 24 },
   emptyText: { color: colors.text, fontWeight: '900', marginBottom: 14 }

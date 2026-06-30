@@ -20,6 +20,7 @@ type StartReplyJobInput = {
   roomId: string;
   characterId: string;
   latestUserInput: string;
+  userMessageCreatedAt?: number;
   randomMode?: boolean;
   getState: () => SNSGodState | null;
   commitCurrent: CommitPatch;
@@ -162,7 +163,8 @@ export async function startReplyJob(input: StartReplyJobInput) {
     const initial = roomStillValid(input.getState(), input.roomId, input.characterId);
     if (!initial) return;
     const replyDelayMs = characterDelayMs(input.getState() || undefined, initial.character);
-    await sleep(replyDelayMs);
+    const elapsedSinceUserMessageMs = Math.max(0, Date.now() - Number(input.userMessageCreatedAt || Date.now()));
+    await sleep(Math.max(0, replyDelayMs - elapsedSinceUserMessageMs));
     if (!isCurrentChatJob(input.roomId, jobId)) return;
 
     await input.commitCurrent(current => markUserMessagesRead(setPending(current, input.roomId, jobId, 'typing'), input.roomId));
@@ -314,13 +316,13 @@ export async function startReplyJob(input: StartReplyJobInput) {
     }
   } catch (error) {
     if (isCurrentChatJob(input.roomId, jobId)) {
-      await input.commitCurrent(current => appendMessage(current, input.roomId, {
+      await input.commitCurrent(current => markUserMessagesRead(appendMessage(current, input.roomId, {
         id: makeId('msg'),
         role: 'system',
         content: `답장 생성 실패: ${error instanceof Error ? error.message : String(error)}`,
         createdAt: Date.now(),
         failed: true
-      }));
+      }), input.roomId));
     }
   } finally {
     endChatJob(input.roomId, jobId);

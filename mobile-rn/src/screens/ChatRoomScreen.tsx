@@ -37,7 +37,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
   onLeaveRandomRoom?: (roomId: string) => void;
   onPromoteRandomRoom?: (roomId: string) => void;
   onOpenCall?: (characterId: string, roomId?: string, messageId?: string) => void;
-  onRequestReply: (roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean }) => void;
+  onRequestReply: (roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean; userMessageCreatedAt?: number }) => void;
 }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -93,7 +93,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
       return { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
     });
     setSending(false);
-    onRequestReply(room.id, character.id, content, { randomMode: isRandomRoom });
+    onRequestReply(room.id, character.id, content, { randomMode: isRandomRoom, userMessageCreatedAt: userMessage.createdAt });
   }
 
   async function attachImage() {
@@ -108,7 +108,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
         const next = appendMessage(current, room.id, userMessage);
         return { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
       });
-      onRequestReply(room.id, character.id, `${content}\n[사용자가 사진을 보냈습니다.]`, { randomMode: isRandomRoom });
+      onRequestReply(room.id, character.id, `${content}\n[사용자가 사진을 보냈습니다.]`, { randomMode: isRandomRoom, userMessageCreatedAt: userMessage.createdAt });
     } catch (error) {
       Alert.alert('사진 첨부 실패', error instanceof Error ? error.message : String(error));
     } finally {
@@ -126,7 +126,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
       return { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
     });
     setSending(false);
-    onRequestReply(room.id, character.id, `[스티커: ${sticker.name || sticker.id}]`, { randomMode: isRandomRoom });
+    onRequestReply(room.id, character.id, `[스티커: ${sticker.name || sticker.id}]`, { randomMode: isRandomRoom, userMessageCreatedAt: userMessage.createdAt });
   }
 
   async function rejectCall(message: SNSGodMessage) {
@@ -174,7 +174,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
       previousUserMessage.content || (previousUserMessage.mediaData ? '사진을 보냈습니다.' : ''),
       previousUserMessage.mediaData ? '[사용자가 사진을 보냈습니다.]' : ''
     ].filter(Boolean).join('\n');
-    onRequestReply(room.id, character.id, promptText, { randomMode: isRandomRoom });
+    onRequestReply(room.id, character.id, promptText, { randomMode: isRandomRoom, userMessageCreatedAt: previousUserMessage.createdAt });
   }
 
   function openImageRetryEditor(message: SNSGodMessage) {

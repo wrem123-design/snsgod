@@ -29,11 +29,13 @@ import { SNSGodCharacter, SNSGodState, SNSPost } from './types';
 import { isAutomationQueueBusy, runAutomationQueueTick } from './logic/automationQueue';
 import { appendDebugLog } from './logic/debugLog';
 import { findRandomChat, promoteRandomChatRoom, removeRandomChatRoom } from './logic/randomChat';
-import { deleteCharacter } from './logic/stateHelpers';
+import { allRooms, deleteCharacter, findCharacter } from './logic/stateHelpers';
 import { roomRouteKind } from './logic/roomStore';
 import { IncomingPhoneCall, markPhoneCardStatus, missIncomingPhoneCall, newestPendingPhoneCandidate, rejectIncomingPhoneCall } from './logic/phone';
 import { markRoomRead, pushNotification } from './logic/notifications';
 import { startReplyJob } from './logic/replyEngine';
+
+const INTERRUPTED_REPLY_RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 type Route =
   | { name: 'chatList' }
@@ -98,6 +100,7 @@ export default function App() {
       setState(ready);
       stateRef.current = ready;
       void appendDebugLog('app', `state loaded: characters=${next.characters.length}, rooms=${Object.values(next.chatRooms).flat().length}`);
+      setTimeout(() => resumeInterruptedReplies(ready), 0);
     }).catch(error => {
       void appendDebugLog('app', `start failed: ${String(error?.message || error)}`, 'error');
       Alert.alert('시작 실패', String(error?.message || error));
@@ -323,15 +326,40 @@ export default function App() {
     return stateRef.current || undefined;
   }
 
-  function requestReply(roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean }) {
+  function requestReply(roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean; userMessageCreatedAt?: number }) {
     void startReplyJob({
       roomId,
       characterId,
       latestUserInput,
+      userMessageCreatedAt: options?.userMessageCreatedAt,
       randomMode: options?.randomMode,
       getState: () => stateRef.current,
       commitCurrent
     });
+  }
+
+  function resumeInterruptedReplies(snapshot: SNSGodState) {
+    const now = Date.now();
+    for (const room of allRooms(snapshot)) {
+      if (snapshot.pendingReplies?.[room.id]) continue;
+      const messages = snapshot.messages[room.id] || [];
+      const userIndex = [...messages].map((message, index) => ({ message, index })).reverse().find(item => item.message.role === 'user')?.index ?? -1;
+      if (userIndex < 0) continue;
+      const userMessage = messages[userIndex];
+      if (userMessage.readAt || now - Number(userMessage.createdAt || 0) > INTERRUPTED_REPLY_RECOVERY_WINDOW_MS) continue;
+      const newerMessages = messages.slice(userIndex + 1);
+      if (newerMessages.some(message => message.role === 'character' || (message.role === 'system' && message.failed))) continue;
+      const character = findCharacter(snapshot, room.characterId);
+      if (!character || character.enabled === false) continue;
+      const promptText = [
+        userMessage.content || (userMessage.mediaData ? '사진을 보냈습니다.' : ''),
+        userMessage.mediaData ? '[사용자가 사진을 보냈습니다.]' : '',
+        userMessage.sticker ? `[스티커: ${userMessage.sticker}]` : ''
+      ].filter(Boolean).join('\n');
+      if (!promptText) continue;
+      void appendDebugLog('reply.recover', `resume room=${room.id} character=${character.id} message=${userMessage.id}`);
+      requestReply(room.id, character.id, promptText, { randomMode: room.type === 'random', userMessageCreatedAt: userMessage.createdAt });
+    }
   }
 
   async function reloadSavedState() {

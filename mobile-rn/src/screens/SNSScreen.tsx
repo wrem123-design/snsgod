@@ -54,8 +54,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
     .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
   const dmThreads = (state.snsDmThreads || []).filter(thread => {
     if (selectedCharacterId && thread.characterId !== selectedCharacterId) return false;
-    const post = thread.postId ? (state.snsPosts || []).find(item => item.id === thread.postId) : undefined;
-    return !post || post.platform === platform;
+    return dmThreadPlatform(thread, state.snsPosts || []) === platform;
   });
 
   useEffect(() => {
@@ -342,7 +341,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
   }
 
   function postContext(post: SNSPost) {
-    return `${platform === 'instagram' ? 'Instagram' : 'X'} post by ${post.displayName || selectedCharacter?.name || 'Character'}: ${post.content}`;
+    return `${post.platform === 'instagram' ? 'Instagram' : 'X'} post by ${post.displayName || selectedCharacter?.name || 'Character'}: ${post.content}`;
   }
 
   async function openSnsDm(post: SNSPost) {
@@ -364,7 +363,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
         platformIndex: 0,
         characterId: post.characterId,
         kind: 'user',
-        title: `${platform === 'instagram' ? 'Instagram' : 'X'} DM`,
+        title: `${post.platform === 'instagram' ? 'Instagram' : 'X'} DM`,
         context: postContext(post),
         participants: [
           { id: 'user', name: state.config.userName || '나', role: 'user' },
@@ -665,6 +664,15 @@ type NormalizedSnsDmThread = SNSDmThread & { kind: 'user' | 'thirdParty'; partic
 
 function platformName(platform: SNSPost['platform']) {
   return platform === 'instagram' ? 'Instagram' : 'X';
+}
+
+function dmThreadPlatform(thread: SNSDmThread, posts: SNSPost[]): SNSPost['platform'] | undefined {
+  const post = thread.postId ? posts.find(item => item.id === thread.postId) : undefined;
+  if (post?.platform) return post.platform;
+  const source = `${thread.context || ''}\n${thread.title || ''}`.toLowerCase();
+  if (/\binstagram\b|인스타/.test(source)) return 'instagram';
+  if (/\btwitter\b|\bx\b|트위터/.test(source)) return 'twitter';
+  return undefined;
 }
 
 function dmAvatarUri(character?: SNSGodCharacter): string {

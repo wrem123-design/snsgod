@@ -1247,19 +1247,19 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           {characterPhoneCallEnabled ? (
             <View style={styles.twoCols}>
               <View style={styles.col}>
-                <Text style={styles.label}>전화 확률 강도(%)</Text>
+                <Text style={styles.label}>자동 전화 자주 오기(%)</Text>
                 <TextInput value={characterPhoneCallChancePercent} onChangeText={setCharacterPhoneCallChancePercent} style={styles.input} keyboardType="number-pad" />
-                <Text style={styles.help}>0-33%. 33%가 현재 낮춘 기본값입니다.</Text>
+                <Text style={styles.help}>0-33%. 숫자를 높이면 전화가 더 자주 오고, 낮추면 덜 옵니다.</Text>
               </View>
               <View style={styles.col}>
-                <Text style={styles.label}>캐릭터별 쿨타임(시간)</Text>
+                <Text style={styles.label}>같은 캐릭터 전화 간격(시간)</Text>
                 <TextInput value={characterPhoneCallMinCooldownHours} onChangeText={setCharacterPhoneCallMinCooldownHours} style={styles.input} keyboardType="number-pad" />
-                <Text style={styles.help}>같은 캐릭터가 다시 전화하기 전 최소 시간입니다.</Text>
+                <Text style={styles.help}>숫자를 높이면 같은 캐릭터가 더 늦게 다시 전화합니다.</Text>
               </View>
               <View style={styles.col}>
-                <Text style={styles.label}>전체 전화 쿨타임(시간)</Text>
+                <Text style={styles.label}>전체 자동 전화 간격(시간)</Text>
                 <TextInput value={characterPhoneCallGlobalCooldownHours} onChangeText={setCharacterPhoneCallGlobalCooldownHours} style={styles.input} keyboardType="number-pad" />
-                <Text style={styles.help}>누가 전화했든 다음 자동 전화까지 기다리는 시간입니다.</Text>
+                <Text style={styles.help}>숫자를 높이면 모든 캐릭터의 자동 전화가 덜 자주 옵니다.</Text>
               </View>
             </View>
           ) : null}

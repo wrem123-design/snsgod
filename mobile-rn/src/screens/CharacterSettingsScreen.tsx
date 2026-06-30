@@ -114,7 +114,7 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
 
   async function save(close = true) {
     if (!draft || !character) return;
-    const minDelay = clampNumber(draft.responseDelayMin, 1, 120, 1);
+    const minDelay = clampNumber(draft.responseDelayMin, 0, 120, 1);
     const minGap = clampNumber(draft.messageGapMin, 1, 10, 1);
     const next = updateCharacter(state, characterId, {
       ...draft,
@@ -127,7 +127,7 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
       proactiveStyle: validChoice(String(draft.proactiveStyle || 'auto'), PROACTIVE_STYLE_OPTIONS, 'auto'),
       proactivePatience: clampNumber(draft.proactivePatience, 0, 8, 2),
       responseDelayMin: minDelay,
-      responseDelayMax: Math.max(clampNumber(draft.responseDelayMax, 1, 120, 8), minDelay),
+      responseDelayMax: Math.max(clampNumber(draft.responseDelayMax, 0, 2700, 8), minDelay),
       messageGapMin: minGap,
       messageGapMax: Math.max(clampNumber(draft.messageGapMax, 1, 10, 3), minGap),
       responseTime: clampNumber(draft.responseTime, 1, 10, 6),
@@ -380,11 +380,11 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
           <Section title="답장/능동 성향">
             <ChoiceRow label="선톡 성향" value={String(draft.proactiveStyle || 'auto')} options={PROACTIVE_STYLE_OPTIONS} onChange={value => set('proactiveStyle', value)} />
             <SliderField label="무응답 인내도(빨리 멈춤 ↔ 오래 기다림)" value={draft.proactivePatience} min={0} max={8} leftLabel="0 빠른 포기" rightLabel="8 오래 기다림" onChange={value => set('proactivePatience', value)} help="답이 없을 때 먼저 말하기를 얼마나 오래 이어갈지 정합니다." />
-            <NumberField label="읽음/답장 최소 지연(빠른 읽음까지 최소 초)" value={draft.responseDelayMin} onChange={value => set('responseDelayMin', value)} />
-            <NumberField label="답장 최대 지연(늦어질 수 있는 최대 초)" value={draft.responseDelayMax} onChange={value => set('responseDelayMax', value)} help="원본 기준 최대 120초까지 허용합니다." />
+            <NumberField label="메시지 확인 최소 지연(이 전엔 절대 확인 안 함, 0초-2분)" value={draft.responseDelayMin} onChange={value => set('responseDelayMin', value)} help="캐릭터가 아무리 빨라도 메시지를 확인하기 전 반드시 기다리는 시간입니다. 0-120초." />
+            <NumberField label="메시지 확인 최대 지연(늦어도 이 안엔 확인, 최대 45분)" value={draft.responseDelayMax} onChange={value => set('responseDelayMax', value)} help="캐릭터가 늦게 확인하더라도 이 시간 안에는 확인하게 만드는 상한선입니다. 0-2700초." />
             <NumberField label="연속 메시지 간격 최소(연타 최소 초)" value={draft.messageGapMin} onChange={value => set('messageGapMin', value)} />
             <NumberField label="연속 메시지 간격 최대(연타 최대 초)" value={draft.messageGapMax} onChange={value => set('messageGapMax', value)} />
-            <SliderField label="확인 속도(느림 ↔ 즉각 확인)" value={draft.responseTime} min={1} max={10} leftLabel="1 느림" rightLabel="10 즉각" onChange={value => set('responseTime', value)} />
+            <SliderField label="확인 속도(성향: 느긋함 ↔ 즉각 확인)" value={draft.responseTime} min={1} max={10} leftLabel="1 느림" rightLabel="10 즉각" onChange={value => set('responseTime', value)} />
             <SliderField label="생각 깊이(즉흥 ↔ 숙고)" value={draft.thinkingTime} min={1} max={10} leftLabel="1 즉흥" rightLabel="10 깊게 생각" onChange={value => set('thinkingTime', value)} />
             <SliderField label="반응성(무덤덤 ↔ 즉각 반응)" value={draft.reactivity} min={1} max={10} leftLabel="1 무덤덤" rightLabel="10 즉각 반응" onChange={value => set('reactivity', value)} />
             <SliderField label="말투 강도(담백 ↔ 강한 개성)" value={draft.tone} min={1} max={10} leftLabel="1 담백" rightLabel="10 강함" onChange={value => set('tone', value)} />

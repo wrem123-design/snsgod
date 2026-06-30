@@ -53,6 +53,10 @@ type GeneratedSns = {
 const autoPostingRooms = new Set<string>();
 const snsDmGeneratingThreads = new Set<string>();
 
+async function logAutoSns(message: string, level: 'info' | 'warn' | 'error' = 'info') {
+  await appendDebugLog('sns.auto', message, level);
+}
+
 function commentCountHint(value: string | undefined): number {
   const match = String(value || '').match(/(\d+)(?:\D+(\d+))?/);
   if (!match) return 3;
@@ -446,25 +450,72 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
 
 export async function maybeCreateAutoSNSPost(state: SNSGodState, character: SNSGodCharacter, roomId: string): Promise<SNSGodState> {
   const config = state.config;
-  if (config.autoEnabled === false || config.snsAutoPostEnabled === false) return state;
-  if (character.enabled === false || character.snsAutoEnabled === false || character.randomTemporary === true) return state;
-  if (autoPostingRooms.has(roomId)) return state;
+  if (config.autoEnabled === false) {
+    await logAutoSns(`skip room=${roomId} character=${character.id}: global automation disabled`);
+    return state;
+  }
+  if (config.snsAutoPostEnabled === false) {
+    await logAutoSns(`skip room=${roomId} character=${character.id}: SNS auto post disabled`);
+    return state;
+  }
+  if (character.enabled === false) {
+    await logAutoSns(`skip room=${roomId} character=${character.id}: character disabled`);
+    return state;
+  }
+  if (character.snsAutoEnabled === false) {
+    await logAutoSns(`skip room=${roomId} character=${character.id}: character SNS auto disabled`);
+    return state;
+  }
+  if (character.randomTemporary === true) {
+    await logAutoSns(`skip room=${roomId} character=${character.id}: temporary random character`);
+    return state;
+  }
+  if (autoPostingRooms.has(roomId)) {
+    await logAutoSns(`skip room=${roomId} character=${character.id}: SNS auto post already running`);
+    return state;
+  }
   const messages = state.messages[roomId] || [];
-  if (!messages.length) return state;
+  if (!messages.length) {
+    await logAutoSns(`skip room=${roomId} character=${character.id}: no messages`);
+    return state;
+  }
   const latest = [...messages].reverse().find(message => message.role === 'user' || message.role === 'character');
-  if (latest?.role !== 'character') return state;
+  if (latest?.role !== 'character') {
+    await logAutoSns(`skip room=${roomId} character=${character.id}: latest message is not character`);
+    return state;
+  }
   const minMessages = Math.max(2, Number(config.snsStartCount ?? config.autoSnsMinMessages ?? 6));
   const cooldown = Math.max(1, Number(config.autoSnsCooldownMessages ?? 4));
   const lastCount = Number(character.lastSnsMessageCount || 0);
-  if (messages.length < minMessages) return state;
-  if (messages.length - lastCount < cooldown) return state;
+  if (messages.length < minMessages) {
+    await logAutoSns(`skip room=${roomId} character=${character.id}: message count ${messages.length}/${minMessages}`);
+    return state;
+  }
+  if (messages.length - lastCount < cooldown) {
+    await logAutoSns(`skip room=${roomId} character=${character.id}: cooldown ${messages.length - lastCount}/${cooldown}`);
+    return state;
+  }
   const chance = Math.max(0, Math.min(100, Number(config.snsAutoChance ?? config.autoSnsChance ?? 40)));
-  if (Math.random() * 100 >= chance) return state;
+  const roll = Math.random() * 100;
+  if (roll >= chance) {
+    await logAutoSns(`skip room=${roomId} character=${character.id}: chance missed ${roll.toFixed(1)}/${chance}`);
+    return state;
+  }
   const platform = Math.random() > 0.5 ? 'instagram' : 'twitter';
-  if (snsOptionsFor(state, platform, character).enabled === false) return state;
+  if (snsOptionsFor(state, platform, character).enabled === false) {
+    await logAutoSns(`skip room=${roomId} character=${character.id}: ${platform} disabled`);
+    return state;
+  }
   autoPostingRooms.add(roomId);
   try {
-    return await generateSNSPost(state, character, platform, { roomId, manual: false });
+    await logAutoSns(`start room=${roomId} character=${character.id} platform=${platform}`);
+    const next = await generateSNSPost(state, character, platform, { roomId, manual: false });
+    const created = Math.max(0, (next.snsPosts || []).length - (state.snsPosts || []).length);
+    await logAutoSns(`done room=${roomId} character=${character.id} platform=${platform} posts=${created}`);
+    return next;
+  } catch (error) {
+    await logAutoSns(`failed room=${roomId} character=${character.id} platform=${platform}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+    throw error;
   } finally {
     autoPostingRooms.delete(roomId);
   }

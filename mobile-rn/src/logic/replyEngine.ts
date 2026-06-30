@@ -58,19 +58,20 @@ async function runQueuedReplyLlm<T>(roomId: string, jobId: string, task: () => P
   }
 }
 
-function clampDelay(value: unknown, fallback: number) {
+function clampDelay(value: unknown, fallback: number, max = 2700) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
-  return Math.max(0, Math.min(120, number));
+  return Math.max(0, Math.min(max, number));
 }
 
 function characterDelayMs(character: SNSGodCharacter) {
-  const min = clampDelay(character.responseDelayMin, 1);
-  const max = Math.max(min, clampDelay(character.responseDelayMax, 8));
+  const min = clampDelay(character.responseDelayMin, 1, 120);
+  const max = Math.max(min, clampDelay(character.responseDelayMax, 8, 2700));
   const speed = Math.max(1, Math.min(10, Number(character.responseTime || 6)));
   const randomSeconds = min + Math.random() * Math.max(0, max - min);
   const speedFactor = 1.15 - speed * 0.07;
-  return Math.max(350, Math.round(randomSeconds * speedFactor * 1000));
+  const seconds = Math.max(min, Math.min(max, randomSeconds * speedFactor));
+  return Math.round(seconds * 1000);
 }
 
 function bubbleDelayMs(character: SNSGodCharacter, delay?: number) {
@@ -289,14 +290,24 @@ export async function startReplyJob(input: StartReplyJobInput) {
       });
     }
 
+    if (input.randomMode) {
+      await appendDebugLog('sns.auto', `skip room=${input.roomId} character=${input.characterId}: random mode`);
+    }
+
     if (!input.randomMode && isCurrentChatJob(input.roomId, jobId)) {
       const beforeSns = input.getState();
       const snsTarget = roomStillValid(beforeSns, input.roomId, input.characterId);
       if (beforeSns && snsTarget) {
-        const generated = await maybeCreateAutoSNSPost(beforeSns, snsTarget.character, input.roomId);
-        if (isCurrentChatJob(input.roomId, jobId)) {
-          await input.commitCurrent(current => mergeGeneratedSns(current, beforeSns, generated));
+        try {
+          const generated = await maybeCreateAutoSNSPost(beforeSns, snsTarget.character, input.roomId);
+          if (isCurrentChatJob(input.roomId, jobId)) {
+            await input.commitCurrent(current => mergeGeneratedSns(current, beforeSns, generated));
+          }
+        } catch (error) {
+          await appendDebugLog('sns.auto', `auto SNS failed after reply room=${input.roomId} character=${snsTarget.character.id}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
         }
+      } else {
+        await appendDebugLog('sns.auto', `skip room=${input.roomId} character=${input.characterId}: room or character missing`);
       }
     }
   } catch (error) {

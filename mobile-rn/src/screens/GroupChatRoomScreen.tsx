@@ -20,19 +20,20 @@ type GroupReplyPayload = {
   messages?: Array<{ characterId?: string; speakerId?: string; name?: string; handle?: string; content?: string; sticker?: string; imagePrompt?: string; imageCaption?: string; delay?: number }>;
 };
 
-function clampDelay(value: unknown, fallback: number) {
+function clampDelay(value: unknown, fallback: number, max = 2700) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
-  return Math.max(0, Math.min(120, number));
+  return Math.max(0, Math.min(max, number));
 }
 
 function characterDelayMs(character: SNSGodCharacter) {
-  const min = clampDelay(character.responseDelayMin, 1);
-  const max = Math.max(min, clampDelay(character.responseDelayMax, 8));
+  const min = clampDelay(character.responseDelayMin, 1, 120);
+  const max = Math.max(min, clampDelay(character.responseDelayMax, 8, 2700));
   const speed = Math.max(1, Math.min(10, Number(character.responseTime || 6)));
   const randomSeconds = min + Math.random() * Math.max(0, max - min);
   const speedFactor = 1.15 - speed * 0.07;
-  return Math.max(350, Math.round(randomSeconds * speedFactor * 1000));
+  const seconds = Math.max(min, Math.min(max, randomSeconds * speedFactor));
+  return Math.round(seconds * 1000);
 }
 
 function bubbleDelayMs(character: SNSGodCharacter, delay?: number) {

@@ -125,6 +125,7 @@ export type SNSGodCharacter = {
   userName?: string;
   userDescription?: string;
   firstMessage?: string;
+  replyPresetId?: string;
   messageStyle?: 'balanced' | 'long' | 'burst';
   responseDelayMin?: number;
   responseDelayMax?: number;

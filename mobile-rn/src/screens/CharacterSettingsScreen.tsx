@@ -48,39 +48,11 @@ const REPLY_PRESETS = [
     values: { proactivePatience: 2, responseDelayMin: 0, responseDelayMax: 8, messageGapMin: 1, messageGapMax: 3, responseTime: 9, thinkingTime: 3, reactivity: 7, tone: 5, frequencyMinutes: 18, initiative: 45, messageStyle: 'balanced' }
   },
   {
-    id: 'slow_friend',
-    title: '느긋한 친구',
-    short: '천천히 봐도 자연스러워요',
-    detail: '답장은 늦을 수 있지만 편안하고 여유롭게 대화를 이어갑니다.',
-    values: { proactivePatience: 1, responseDelayMin: 20, responseDelayMax: 240, messageGapMin: 2, messageGapMax: 6, responseTime: 3, thinkingTime: 5, reactivity: 4, tone: 4, frequencyMinutes: 60, initiative: 18, messageStyle: 'balanced' }
-  },
-  {
-    id: 'busy_friend',
-    title: '바쁜 현실친구',
-    short: '일정 때문에 자주 늦어요',
-    detail: '스케줄이 있는 사람처럼 확인과 답장이 늦습니다. 대신 현실감이 좋습니다.',
-    values: { proactivePatience: 1, responseDelayMin: 60, responseDelayMax: 900, messageGapMin: 2, messageGapMax: 8, responseTime: 2, thinkingTime: 5, reactivity: 5, tone: 5, frequencyMinutes: 120, initiative: 10, messageStyle: 'balanced' }
-  },
-  {
     id: 'chatty_friend',
     title: '수다쟁이 친구',
     short: '짧게 여러 번 보내요',
     detail: '리액션이 크고 말을 여러 번 나눠 보내는 활발한 타입입니다.',
     values: { proactivePatience: 4, responseDelayMin: 0, responseDelayMax: 30, messageGapMin: 1, messageGapMax: 2, responseTime: 8, thinkingTime: 3, reactivity: 9, tone: 7, frequencyMinutes: 12, initiative: 65, messageStyle: 'burst' }
-  },
-  {
-    id: 'dry_caring',
-    title: '무심한데 챙김',
-    short: '담백하지만 은근히 챙겨요',
-    detail: '표현은 적지만 필요한 순간에는 먼저 말을 거는 타입입니다.',
-    values: { proactivePatience: 2, responseDelayMin: 15, responseDelayMax: 180, messageGapMin: 1, messageGapMax: 4, responseTime: 5, thinkingTime: 5, reactivity: 4, tone: 3, frequencyMinutes: 35, initiative: 32, messageStyle: 'balanced' }
-  },
-  {
-    id: 'sweet_partner',
-    title: '다정한 연인',
-    short: '부드럽고 자주 표현해요',
-    detail: '애정 표현이 자연스럽고 선톡도 자주 오는 연인 느낌입니다.',
-    values: { proactivePatience: 4, responseDelayMin: 3, responseDelayMax: 60, messageGapMin: 1, messageGapMax: 4, responseTime: 7, thinkingTime: 5, reactivity: 7, tone: 6, frequencyMinutes: 20, initiative: 58, messageStyle: 'balanced' }
   },
   {
     id: 'cute_reactive',
@@ -90,18 +62,18 @@ const REPLY_PRESETS = [
     values: { proactivePatience: 5, responseDelayMin: 0, responseDelayMax: 45, messageGapMin: 1, messageGapMax: 3, responseTime: 8, thinkingTime: 3, reactivity: 9, tone: 8, frequencyMinutes: 15, initiative: 70, messageStyle: 'burst' }
   },
   {
+    id: 'sweet_partner',
+    title: '다정한 연인',
+    short: '부드럽고 자주 표현해요',
+    detail: '애정 표현이 자연스럽고 선톡도 자주 오는 연인 느낌입니다.',
+    values: { proactivePatience: 4, responseDelayMin: 3, responseDelayMax: 60, messageGapMin: 1, messageGapMax: 4, responseTime: 7, thinkingTime: 5, reactivity: 7, tone: 6, frequencyMinutes: 20, initiative: 58, messageStyle: 'balanced' }
+  },
+  {
     id: 'cool_type',
     title: '쿨한 사람',
     short: '빠르지만 담백해요',
     detail: '확인은 빠르지만 감정 표현은 과하지 않고 필요한 말을 깔끔하게 합니다.',
     values: { proactivePatience: 1, responseDelayMin: 2, responseDelayMax: 60, messageGapMin: 1, messageGapMax: 3, responseTime: 8, thinkingTime: 4, reactivity: 3, tone: 4, frequencyMinutes: 50, initiative: 22, messageStyle: 'balanced' }
-  },
-  {
-    id: 'careful_type',
-    title: '조심스러운 사람',
-    short: '생각하고 천천히 답해요',
-    detail: '먼저 연락은 적지만 답변은 신중하고 깊게 하는 타입입니다.',
-    values: { proactivePatience: 1, responseDelayMin: 30, responseDelayMax: 420, messageGapMin: 3, messageGapMax: 8, responseTime: 3, thinkingTime: 8, reactivity: 3, tone: 4, frequencyMinutes: 90, initiative: 12, messageStyle: 'long' }
   },
   {
     id: 'attached_type',
@@ -111,11 +83,25 @@ const REPLY_PRESETS = [
     values: { proactivePatience: 6, responseDelayMin: 0, responseDelayMax: 90, messageGapMin: 1, messageGapMax: 4, responseTime: 7, thinkingTime: 5, reactivity: 8, tone: 7, frequencyMinutes: 10, initiative: 75, messageStyle: 'balanced' }
   },
   {
-    id: 'public_figure',
-    title: '아이돌/공인 느낌',
-    short: '바빠서 자주 늦어요',
-    detail: '스케줄이 있는 사람처럼 답장이 늦고, 말투가 조심스럽고 정제되어 있습니다.',
-    values: { proactivePatience: 1, responseDelayMin: 120, responseDelayMax: 1800, messageGapMin: 3, messageGapMax: 10, responseTime: 2, thinkingTime: 6, reactivity: 4, tone: 5, frequencyMinutes: 180, initiative: 8, messageStyle: 'balanced' }
+    id: 'dry_caring',
+    title: '무심한데 챙김',
+    short: '담백하지만 은근히 챙겨요',
+    detail: '표현은 적지만 필요한 순간에는 먼저 말을 거는 타입입니다.',
+    values: { proactivePatience: 2, responseDelayMin: 15, responseDelayMax: 180, messageGapMin: 1, messageGapMax: 4, responseTime: 5, thinkingTime: 5, reactivity: 4, tone: 3, frequencyMinutes: 35, initiative: 32, messageStyle: 'balanced' }
+  },
+  {
+    id: 'slow_friend',
+    title: '느긋한 친구',
+    short: '천천히 봐도 자연스러워요',
+    detail: '답장은 늦을 수 있지만 편안하고 여유롭게 대화를 이어갑니다.',
+    values: { proactivePatience: 1, responseDelayMin: 20, responseDelayMax: 240, messageGapMin: 2, messageGapMax: 6, responseTime: 3, thinkingTime: 5, reactivity: 4, tone: 4, frequencyMinutes: 60, initiative: 18, messageStyle: 'balanced' }
+  },
+  {
+    id: 'careful_type',
+    title: '조심스러운 사람',
+    short: '생각하고 천천히 답해요',
+    detail: '먼저 연락은 적지만 답변은 신중하고 깊게 하는 타입입니다.',
+    values: { proactivePatience: 1, responseDelayMin: 30, responseDelayMax: 420, messageGapMin: 3, messageGapMax: 8, responseTime: 3, thinkingTime: 8, reactivity: 3, tone: 4, frequencyMinutes: 90, initiative: 12, messageStyle: 'long' }
   },
   {
     id: 'late_night_mood',
@@ -123,6 +109,20 @@ const REPLY_PRESETS = [
     short: '느리지만 깊게 말해요',
     detail: '천천히 답하지만 감정선이 깊고 밤 대화에 잘 어울리는 타입입니다.',
     values: { proactivePatience: 3, responseDelayMin: 45, responseDelayMax: 600, messageGapMin: 3, messageGapMax: 9, responseTime: 3, thinkingTime: 9, reactivity: 6, tone: 7, frequencyMinutes: 75, initiative: 28, messageStyle: 'long' }
+  },
+  {
+    id: 'busy_friend',
+    title: '바쁜 현실친구',
+    short: '일정 때문에 자주 늦어요',
+    detail: '스케줄이 있는 사람처럼 확인과 답장이 늦습니다. 대신 현실감이 좋습니다.',
+    values: { proactivePatience: 1, responseDelayMin: 60, responseDelayMax: 900, messageGapMin: 2, messageGapMax: 8, responseTime: 2, thinkingTime: 5, reactivity: 5, tone: 5, frequencyMinutes: 120, initiative: 10, messageStyle: 'balanced' }
+  },
+  {
+    id: 'public_figure',
+    title: '아이돌/공인 느낌',
+    short: '바빠서 자주 늦어요',
+    detail: '스케줄이 있는 사람처럼 답장이 늦고, 말투가 조심스럽고 정제되어 있습니다.',
+    values: { proactivePatience: 1, responseDelayMin: 120, responseDelayMax: 1800, messageGapMin: 3, messageGapMax: 10, responseTime: 2, thinkingTime: 6, reactivity: 4, tone: 5, frequencyMinutes: 180, initiative: 8, messageStyle: 'balanced' }
   }
 ] as const;
 
@@ -256,7 +256,7 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
   }
 
   function applyReplyPreset(preset: typeof REPLY_PRESETS[number]) {
-    setDraft(prev => prev ? { ...prev, ...preset.values } : prev);
+    setDraft(prev => prev ? { ...prev, ...preset.values, replyPresetId: preset.id } : prev);
     setInlineStatus(`${preset.title} 연락 유형을 적용했습니다. 필요하면 세부 타이밍 조절에서 직접 바꿀 수 있습니다.`);
   }
 
@@ -464,13 +464,16 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
           <Section title="대화 성향">
             <Text style={styles.help}>캐릭터의 연락 습관을 먼저 고르고, 필요할 때만 세부 타이밍 조절에서 직접 바꿉니다.</Text>
             <View style={styles.presetGrid}>
-              {REPLY_PRESETS.map(preset => (
-                <Pressable key={preset.id} onPress={() => applyReplyPreset(preset)} style={styles.presetCard}>
-                  <Text style={styles.presetTitle}>{preset.title}</Text>
-                  <Text style={styles.presetShort}>{preset.short}</Text>
-                  <Text style={styles.presetSummary}>{preset.detail}</Text>
-                </Pressable>
-              ))}
+              {REPLY_PRESETS.map(preset => {
+                const selected = selectedReplyPresetId(draft) === preset.id;
+                return (
+                  <Pressable key={preset.id} onPress={() => applyReplyPreset(preset)} style={[styles.presetCard, selected && styles.presetCardSelected]}>
+                    <Text style={[styles.presetTitle, selected && styles.presetTitleSelected]}>{preset.title}</Text>
+                    <Text style={[styles.presetShort, selected && styles.presetShortSelected]}>{preset.short}</Text>
+                    <Text style={[styles.presetSummary, selected && styles.presetSummarySelected]}>{preset.detail}</Text>
+                  </Pressable>
+                );
+              })}
             </View>
             <Pressable onPress={() => setReplyAdvancedOpen(open => !open)} style={styles.advancedToggle}>
               <Text style={styles.advancedToggleText}>{replyAdvancedOpen ? '세부 타이밍 조절 닫기' : '세부 타이밍 조절'}</Text>
@@ -628,6 +631,7 @@ function normalizeDraft(character: SNSGodCharacter): SNSGodCharacter {
     profileReferenceImage: profileReferenceImages[0] || '',
     language: String(character.language || 'inherit'),
     color: String(character.color || '#8bd3dd'),
+    replyPresetId: selectedReplyPresetId(character),
     messageStyle: character.messageStyle || 'balanced',
     proactivePatience: Number(character.proactivePatience ?? 2),
     responseDelayMin: Number(character.responseDelayMin ?? 1),
@@ -656,6 +660,13 @@ function normalizeDraft(character: SNSGodCharacter): SNSGodCharacter {
     timeContextEnabled: character.timeContextEnabled !== false,
     calendarEvents: (character.calendarEvents || []).map(normalizeCalendarEvent)
   };
+}
+
+function selectedReplyPresetId(character: Partial<SNSGodCharacter>): string {
+  const saved = String(character.replyPresetId || '');
+  if (REPLY_PRESETS.some(preset => preset.id === saved)) return saved;
+  const matched = REPLY_PRESETS.find(preset => Object.entries(preset.values).every(([key, value]) => character[key as keyof SNSGodCharacter] === value));
+  return matched?.id || '';
 }
 
 function normalizedReferenceImages(character: SNSGodCharacter): string[] {
@@ -927,9 +938,13 @@ const styles = StyleSheet.create({
   chipTextActive: { color: '#241a00' },
   presetGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   presetCard: { flexBasis: '48%', flexGrow: 1, minHeight: 126, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', padding: 10, gap: 5 },
+  presetCardSelected: { backgroundColor: '#fff1bf', borderColor: '#b79427' },
   presetTitle: { color: colors.text, fontWeight: '900', fontSize: 14 },
+  presetTitleSelected: { color: '#241a00' },
   presetShort: { color: colors.text, fontSize: 12, fontWeight: '900', lineHeight: 17 },
+  presetShortSelected: { color: '#3b2b00' },
   presetSummary: { color: colors.sub, fontSize: 12, lineHeight: 18 },
+  presetSummarySelected: { color: '#5e4d16' },
   advancedToggle: { minHeight: 42, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#eee8dc', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
   advancedToggleText: { color: colors.text, fontWeight: '900' },
   advancedToggleIcon: { color: colors.text, fontWeight: '900', fontSize: 18 },

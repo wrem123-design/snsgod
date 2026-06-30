@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { FlatList, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, FlatList, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme';
 import { SNSGodState } from '../types';
 import { isRenderableMediaUri } from '../logic/media';
@@ -12,6 +12,13 @@ type GalleryItem = {
   prompt: string;
   createdAt: number;
   source: string;
+  kind: 'profile' | 'sns' | 'message';
+  characterId?: string;
+  historyId?: string;
+  historyKind?: 'profile' | 'cover';
+  postId?: string;
+  roomId?: string;
+  messageId?: string;
 };
 
 function imageUri(value: unknown): string | undefined {
@@ -32,7 +39,11 @@ function collectGalleryItems(state: SNSGodState): GalleryItem[] {
         uri,
         prompt,
         createdAt: Number(history.createdAt || 0),
-        source: history.kind === 'cover' ? '프로필 커버' : '프로필'
+        source: history.kind === 'cover' ? '프로필 커버' : '프로필',
+        kind: 'profile',
+        characterId: character.id,
+        historyId: history.id,
+        historyKind: history.kind === 'cover' ? 'cover' : 'profile'
       });
     }
   }
@@ -48,7 +59,9 @@ function collectGalleryItems(state: SNSGodState): GalleryItem[] {
       uri,
       prompt,
       createdAt: Number(post.createdAt || 0),
-      source: post.platform === 'instagram' ? 'Instagram' : 'X'
+      source: post.platform === 'instagram' ? 'Instagram' : 'X',
+      kind: 'sns',
+      postId: post.id
     });
   }
   for (const [roomId, messages] of Object.entries(state.messages || {})) {
@@ -64,19 +77,78 @@ function collectGalleryItems(state: SNSGodState): GalleryItem[] {
         uri,
         prompt,
         createdAt: Number(message.createdAt || 0),
-        source: '채팅'
+        source: '채팅',
+        kind: 'message',
+        roomId,
+        messageId: message.id
       });
     }
   }
   return items.sort((a, b) => b.createdAt - a.createdAt);
 }
 
-export function GalleryScreen({ state, onBack }: {
+function removeGalleryItem(state: SNSGodState, item: GalleryItem): SNSGodState {
+  if (item.kind === 'profile') {
+    return {
+      ...state,
+      characters: state.characters.map(character => {
+        if (character.id !== item.characterId) return character;
+        const nextHistory = (character.profileImageHistory || []).filter(history => history.id !== item.historyId);
+        return {
+          ...character,
+          profileImageHistory: nextHistory,
+          profileImage: item.historyKind === 'profile' && character.profileImage === item.uri ? undefined : character.profileImage,
+          avatar: item.historyKind === 'profile' && character.avatar === item.uri ? undefined : character.avatar,
+          coverImage: item.historyKind === 'cover' && character.coverImage === item.uri ? undefined : character.coverImage
+        };
+      })
+    };
+  }
+  if (item.kind === 'sns') {
+    return {
+      ...state,
+      snsPosts: (state.snsPosts || []).map(post => {
+        if (post.id !== item.postId) return post;
+        return { ...post, image: undefined, imagePrompt: undefined, imageCaption: undefined };
+      })
+    };
+  }
+  return {
+    ...state,
+    messages: Object.fromEntries(Object.entries(state.messages || {}).map(([roomId, messages]) => {
+      if (roomId !== item.roomId) return [roomId, messages];
+      return [roomId, messages.map(message => {
+        if (message.id !== item.messageId) return message;
+        return { ...message, mediaData: undefined, mediaType: undefined, imagePrompt: undefined, imageCaption: undefined };
+      })];
+    }))
+  };
+}
+
+export function GalleryScreen({ state, onBack, onChange }: {
   state: SNSGodState;
   onBack: () => void;
+  onChange: (next: SNSGodState) => Promise<void> | void;
 }) {
   const items = useMemo(() => collectGalleryItems(state), [state]);
   const [selected, setSelected] = useState<GalleryItem | null>(null);
+
+  async function deleteItem(item: GalleryItem) {
+    await onChange(removeGalleryItem(state, item));
+    setSelected(current => current?.id === item.id ? null : current);
+  }
+
+  function confirmDelete(item: GalleryItem) {
+    Alert.alert(
+      '이미지 삭제',
+      item.kind === 'sns' ? 'SNS 글은 남기고 이 이미지와 생성 프롬프트만 삭제합니다.' : '이 이미지를 갤러리에서 삭제합니다.',
+      [
+        { text: '취소', style: 'cancel' },
+        { text: '삭제', style: 'destructive', onPress: () => { void deleteItem(item); } }
+      ]
+    );
+  }
+
   return (
     <View style={styles.screen}>
       {selected ? (
@@ -86,6 +158,7 @@ export function GalleryScreen({ state, onBack }: {
               <Text style={styles.viewerTitle}>{selected.title}</Text>
               <Text style={styles.viewerSubtitle}>{selected.source} · {selected.subtitle}</Text>
             </View>
+            <Pressable onPress={() => confirmDelete(selected)} style={styles.viewerDelete}><Text style={styles.viewerDeleteText}>삭제</Text></Pressable>
             <Pressable onPress={() => setSelected(null)} style={styles.viewerClose}><Text style={styles.viewerCloseText}>닫기</Text></Pressable>
           </View>
           <Image source={{ uri: selected.uri }} style={styles.viewerImage} resizeMode="contain" />
@@ -112,6 +185,9 @@ export function GalleryScreen({ state, onBack }: {
         renderItem={({ item }) => (
           <Pressable onPress={() => setSelected(item)} style={styles.albumTile}>
             <Image source={{ uri: item.uri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+            <Pressable onPress={(event) => { event.stopPropagation?.(); confirmDelete(item); }} style={styles.tileDelete}>
+              <Text style={styles.tileDeleteText}>삭제</Text>
+            </Pressable>
             <View style={styles.tileShade}>
               <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
               <Text style={styles.itemSubtitle} numberOfLines={1}>{item.source}</Text>
@@ -134,13 +210,17 @@ const styles = StyleSheet.create({
   grid: { padding: 10, paddingBottom: 26, gap: 4 },
   row: { gap: 4 },
   albumTile: { flex: 1, aspectRatio: 1, marginBottom: 4, borderRadius: 4, overflow: 'hidden', backgroundColor: '#eee8dc' },
+  tileDelete: { position: 'absolute', top: 5, right: 5, zIndex: 2, minHeight: 26, paddingHorizontal: 8, borderRadius: 13, backgroundColor: 'rgba(255,255,255,0.9)', alignItems: 'center', justifyContent: 'center' },
+  tileDeleteText: { color: '#d14444', fontSize: 11, fontWeight: '900' },
   tileShade: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 6, paddingVertical: 5, backgroundColor: 'rgba(0,0,0,0.48)' },
   itemTitle: { color: '#fff', fontSize: 11, fontWeight: '900' },
   itemSubtitle: { marginTop: 1, color: 'rgba(255,255,255,0.82)', fontSize: 9, fontWeight: '800' },
   empty: { marginTop: 80, textAlign: 'center', color: colors.sub, fontWeight: '800' },
   viewer: { ...StyleSheet.absoluteFillObject, zIndex: 10, backgroundColor: '#101214', padding: 12 },
-  viewerHeader: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  viewerHeader: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 8 },
   viewerTitleBlock: { flex: 1 },
+  viewerDelete: { minHeight: 38, paddingHorizontal: 14, borderRadius: 19, backgroundColor: '#fff1f1', borderWidth: 1, borderColor: '#f0b7b7' },
+  viewerDeleteText: { lineHeight: 36, color: '#d14444', fontWeight: '900' },
   viewerClose: { minHeight: 38, paddingHorizontal: 14, borderRadius: 19, backgroundColor: '#fff' },
   viewerCloseText: { lineHeight: 38, color: '#111', fontWeight: '900' },
   viewerImage: { width: '100%', flex: 1, backgroundColor: '#050607', borderRadius: 6 },

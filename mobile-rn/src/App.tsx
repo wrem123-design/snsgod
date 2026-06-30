@@ -479,7 +479,7 @@ export default function App() {
           onOpenDebug={() => navigate({ name: 'debug' })}
         />
       ) : route.name === 'gallery' ? (
-        <GalleryScreen state={state} onBack={goBack} />
+        <GalleryScreen state={state} onChange={commit} onBack={goBack} />
       ) : route.name === 'debug' ? (
         <DebugScreen onBack={goBack} onReloadState={reloadSavedState} onReloadBundle={reloadBundle} />
       ) : route.name === 'random' ? (

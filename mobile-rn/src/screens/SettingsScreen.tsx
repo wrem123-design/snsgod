@@ -50,6 +50,7 @@ const SECTION_TABS: { key: SettingsSection; label: string }[] = [
 ];
 
 function getSettingsSection(value: unknown): SettingsSection {
+  if (value === 'prompts') return 'user';
   return SECTION_TABS.some(tab => tab.key === value) ? value as SettingsSection : 'user';
 }
 
@@ -259,6 +260,10 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   }, [snsDefaultPlatform, state.config.sns]);
 
   async function openSection(section: SettingsSection) {
+    if (section === 'prompts' && onOpenPrompts) {
+      onOpenPrompts();
+      return;
+    }
     setActiveSection(section);
     if (state.config.lastSettingsSection === section) return;
     try {

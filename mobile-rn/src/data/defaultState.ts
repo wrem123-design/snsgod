@@ -28,7 +28,7 @@ export function createDefaultState(): SNSGodState {
         },
         gemini: {
           apiEndpoint: 'https://generativelanguage.googleapis.com/v1beta',
-          apiModel: 'gemini-2.5-flash',
+          apiModel: 'gemini-2.5-pro',
           maxTokens: 700,
           temperature: 0.85
         }

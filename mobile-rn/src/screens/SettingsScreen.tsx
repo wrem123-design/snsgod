@@ -18,11 +18,13 @@ const PROVIDER_PRESETS: Partial<Record<ApiProvider, { endpoint: string; model: s
   vertex: [
     { endpoint: '', model: 'gemini-3-flash-preview' },
     { endpoint: '', model: 'gemini-3.1-pro-preview' },
-    { endpoint: '', model: 'gemini-2.5-flash' }
+    { endpoint: '', model: 'gemini-2.5-pro' },
+    { endpoint: '', model: 'gemini-3.5-flash' }
   ],
   gemini: [
-    { endpoint: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-2.5-flash' },
+    { endpoint: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-2.5-pro' },
     { endpoint: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-2.5-flash-lite' },
+    { endpoint: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-3.5-flash' },
     { endpoint: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-3-flash-preview' }
   ],
   openai: [

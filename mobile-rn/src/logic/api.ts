@@ -460,7 +460,7 @@ async function anthropicContentForMessage(message: ChatMessage): Promise<Record<
 
 async function callGemini(profile: ApiProfile, key: string, messages: ChatMessage[]): Promise<string> {
   const endpoint = String(profile.apiEndpoint || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, '');
-  const model = String(profile.apiModel || 'gemini-2.5-flash').replace(/^models\//, '');
+  const model = String(profile.apiModel || 'gemini-2.5-pro').replace(/^models\//, '');
   const system = messages.filter(message => message.role === 'system').map(message => message.content).join('\n\n');
   const contents = await Promise.all(messages
     .filter(message => message.role !== 'system')
@@ -655,7 +655,7 @@ function vertexResponseSummary(data: VertexGenerateResponse): string {
 
 function friendlyVertexError(status: number, text: string): string {
   if (status === 404 && /was not found|does not have access|valid model name/i.test(text)) {
-    return '모델이 현재 Vertex 리전에 없거나 프로젝트 권한이 없습니다. 설정 > API에서 Location을 global로 바꾸거나, 접근 가능한 모델(gemini-2.5-flash 등)로 테스트해보세요.';
+    return '모델이 현재 Vertex 리전에 없거나 프로젝트 권한이 없습니다. 설정 > API에서 Location을 global로 바꾸거나, 접근 가능한 모델(gemini-2.5-pro 등)로 테스트해보세요.';
   }
   return text.slice(0, 300);
 }

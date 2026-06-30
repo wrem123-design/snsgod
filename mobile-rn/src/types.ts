@@ -51,6 +51,7 @@ export type PromptSet = {
   stickerRules: string;
   language: string;
   snsPosting: string;
+  snsSubjectGuide: string;
   snsNsfwBackAccount: string;
   profileCreation: string;
 };

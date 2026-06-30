@@ -349,6 +349,12 @@ function snsNsfwInstruction(state: SNSGodState): string {
   return prompt || DEFAULT_PROMPTS.snsNsfwBackAccount;
 }
 
+function snsSubjectInstruction(state: SNSGodState, subject: unknown): string {
+  const guide = String(state.config.prompts?.snsSubjectGuide || DEFAULT_PROMPTS.snsSubjectGuide).trim() || DEFAULT_PROMPTS.snsSubjectGuide;
+  const value = String(subject || '').trim();
+  return value ? `${guide}\nGuide: ${value}` : '';
+}
+
 async function applySnsImagePolicy(state: SNSGodState, posts: SNSPost[], character: SNSGodCharacter, options: { image?: string }, sns: ReturnType<typeof snsOptionsFor>, rawText: string) {
   const result: SNSPost[] = [];
   for (const [index, post] of posts.entries()) {
@@ -407,7 +413,7 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
     sns.textOnly ? 'Do not include imagePrompt.' : 'If an image fits, include imagePrompt as English visual prompt.',
     sns.noDM ? 'Do not create dms.' : 'Create one short SNS DM thread when natural.',
     sns.thirdPartyDM ? 'Third-party commenters may initiate DMs if useful.' : 'DMs should stay centered on the character and user.',
-    sns.subject ? `User direction / subject: ${sns.subject}` : '',
+    snsSubjectInstruction(state, sns.subject),
     sns.mood ? `Mood: ${sns.mood}` : '',
     `Character profile: ${character.prompt || '(empty)'}`,
     `User profile: ${state.config.userDescription || '(empty)'}`,

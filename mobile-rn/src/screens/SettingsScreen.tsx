@@ -82,9 +82,9 @@ function phoneRarityFromChancePercent(value: unknown): number {
   return Math.max(0, Math.min(10, Math.round((33 - chance) / 3)));
 }
 
-function phoneChancePercentFromRarity(value: unknown): number {
+function phoneMultiplierPercentFromRarity(value: unknown): number {
   const rarity = Math.max(0, Math.min(10, Math.round(Number(value) || 0)));
-  return Math.round(3 + ((10 - rarity) / 10) * 30);
+  return Math.round((1 - rarity * 0.09) * 100);
 }
 
 function phoneCooldownMinutes(value: unknown, fallbackMinutes: number, legacyHours?: unknown): number {
@@ -481,7 +481,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     if (saving) return;
     setSaving(true);
     const phoneRarity = Math.max(0, Math.min(10, Math.round(Number(characterPhoneCallRarityLevel) || 0)));
-    const phoneChance = phoneChancePercentFromRarity(phoneRarity);
+    const phoneChance = Math.round(33 * (phoneMultiplierPercentFromRarity(phoneRarity) / 100));
     const phoneCharacterCooldown = Number(characterPhoneCallMinCooldownMinutes);
     const phoneGlobalCooldown = Number(characterPhoneCallGlobalCooldownMinutes);
     const phoneCharacterCooldownMinutes = Math.max(1, Math.min(10080, Math.round(Number.isFinite(phoneCharacterCooldown) ? phoneCharacterCooldown : 360)));
@@ -1278,7 +1278,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
                 minLabel="0 자주"
                 maxLabel="10 아주 가끔"
               />
-              <Text style={styles.help}>0에 가까울수록 전화가 더 자주 오고, 10에 가까울수록 아주 가끔 옵니다. 현재 단계의 내부 강도는 약 {phoneChancePercentFromRarity(characterPhoneCallRarityLevel)}%입니다.</Text>
+              <Text style={styles.help}>0은 캐릭터 원래 전화 확률 그대로, 10은 원래 확률의 약 10%만 사용합니다. 현재 단계는 원래 확률의 약 {phoneMultiplierPercentFromRarity(characterPhoneCallRarityLevel)}%입니다.</Text>
               <View style={styles.twoCols}>
                 <View style={styles.col}>
                   <Text style={styles.label}>같은 캐릭터 전화 간격(분)</Text>

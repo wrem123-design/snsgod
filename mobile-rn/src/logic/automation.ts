@@ -18,21 +18,20 @@ function minutesSince(timestamp?: number): number {
 }
 
 const DEFAULT_PHONE_INVITE_RARITY_LEVEL = 0;
-const DEFAULT_PHONE_INVITE_CHANCE_PERCENT = 33;
 const DEFAULT_PHONE_INVITE_GLOBAL_COOLDOWN_MINUTES = 180;
 const DEFAULT_PHONE_INVITE_CHARACTER_MIN_COOLDOWN_MINUTES = 360;
 
-function phoneInviteChanceFromRarity(level: number): number {
+function phoneInviteMultiplierFromRarity(level: number): number {
   const rarity = Math.max(0, Math.min(10, Math.round(Number.isFinite(level) ? level : DEFAULT_PHONE_INVITE_RARITY_LEVEL)));
-  return Math.round(3 + ((10 - rarity) / 10) * 30);
+  return Math.max(0.1, 1 - rarity * 0.09);
 }
 
-function phoneInviteChancePercent(state: SNSGodState): number {
+function phoneInviteChanceMultiplier(state: SNSGodState): number {
   if (state.config.characterPhoneCallRarityLevel !== undefined) {
-    return phoneInviteChanceFromRarity(Number(state.config.characterPhoneCallRarityLevel));
+    return phoneInviteMultiplierFromRarity(Number(state.config.characterPhoneCallRarityLevel));
   }
-  const value = Number(state.config.characterPhoneCallChancePercent ?? DEFAULT_PHONE_INVITE_CHANCE_PERCENT);
-  return Math.max(0, Math.min(33, Number.isFinite(value) ? value : DEFAULT_PHONE_INVITE_CHANCE_PERCENT));
+  const legacyPercent = Number(state.config.characterPhoneCallChancePercent ?? 33);
+  return Math.max(0, Math.min(1, Number.isFinite(legacyPercent) ? legacyPercent / 33 : 1));
 }
 
 function phoneInviteGlobalCooldownMinutes(state: SNSGodState): number {
@@ -183,13 +182,13 @@ function runPhoneInvite(state: SNSGodState): SNSGodState | undefined {
   if (state.config.autoEnabled === false || state.config.characterPhoneCallEnabled === false) return undefined;
   if (minutesSince(Number(state.__phoneGlobalInviteAt || 0)) < phoneInviteGlobalCooldownMinutes(state)) return undefined;
   const sent = (state.__phoneInviteAt || {}) as Record<string, number>;
-  const chanceScale = phoneInviteChancePercent(state) / 100;
+  const chanceMultiplier = phoneInviteChanceMultiplier(state);
   const candidates = state.characters.filter(character => {
     if (character.randomTemporary === true || character.enabled === false || character.proactiveEnabled === false) return false;
     const rhythmCharacter = characterWithConversationRhythm(state, character);
     const intervalMinutes = Math.max(phoneInviteCharacterCooldownMinutes(state), Number(rhythmCharacter.frequencyMinutes || 10) * 12);
     if (minutesSince(sent[character.id]) < intervalMinutes) return false;
-    const chance = Math.max(0, Math.min(18, Number(rhythmCharacter.initiative ?? 40) / 6)) * chanceScale;
+    const chance = Math.max(0, Math.min(18, Number(rhythmCharacter.initiative ?? 40) / 6)) * chanceMultiplier;
     return Math.random() * 100 <= chance;
   });
   if (!candidates.length) return undefined;

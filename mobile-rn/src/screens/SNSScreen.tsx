@@ -154,6 +154,28 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
     }
   }
 
+  async function retryFailedPost(post: SNSPost) {
+    if (loading) return;
+    const character = state.characters.find(item => item.id === post.characterId);
+    if (!character) {
+      Alert.alert('SNS 재생성 실패', '재생성할 캐릭터를 찾지 못했습니다.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const retryState: SNSGodState = {
+        ...state,
+        snsPosts: (state.snsPosts || []).filter(item => item.id !== post.id)
+      };
+      const next = await generateSNSPost(retryState, character, post.platform, { manual: true, roomId: post.generationRoomId });
+      await onChange(next);
+    } catch (error) {
+      Alert.alert('SNS 재생성 실패', error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function choosePostImage() {
     try {
       const image = await pickImageDataUri();
@@ -460,7 +482,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
         ListEmptyComponent={<Text style={styles.emptyText}>아직 {selectedCharacter?.name || '이 캐릭터'}의 {platform === 'instagram' ? 'Instagram' : 'Twitter/X'} 게시물이 없습니다.</Text>}
         renderItem={({ item }) => {
           const itemCharacter = state.characters.find(character => character.id === item.characterId);
-          return <PostCard platform={platform} post={item} character={itemCharacter} dmEnabled={!snsOptionsFor(state, item.platform, itemCharacter).noDM} onLike={() => likePost(item.id)} onDelete={() => deletePost(item.id)} onComment={content => addComment(item.id, content)} onOpenDm={() => openSnsDm(item)} />;
+          return <PostCard platform={platform} post={item} character={itemCharacter} dmEnabled={!snsOptionsFor(state, item.platform, itemCharacter).noDM} onLike={() => likePost(item.id)} onDelete={() => deletePost(item.id)} onComment={content => addComment(item.id, content)} onOpenDm={() => openSnsDm(item)} onRetryFailed={() => retryFailedPost(item)} />;
         }}
       />
     </View>
@@ -847,9 +869,10 @@ function SnsDmHubModal({ post, character, userThread, thirdPartyDms, onClose, on
   );
 }
 
-function PostCard({ platform, post, character, dmEnabled, onLike, onDelete, onComment, onOpenDm }: { platform: SNSPost['platform']; post: SNSPost; character?: SNSGodCharacter; dmEnabled: boolean; onLike: () => void; onDelete: () => void; onComment: (content: string) => Promise<void> | void; onOpenDm: () => void }) {
+function PostCard({ platform, post, character, dmEnabled, onLike, onDelete, onComment, onOpenDm, onRetryFailed }: { platform: SNSPost['platform']; post: SNSPost; character?: SNSGodCharacter; dmEnabled: boolean; onLike: () => void; onDelete: () => void; onComment: (content: string) => Promise<void> | void; onOpenDm: () => void; onRetryFailed?: () => void }) {
   const [comment, setComment] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
+  const failed = post.generationFailed === true;
   async function submitComment() {
     const trimmed = comment.trim();
     if (!trimmed || submittingComment) return;
@@ -875,7 +898,15 @@ function PostCard({ platform, post, character, dmEnabled, onLike, onDelete, onCo
           <Text style={[styles.more, platform === 'twitter' && styles.xMore]}>...</Text>
         </Pressable>
       </View>
-      {platform === 'instagram' ? (
+      {failed ? (
+        <View style={[styles.snsFailureBody, platform === 'twitter' && styles.xSnsFailureBody]}>
+          <Text style={[styles.snsFailureText, platform === 'twitter' && styles.xSnsFailureText]} numberOfLines={2}>SNS 생성 실패</Text>
+          <Pressable accessibilityLabel="SNS 재생성" onPress={onRetryFailed} style={styles.snsRetryButton}>
+            <Text style={styles.snsRetryButtonText}>!</Text>
+          </Pressable>
+        </View>
+      ) : null}
+      {!failed && (platform === 'instagram' ? (
         <>
           {post.image ? <Image source={{ uri: post.image }} style={styles.postImage} /> : <View style={styles.instagramTextOnly}><Text style={styles.instagramTextOnlyText}>{post.content}</Text></View>}
           <View style={styles.instagramActions}>
@@ -893,25 +924,25 @@ function PostCard({ platform, post, character, dmEnabled, onLike, onDelete, onCo
           <Text style={styles.tweetContent}>{post.content}</Text>
           {post.image ? <Image source={{ uri: post.image }} style={styles.tweetImage} /> : null}
         </>
-      )}
-      {post.hashtags?.length ? <Text style={[styles.tags, platform === 'twitter' && styles.xTags]}>{post.hashtags.map(tag => `#${tag}`).join(' ')}</Text> : null}
-      {platform === 'twitter' ? <View style={styles.xStats}><Text style={styles.xStatText}>{post.reposts || 0} reposts</Text><Text style={styles.xStatText}>{post.likes || 0} likes</Text><Text style={styles.xStatText}>{post.views || 0} views</Text></View> : null}
-      <View style={[styles.postFooter, platform === 'twitter' && styles.xFooter]}>
+      ))}
+      {!failed && post.hashtags?.length ? <Text style={[styles.tags, platform === 'twitter' && styles.xTags]}>{post.hashtags.map(tag => `#${tag}`).join(' ')}</Text> : null}
+      {!failed && platform === 'twitter' ? <View style={styles.xStats}><Text style={styles.xStatText}>{post.reposts || 0} reposts</Text><Text style={styles.xStatText}>{post.likes || 0} likes</Text><Text style={styles.xStatText}>{post.views || 0} views</Text></View> : null}
+      {!failed ? <View style={[styles.postFooter, platform === 'twitter' && styles.xFooter]}>
         <Pressable onPress={onLike}><Text style={[styles.footerText, platform === 'twitter' && styles.xFooterText]}>{platform === 'twitter' ? `♡ ${post.likes || 0}` : `좋아요 ${post.likes || 0}개`}</Text></Pressable>
         <Text style={[styles.footerText, platform === 'twitter' && styles.xFooterText]}>{platform === 'twitter' ? `💬 ${post.replies || post.comments?.length || 0}` : `댓글 ${post.replies || post.comments?.length || 0}개`}</Text>
         <Pressable onPress={onOpenDm} disabled={!dmEnabled}><Text style={[styles.footerText, platform === 'twitter' && styles.xFooterText, !dmEnabled && styles.footerTextDisabled]}>DM</Text></Pressable>
         {post.platform === 'twitter' ? <Text style={styles.xFooterText}>↗</Text> : null}
-      </View>
-      {(post.comments || []).slice(-5).map(item => (
+      </View> : null}
+      {!failed && (post.comments || []).slice(-5).map(item => (
         <View key={item.id} style={styles.commentRow}>
           <Text style={[styles.commentAuthor, platform === 'twitter' && styles.xCommentAuthor]}>{item.author}</Text>
           <Text style={[styles.commentText, platform === 'twitter' && styles.xCommentText]}>{item.content}</Text>
         </View>
       ))}
-      <View style={[styles.commentComposer, platform === 'twitter' && styles.xCommentComposer]}>
+      {!failed ? <View style={[styles.commentComposer, platform === 'twitter' && styles.xCommentComposer]}>
         <TextInput value={comment} onChangeText={setComment} onSubmitEditing={submitComment} returnKeyType="send" style={[styles.commentInput, platform === 'twitter' && styles.xCommentInput]} placeholder="댓글 달기" placeholderTextColor={platform === 'twitter' ? '#9aa0a6' : '#aaa'} />
         <Pressable onPress={submitComment} disabled={!comment.trim() || submittingComment} style={[styles.commentButton, platform === 'twitter' && styles.xCommentButton, (!comment.trim() || submittingComment) && styles.commentButtonDisabled]}><Text style={[styles.commentButtonText, platform === 'twitter' && styles.xCommentButtonText]}>{submittingComment ? '...' : '게시'}</Text></Pressable>
-      </View>
+      </View> : null}
     </View>
   );
 }
@@ -1030,6 +1061,12 @@ const styles = StyleSheet.create({
   tweetImage: { marginHorizontal: 16, width: undefined, borderRadius: 16, aspectRatio: 1.6 },
   postContent: { padding: 16, color: colors.text, fontSize: 17, lineHeight: 25 },
   tweetContent: { paddingTop: 8, fontSize: 16, lineHeight: 23 },
+  snsFailureBody: { minHeight: 96, margin: 12, borderRadius: 8, backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#fed7aa', alignItems: 'center', justifyContent: 'center', position: 'relative', padding: 16 },
+  xSnsFailureBody: { backgroundColor: '#111111', borderColor: '#2f3336' },
+  snsFailureText: { color: '#9a3412', fontSize: 13, fontWeight: '900' },
+  xSnsFailureText: { color: '#c9d1d9' },
+  snsRetryButton: { position: 'absolute', right: 8, bottom: 8, width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#22c55e', borderWidth: 2, borderColor: '#dcfce7' },
+  snsRetryButtonText: { color: '#073d24', fontSize: 16, lineHeight: 18, fontWeight: '900' },
   instagramTextOnly: { width: '100%', aspectRatio: 1, backgroundColor: '#f2f2f2', alignItems: 'center', justifyContent: 'center', padding: 28 },
   instagramTextOnlyText: { color: '#262626', fontSize: 20, lineHeight: 29, fontWeight: '800', textAlign: 'center' },
   instagramActions: { minHeight: 46, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 16 },

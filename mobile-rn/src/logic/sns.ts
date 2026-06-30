@@ -225,6 +225,28 @@ function toPost(item: GeneratedPlatform, character: SNSGodCharacter, platform: S
   };
 }
 
+function toFailedPost(character: SNSGodCharacter, platform: SNSPost['platform'], error: unknown, roomId?: string): SNSPost {
+  return {
+    id: makeId('snsfail'),
+    characterId: character.id,
+    platform,
+    displayName: character.name,
+    handle: String(character.handle || character.id).replace(/^@/, ''),
+    content: '',
+    hashtags: [],
+    createdAt: Date.now(),
+    likes: 0,
+    replies: 0,
+    reposts: 0,
+    bookmarks: 0,
+    views: 0,
+    comments: [],
+    generationFailed: true,
+    generationError: error instanceof Error ? error.message : String(error),
+    generationRoomId: roomId
+  };
+}
+
 function toPostDms(generated: GeneratedSns): NonNullable<SNSPost['dms']> {
   return (generated.dms || []).map(thread => ({
     id: makeId('snsdm'),
@@ -424,6 +446,7 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
     `Previous posts:\n${(state.snsPosts || []).filter(post => post.characterId === character.id).slice(0, 5).map(post => `- ${post.platform}: ${post.content}`).join('\n') || '(none)'}`,
     'Create the SNS JSON now.'
   ].filter(Boolean).join('\n\n');
+  try {
   const snsState = withSnsTokenBudget(state, platform);
   const { text, keyIndex } = await callLLMText(snsState, [{ role: 'system', content: prompt }]);
   const parsed = parsePostText(text, platform, character);
@@ -457,6 +480,14 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
     target: { app: 'social', characterId: character.id, postId: postsWithImages[0]?.id },
     collapseKey: `sns:${character.id}`
   });
+  } catch (error) {
+    await appendDebugLog('sns.generate', `SNS post generation failed character=${character.id} platform=${platform}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+    const failedPost = toFailedPost(character, platform, error, options.roomId);
+    return {
+      ...state,
+      snsPosts: [failedPost, ...(state.snsPosts || [])].slice(0, 30)
+    };
+  }
 }
 
 export async function maybeCreateAutoSNSPost(state: SNSGodState, character: SNSGodCharacter, roomId: string): Promise<SNSGodState> {

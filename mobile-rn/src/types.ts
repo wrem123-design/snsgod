@@ -290,6 +290,9 @@ export type SNSPost = {
   views?: number;
   comments?: { id: string; author: string; handle?: string; content: string; createdAt: number; likes?: number; ai?: boolean }[];
   dms?: { id?: string; title: string; participants?: SNSDmParticipant[]; messages: { id?: string; from: string; fromName?: string; body: string; createdAt?: number }[] }[];
+  generationFailed?: boolean;
+  generationError?: string;
+  generationRoomId?: string;
 };
 
 export type SNSDmParticipant = {

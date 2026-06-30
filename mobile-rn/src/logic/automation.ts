@@ -17,8 +17,24 @@ function minutesSince(timestamp?: number): number {
   return (Date.now() - timestamp) / 60000;
 }
 
-const PHONE_INVITE_GLOBAL_COOLDOWN_MINUTES = 3 * 60;
-const PHONE_INVITE_CHARACTER_MIN_COOLDOWN_MINUTES = 6 * 60;
+const DEFAULT_PHONE_INVITE_CHANCE_PERCENT = 33;
+const DEFAULT_PHONE_INVITE_GLOBAL_COOLDOWN_HOURS = 3;
+const DEFAULT_PHONE_INVITE_CHARACTER_MIN_COOLDOWN_HOURS = 6;
+
+function phoneInviteChancePercent(state: SNSGodState): number {
+  const value = Number(state.config.characterPhoneCallChancePercent ?? DEFAULT_PHONE_INVITE_CHANCE_PERCENT);
+  return Math.max(0, Math.min(33, Number.isFinite(value) ? value : DEFAULT_PHONE_INVITE_CHANCE_PERCENT));
+}
+
+function phoneInviteGlobalCooldownMinutes(state: SNSGodState): number {
+  const value = Number(state.config.characterPhoneCallGlobalCooldownHours ?? DEFAULT_PHONE_INVITE_GLOBAL_COOLDOWN_HOURS);
+  return Math.max(0, Math.min(72, Number.isFinite(value) ? value : DEFAULT_PHONE_INVITE_GLOBAL_COOLDOWN_HOURS)) * 60;
+}
+
+function phoneInviteCharacterCooldownMinutes(state: SNSGodState): number {
+  const value = Number(state.config.characterPhoneCallMinCooldownHours ?? DEFAULT_PHONE_INVITE_CHARACTER_MIN_COOLDOWN_HOURS);
+  return Math.max(1, Math.min(168, Number.isFinite(value) ? value : DEFAULT_PHONE_INVITE_CHARACTER_MIN_COOLDOWN_HOURS)) * 60;
+}
 
 function eligiblePrivateRooms(state: SNSGodState, firstMessageOnly: boolean): { character: SNSGodCharacter; room: SNSGodRoom }[] {
   if (state.config.autoEnabled === false) return [];
@@ -146,14 +162,15 @@ async function runCalendarEvent(state: SNSGodState): Promise<SNSGodState | undef
 
 function runPhoneInvite(state: SNSGodState): SNSGodState | undefined {
   if (state.config.autoEnabled === false || state.config.characterPhoneCallEnabled === false) return undefined;
-  if (minutesSince(Number(state.__phoneGlobalInviteAt || 0)) < PHONE_INVITE_GLOBAL_COOLDOWN_MINUTES) return undefined;
+  if (minutesSince(Number(state.__phoneGlobalInviteAt || 0)) < phoneInviteGlobalCooldownMinutes(state)) return undefined;
   const sent = (state.__phoneInviteAt || {}) as Record<string, number>;
+  const chanceScale = phoneInviteChancePercent(state) / 100;
   const candidates = state.characters.filter(character => {
     if (character.randomTemporary === true || character.enabled === false || character.proactiveEnabled === false) return false;
     const rhythmCharacter = characterWithConversationRhythm(state, character);
-    const intervalMinutes = Math.max(PHONE_INVITE_CHARACTER_MIN_COOLDOWN_MINUTES, Number(rhythmCharacter.frequencyMinutes || 10) * 12);
+    const intervalMinutes = Math.max(phoneInviteCharacterCooldownMinutes(state), Number(rhythmCharacter.frequencyMinutes || 10) * 12);
     if (minutesSince(sent[character.id]) < intervalMinutes) return false;
-    const chance = Math.max(0, Math.min(6, Number(rhythmCharacter.initiative ?? 40) / 18));
+    const chance = Math.max(0, Math.min(18, Number(rhythmCharacter.initiative ?? 40) / 6)) * chanceScale;
     return Math.random() * 100 <= chance;
   });
   if (!candidates.length) return undefined;

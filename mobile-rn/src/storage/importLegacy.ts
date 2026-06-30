@@ -152,6 +152,9 @@ export function normalizeLegacyState(rawJson: string): SNSGodState {
       randomDmEnabled: boolConfig(config, fallback.config.randomDmEnabled !== false, 'randomDmEnabled', 'randomFirstMessageEnabled'),
       snsAutoPostEnabled: boolConfig(config, fallback.config.snsAutoPostEnabled !== false, 'snsAutoPostEnabled', 'autoSnsEnabled'),
       characterPhoneCallEnabled: boolConfig(config, fallback.config.characterPhoneCallEnabled !== false, 'characterPhoneCallEnabled', 'characterPhoneInvitesEnabled'),
+      characterPhoneCallChancePercent: numberConfig(config, Number(fallback.config.characterPhoneCallChancePercent ?? 33), 'characterPhoneCallChancePercent'),
+      characterPhoneCallMinCooldownHours: numberConfig(config, Number(fallback.config.characterPhoneCallMinCooldownHours ?? 6), 'characterPhoneCallMinCooldownHours'),
+      characterPhoneCallGlobalCooldownHours: numberConfig(config, Number(fallback.config.characterPhoneCallGlobalCooldownHours ?? 3), 'characterPhoneCallGlobalCooldownHours'),
       snsAutoChance: numberConfig(config, Number(fallback.config.snsAutoChance ?? 40), 'snsAutoChance', 'autoSnsChance'),
       snsStartCount: numberConfig(config, Number(fallback.config.snsStartCount ?? 6), 'snsStartCount', 'autoSnsMinMessages')
     },

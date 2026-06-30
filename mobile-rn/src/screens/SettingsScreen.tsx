@@ -178,6 +178,9 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   const [randomDmEnabled, setRandomDmEnabled] = useState(state.config.randomDmEnabled !== false);
   const [snsAutoPostEnabled, setSnsAutoPostEnabled] = useState(state.config.snsAutoPostEnabled !== false);
   const [characterPhoneCallEnabled, setCharacterPhoneCallEnabled] = useState(state.config.characterPhoneCallEnabled !== false);
+  const [characterPhoneCallChancePercent, setCharacterPhoneCallChancePercent] = useState(String(state.config.characterPhoneCallChancePercent ?? 33));
+  const [characterPhoneCallMinCooldownHours, setCharacterPhoneCallMinCooldownHours] = useState(String(state.config.characterPhoneCallMinCooldownHours ?? 6));
+  const [characterPhoneCallGlobalCooldownHours, setCharacterPhoneCallGlobalCooldownHours] = useState(String(state.config.characterPhoneCallGlobalCooldownHours ?? 3));
   const imageConfig = state.config.imageGeneration || {};
   const snsConfig = state.config.sns || {};
   const [imageEnabled, setImageEnabled] = useState(imageConfig.enabled === true);
@@ -458,6 +461,9 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   async function saveAutomation() {
     if (saving) return;
     setSaving(true);
+    const phoneChance = Number(characterPhoneCallChancePercent);
+    const phoneCharacterCooldown = Number(characterPhoneCallMinCooldownHours);
+    const phoneGlobalCooldown = Number(characterPhoneCallGlobalCooldownHours);
     try {
       await onChange({
         ...state,
@@ -469,6 +475,9 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           randomDmEnabled,
           snsAutoPostEnabled,
           characterPhoneCallEnabled,
+          characterPhoneCallChancePercent: Math.max(0, Math.min(33, Math.round(Number.isFinite(phoneChance) ? phoneChance : 33))),
+          characterPhoneCallMinCooldownHours: Math.max(1, Math.min(168, Number.isFinite(phoneCharacterCooldown) ? phoneCharacterCooldown : 6)),
+          characterPhoneCallGlobalCooldownHours: Math.max(0, Math.min(72, Number.isFinite(phoneGlobalCooldown) ? phoneGlobalCooldown : 3)),
           snsAutoChance: Math.max(0, Math.min(100, Math.round(Number(snsAutoChance) || 0))),
           snsStartCount: Math.max(1, Math.round(Number(snsStartCount) || 6))
         }
@@ -1235,6 +1244,25 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           <Text style={styles.help}>SNS 자동 게시: 일반 채팅 답장 뒤 메시지 수, 쿨다운, 확률 조건을 만족하면 Instagram 또는 X 게시물을 생성합니다.</Text>
           <SwitchLine label="캐릭터 먼저 전화" value={characterPhoneCallEnabled} onChange={setCharacterPhoneCallEnabled} />
           <Text style={styles.help}>캐릭터 먼저 전화: 캐릭터 주도성과 빈도 조건에 따라 드물게 전화 카드 알림을 만듭니다.</Text>
+          {characterPhoneCallEnabled ? (
+            <View style={styles.twoCols}>
+              <View style={styles.col}>
+                <Text style={styles.label}>전화 확률 강도(%)</Text>
+                <TextInput value={characterPhoneCallChancePercent} onChangeText={setCharacterPhoneCallChancePercent} style={styles.input} keyboardType="number-pad" />
+                <Text style={styles.help}>0-33%. 33%가 현재 낮춘 기본값입니다.</Text>
+              </View>
+              <View style={styles.col}>
+                <Text style={styles.label}>캐릭터별 쿨타임(시간)</Text>
+                <TextInput value={characterPhoneCallMinCooldownHours} onChangeText={setCharacterPhoneCallMinCooldownHours} style={styles.input} keyboardType="number-pad" />
+                <Text style={styles.help}>같은 캐릭터가 다시 전화하기 전 최소 시간입니다.</Text>
+              </View>
+              <View style={styles.col}>
+                <Text style={styles.label}>전체 전화 쿨타임(시간)</Text>
+                <TextInput value={characterPhoneCallGlobalCooldownHours} onChangeText={setCharacterPhoneCallGlobalCooldownHours} style={styles.input} keyboardType="number-pad" />
+                <Text style={styles.help}>누가 전화했든 다음 자동 전화까지 기다리는 시간입니다.</Text>
+              </View>
+            </View>
+          ) : null}
           <View style={styles.twoCols}>
             <View style={styles.col}>
               <Text style={styles.label}>SNS 자동 게시 확률(%)</Text>

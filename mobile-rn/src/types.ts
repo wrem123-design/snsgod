@@ -72,6 +72,9 @@ export type SNSGodConfig = {
   randomDmEnabled?: boolean;
   snsAutoPostEnabled?: boolean;
   characterPhoneCallEnabled?: boolean;
+  characterPhoneCallChancePercent?: number;
+  characterPhoneCallMinCooldownHours?: number;
+  characterPhoneCallGlobalCooldownHours?: number;
   imageGeneration?: ImageGenerationConfig;
   sns?: {
     platform?: 'instagram' | 'twitter';

@@ -13,7 +13,7 @@ type CharacterSection = 'basic' | 'reply' | 'profile' | 'time' | 'calendar' | 'l
 
 const SECTION_TABS: { key: CharacterSection; label: string }[] = [
   { key: 'basic', label: '기본' },
-  { key: 'reply', label: '답장/능동' },
+  { key: 'reply', label: '대화 성향' },
   { key: 'profile', label: '프로필/이미지' },
   { key: 'time', label: '시간/날씨' },
   { key: 'calendar', label: '기념일' },
@@ -39,50 +39,90 @@ const MESSAGE_STYLE_OPTIONS = [
   ['burst', '짧게 여러 번']
 ];
 
-const PROACTIVE_STYLE_OPTIONS = [
-  ['auto', '프롬프트 기준'],
-  ['reserved', '무뚝뚝/절제'],
-  ['steady', '담백/가끔'],
-  ['attached', '외로움/애착'],
-  ['obsessive', '집착/끈질김']
-];
-
 const REPLY_PRESETS = [
   {
-    id: 'attached_realistic',
-    title: '다정한 집착형',
-    summary: '답장은 보통 빠르고 긴 편입니다. 선톡 문장 성격은 외로움/애착 쪽이고, 연락이 끊기면 한두 번 먼저 말을 겁니다.',
-    values: { proactiveStyle: 'attached', proactivePatience: 5, responseDelayMin: 8, responseDelayMax: 420, messageGapMin: 2, messageGapMax: 5, responseTime: 8, thinkingTime: 7, reactivity: 9, tone: 8, frequencyMinutes: 18, initiative: 65, messageStyle: 'long' }
+    id: 'quick_friend',
+    title: '칼답 친구',
+    short: '바로 보고 바로 답해요',
+    detail: '확인이 빠르고 답장도 가볍게 이어갑니다. 부담 없는 친구 느낌입니다.',
+    values: { proactivePatience: 2, responseDelayMin: 0, responseDelayMax: 8, messageGapMin: 1, messageGapMax: 3, responseTime: 9, thinkingTime: 3, reactivity: 7, tone: 5, frequencyMinutes: 18, initiative: 45, messageStyle: 'balanced' }
   },
   {
-    id: 'busy_warm',
-    title: '바쁜데 성의 있는 사람',
-    summary: '확인은 늦지만 한 번 답할 때는 제대로 길게 답합니다. 선톡 문장 성격은 담백하고, 먼저 연락은 드뭅니다.',
-    values: { proactiveStyle: 'steady', proactivePatience: 2, responseDelayMin: 60, responseDelayMax: 2100, messageGapMin: 4, messageGapMax: 9, responseTime: 3, thinkingTime: 8, reactivity: 6, tone: 7, frequencyMinutes: 90, initiative: 18, messageStyle: 'long' }
+    id: 'slow_friend',
+    title: '느긋한 친구',
+    short: '천천히 봐도 자연스러워요',
+    detail: '답장은 늦을 수 있지만 편안하고 여유롭게 대화를 이어갑니다.',
+    values: { proactivePatience: 1, responseDelayMin: 20, responseDelayMax: 240, messageGapMin: 2, messageGapMax: 6, responseTime: 3, thinkingTime: 5, reactivity: 4, tone: 4, frequencyMinutes: 60, initiative: 18, messageStyle: 'balanced' }
   },
   {
-    id: 'idol_schedule',
+    id: 'busy_friend',
+    title: '바쁜 현실친구',
+    short: '일정 때문에 자주 늦어요',
+    detail: '스케줄이 있는 사람처럼 확인과 답장이 늦습니다. 대신 현실감이 좋습니다.',
+    values: { proactivePatience: 1, responseDelayMin: 60, responseDelayMax: 900, messageGapMin: 2, messageGapMax: 8, responseTime: 2, thinkingTime: 5, reactivity: 5, tone: 5, frequencyMinutes: 120, initiative: 10, messageStyle: 'balanced' }
+  },
+  {
+    id: 'chatty_friend',
+    title: '수다쟁이 친구',
+    short: '짧게 여러 번 보내요',
+    detail: '리액션이 크고 말을 여러 번 나눠 보내는 활발한 타입입니다.',
+    values: { proactivePatience: 4, responseDelayMin: 0, responseDelayMax: 30, messageGapMin: 1, messageGapMax: 2, responseTime: 8, thinkingTime: 3, reactivity: 9, tone: 7, frequencyMinutes: 12, initiative: 65, messageStyle: 'burst' }
+  },
+  {
+    id: 'dry_caring',
+    title: '무심한데 챙김',
+    short: '담백하지만 은근히 챙겨요',
+    detail: '표현은 적지만 필요한 순간에는 먼저 말을 거는 타입입니다.',
+    values: { proactivePatience: 2, responseDelayMin: 15, responseDelayMax: 180, messageGapMin: 1, messageGapMax: 4, responseTime: 5, thinkingTime: 5, reactivity: 4, tone: 3, frequencyMinutes: 35, initiative: 32, messageStyle: 'balanced' }
+  },
+  {
+    id: 'sweet_partner',
+    title: '다정한 연인',
+    short: '부드럽고 자주 표현해요',
+    detail: '애정 표현이 자연스럽고 선톡도 자주 오는 연인 느낌입니다.',
+    values: { proactivePatience: 4, responseDelayMin: 3, responseDelayMax: 60, messageGapMin: 1, messageGapMax: 4, responseTime: 7, thinkingTime: 5, reactivity: 7, tone: 6, frequencyMinutes: 20, initiative: 58, messageStyle: 'balanced' }
+  },
+  {
+    id: 'cute_reactive',
+    title: '애교 많은 타입',
+    short: '귀엽고 반응이 커요',
+    detail: '감정 표현과 리액션이 많고, 가볍게 먼저 말을 자주 겁니다.',
+    values: { proactivePatience: 5, responseDelayMin: 0, responseDelayMax: 45, messageGapMin: 1, messageGapMax: 3, responseTime: 8, thinkingTime: 3, reactivity: 9, tone: 8, frequencyMinutes: 15, initiative: 70, messageStyle: 'burst' }
+  },
+  {
+    id: 'cool_type',
+    title: '쿨한 사람',
+    short: '빠르지만 담백해요',
+    detail: '확인은 빠르지만 감정 표현은 과하지 않고 필요한 말을 깔끔하게 합니다.',
+    values: { proactivePatience: 1, responseDelayMin: 2, responseDelayMax: 60, messageGapMin: 1, messageGapMax: 3, responseTime: 8, thinkingTime: 4, reactivity: 3, tone: 4, frequencyMinutes: 50, initiative: 22, messageStyle: 'balanced' }
+  },
+  {
+    id: 'careful_type',
+    title: '조심스러운 사람',
+    short: '생각하고 천천히 답해요',
+    detail: '먼저 연락은 적지만 답변은 신중하고 깊게 하는 타입입니다.',
+    values: { proactivePatience: 1, responseDelayMin: 30, responseDelayMax: 420, messageGapMin: 3, messageGapMax: 8, responseTime: 3, thinkingTime: 8, reactivity: 3, tone: 4, frequencyMinutes: 90, initiative: 12, messageStyle: 'long' }
+  },
+  {
+    id: 'attached_type',
+    title: '조금 집착하는 타입',
+    short: '답이 없어도 몇 번 더 말해요',
+    detail: '관심이 많고 답이 없으면 불안한 듯 몇 번 더 말을 걸 수 있습니다.',
+    values: { proactivePatience: 6, responseDelayMin: 0, responseDelayMax: 90, messageGapMin: 1, messageGapMax: 4, responseTime: 7, thinkingTime: 5, reactivity: 8, tone: 7, frequencyMinutes: 10, initiative: 75, messageStyle: 'balanced' }
+  },
+  {
+    id: 'public_figure',
     title: '아이돌/공인 느낌',
-    summary: '스케줄 때문에 확인은 많이 느립니다. 선톡 문장 성격은 절제되어 있고, 먼저 연락하는 빈도는 낮습니다.',
-    values: { proactiveStyle: 'reserved', proactivePatience: 1, responseDelayMin: 120, responseDelayMax: 2700, messageGapMin: 3, messageGapMax: 8, responseTime: 2, thinkingTime: 7, reactivity: 7, tone: 8, frequencyMinutes: 180, initiative: 10, messageStyle: 'balanced' }
+    short: '바빠서 자주 늦어요',
+    detail: '스케줄이 있는 사람처럼 답장이 늦고, 말투가 조심스럽고 정제되어 있습니다.',
+    values: { proactivePatience: 1, responseDelayMin: 120, responseDelayMax: 1800, messageGapMin: 3, messageGapMax: 10, responseTime: 2, thinkingTime: 6, reactivity: 4, tone: 5, frequencyMinutes: 180, initiative: 8, messageStyle: 'balanced' }
   },
   {
-    id: 'short_burst',
-    title: '짧게 여러 번형',
-    summary: '긴 글보다 짧은 말을 여러 번 나눠 보냅니다. 선톡 문장 성격은 담백하고, 필요한 말만 톡톡 던집니다.',
-    values: { proactiveStyle: 'steady', proactivePatience: 3, responseDelayMin: 4, responseDelayMax: 240, messageGapMin: 1, messageGapMax: 2, responseTime: 9, thinkingTime: 4, reactivity: 7, tone: 6, frequencyMinutes: 35, initiative: 35, messageStyle: 'burst' }
-  },
-  {
-    id: 'calm_slow',
-    title: '차분한 느림형',
-    summary: '확인과 답장이 느긋합니다. 선톡 문장 성격은 절제되어 있고, 감정 표현은 크지 않습니다.',
-    values: { proactiveStyle: 'reserved', proactivePatience: 1, responseDelayMin: 40, responseDelayMax: 1500, messageGapMin: 3, messageGapMax: 7, responseTime: 4, thinkingTime: 8, reactivity: 4, tone: 5, frequencyMinutes: 120, initiative: 12, messageStyle: 'balanced' }
-  },
-  {
-    id: 'lively_friend',
-    title: '활발한 친구형',
-    summary: '확인이 빠르고 리액션이 큽니다. 선톡 문장 성격은 외로움/애착 쪽이지만 가볍게 표현합니다.',
-    values: { proactiveStyle: 'attached', proactivePatience: 4, responseDelayMin: 2, responseDelayMax: 300, messageGapMin: 1, messageGapMax: 4, responseTime: 9, thinkingTime: 5, reactivity: 9, tone: 9, frequencyMinutes: 30, initiative: 55, messageStyle: 'balanced' }
+    id: 'late_night_mood',
+    title: '새벽 감성 타입',
+    short: '느리지만 깊게 말해요',
+    detail: '천천히 답하지만 감정선이 깊고 밤 대화에 잘 어울리는 타입입니다.',
+    values: { proactivePatience: 3, responseDelayMin: 45, responseDelayMax: 600, messageGapMin: 3, messageGapMax: 9, responseTime: 3, thinkingTime: 9, reactivity: 6, tone: 7, frequencyMinutes: 75, initiative: 28, messageStyle: 'long' }
   }
 ] as const;
 
@@ -164,7 +204,6 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
       language: String(draft.language || 'inherit'),
       color: String(draft.color || '#8bd3dd'),
       messageStyle: validChoice(String(draft.messageStyle || 'balanced'), MESSAGE_STYLE_OPTIONS, 'balanced') as SNSGodCharacter['messageStyle'],
-      proactiveStyle: validChoice(String(draft.proactiveStyle || 'auto'), PROACTIVE_STYLE_OPTIONS, 'auto'),
       proactivePatience: clampNumber(draft.proactivePatience, 0, 8, 2),
       responseDelayMin: minDelay,
       responseDelayMax: Math.max(clampNumber(draft.responseDelayMax, 0, 2700, 8), minDelay),
@@ -218,7 +257,7 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
 
   function applyReplyPreset(preset: typeof REPLY_PRESETS[number]) {
     setDraft(prev => prev ? { ...prev, ...preset.values } : prev);
-    setInlineStatus(`${preset.title} 연락 유형을 적용했습니다. 필요하면 고급 설정에서 세부 수치를 바꿀 수 있습니다.`);
+    setInlineStatus(`${preset.title} 연락 유형을 적용했습니다. 필요하면 세부 타이밍 조절에서 직접 바꿀 수 있습니다.`);
   }
 
   async function chooseImage(key: 'avatar' | 'coverImage') {
@@ -422,34 +461,34 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
         ) : null}
 
         {activeSection === 'reply' ? (
-          <Section title="답장/능동 성향">
-            <Text style={styles.help}>캐릭터의 연락 습관을 먼저 고르고, 필요할 때만 고급 설정에서 직접 조정합니다.</Text>
+          <Section title="대화 성향">
+            <Text style={styles.help}>캐릭터의 연락 습관을 먼저 고르고, 필요할 때만 세부 타이밍 조절에서 직접 바꿉니다.</Text>
             <View style={styles.presetGrid}>
               {REPLY_PRESETS.map(preset => (
                 <Pressable key={preset.id} onPress={() => applyReplyPreset(preset)} style={styles.presetCard}>
                   <Text style={styles.presetTitle}>{preset.title}</Text>
-                  <Text style={styles.presetSummary}>{preset.summary}</Text>
+                  <Text style={styles.presetShort}>{preset.short}</Text>
+                  <Text style={styles.presetSummary}>{preset.detail}</Text>
                 </Pressable>
               ))}
             </View>
             <Pressable onPress={() => setReplyAdvancedOpen(open => !open)} style={styles.advancedToggle}>
-              <Text style={styles.advancedToggleText}>{replyAdvancedOpen ? '고급 설정 접기' : '고급 설정 펼치기'}</Text>
+              <Text style={styles.advancedToggleText}>{replyAdvancedOpen ? '세부 타이밍 조절 닫기' : '세부 타이밍 조절'}</Text>
               <Text style={styles.advancedToggleIcon}>{replyAdvancedOpen ? '⌃' : '⌄'}</Text>
             </Pressable>
             {replyAdvancedOpen ? (
               <View style={styles.advancedBody}>
-                <ChoiceRow label="선톡 문장 성격(프롬프트에 추가)" value={String(draft.proactiveStyle || 'auto')} options={PROACTIVE_STYLE_OPTIONS} onChange={value => set('proactiveStyle', value)} help="캐릭터가 먼저 말할 때 문장에 어떤 감정 결을 더할지 정합니다. 답장 속도나 선톡 빈도는 다른 설정과 프리셋 수치가 함께 결정합니다." />
-                <SliderField label="선톡 지속도(답 없을 때 얼마나 이어갈지)" value={draft.proactivePatience} min={0} max={8} leftLabel="0 금방 멈춤" rightLabel="8 오래 이어감" onChange={value => set('proactivePatience', value)} help="사용자가 답하지 않아도 캐릭터가 먼저 말을 몇 번 더 이어갈지 정합니다." />
-                <NumberField label="메시지 확인 최소 지연(이 전엔 절대 확인 안 함, 0초-2분)" value={draft.responseDelayMin} onChange={value => set('responseDelayMin', value)} help="캐릭터가 아무리 빨라도 메시지를 확인하기 전 반드시 기다리는 시간입니다. 0-120초." />
-                <NumberField label="메시지 확인 최대 지연(늦어도 이 안엔 확인, 최대 45분)" value={draft.responseDelayMax} onChange={value => set('responseDelayMax', value)} help="캐릭터가 늦게 확인하더라도 이 시간 안에는 확인하게 만드는 상한선입니다. 0-2700초." />
-                <NumberField label="연속 메시지 사이 최소 간격(초)" value={draft.messageGapMin} onChange={value => set('messageGapMin', value)} help="캐릭터가 여러 메시지를 나눠 보낼 때, 메시지와 메시지 사이의 가장 짧은 대기 시간입니다." />
-                <NumberField label="연속 메시지 사이 최대 간격(초)" value={draft.messageGapMax} onChange={value => set('messageGapMax', value)} help="캐릭터가 여러 메시지를 나눠 보낼 때, 메시지와 메시지 사이의 가장 긴 대기 시간입니다." />
-                <SliderField label="확인 속도(성향: 느긋함 ↔ 즉각 확인)" value={draft.responseTime} min={1} max={10} leftLabel="1 느림" rightLabel="10 즉각" onChange={value => set('responseTime', value)} />
-                <SliderField label="생각 깊이(즉흥 ↔ 숙고)" value={draft.thinkingTime} min={1} max={10} leftLabel="1 즉흥" rightLabel="10 깊게 생각" onChange={value => set('thinkingTime', value)} />
-                <SliderField label="반응 민감도(차분함 ↔ 바로 호응)" value={draft.reactivity} min={1} max={10} leftLabel="1 차분함" rightLabel="10 바로 호응" onChange={value => set('reactivity', value)} help="사용자 말에 감정 표현이나 리액션을 얼마나 크게 드러낼지 정합니다. 답장 시간은 위의 확인 지연 설정을 따릅니다." />
-                <SliderField label="말투 강도(담백 ↔ 강한 개성)" value={draft.tone} min={1} max={10} leftLabel="1 담백" rightLabel="10 강함" onChange={value => set('tone', value)} />
-                <NumberField label="선톡 간격(먼저 말할 기회 간격/분)" value={draft.frequencyMinutes} onChange={value => set('frequencyMinutes', value)} help="작을수록 캐릭터가 먼저 말을 걸지 확인하는 기회가 자주 옵니다." />
-                <SliderField label="선톡 확률(소극적 ↔ 자주 먼저 말함)" value={draft.initiative} min={0} max={100} step={5} leftLabel="0 안 함" rightLabel="100 자주" onChange={value => set('initiative', value)} />
+                <SliderField label="답 없을 때 이어 말하기" value={draft.proactivePatience} min={0} max={8} leftLabel="0 금방 멈춤" rightLabel="8 오래 이어감" onChange={value => set('proactivePatience', value)} help="사용자가 답하지 않아도 캐릭터가 먼저 말을 몇 번 더 이어갈지 정합니다." />
+                <NumberField label="가장 빨리 읽는 시간(초)" value={draft.responseDelayMin} onChange={value => set('responseDelayMin', value)} help="이 시간 전에는 캐릭터가 메시지를 확인하지 않습니다. 0-120초." />
+                <NumberField label="늦어도 읽는 시간(초)" value={draft.responseDelayMax} onChange={value => set('responseDelayMax', value)} help="캐릭터가 늦게 확인하더라도 이 시간 안에는 확인합니다. 0-2700초." />
+                <NumberField label="말풍선 최소 간격(초)" value={draft.messageGapMin} onChange={value => set('messageGapMin', value)} help="여러 메시지를 나눠 보낼 때 말풍선 사이의 가장 짧은 대기 시간입니다." />
+                <NumberField label="말풍선 최대 간격(초)" value={draft.messageGapMax} onChange={value => set('messageGapMax', value)} help="여러 메시지를 나눠 보낼 때 말풍선 사이의 가장 긴 대기 시간입니다." />
+                <SliderField label="읽는 속도" value={draft.responseTime} min={1} max={10} leftLabel="1 느림" rightLabel="10 빠름" onChange={value => set('responseTime', value)} />
+                <SliderField label="답변 고민 정도" value={draft.thinkingTime} min={1} max={10} leftLabel="1 즉흥" rightLabel="10 깊게 생각" onChange={value => set('thinkingTime', value)} />
+                <SliderField label="리액션 크기" value={draft.reactivity} min={1} max={10} leftLabel="1 차분함" rightLabel="10 크게 반응" onChange={value => set('reactivity', value)} help="사용자 말에 감정 표현이나 리액션을 얼마나 크게 드러낼지 정합니다." />
+                <SliderField label="캐릭터 말투 개성" value={draft.tone} min={1} max={10} leftLabel="1 담백" rightLabel="10 강한 개성" onChange={value => set('tone', value)} />
+                <NumberField label="먼저 말 걸 기회 간격(분)" value={draft.frequencyMinutes} onChange={value => set('frequencyMinutes', value)} help="작을수록 캐릭터가 먼저 말을 걸지 확인하는 기회가 자주 옵니다." />
+                <SliderField label="먼저 말 걸 확률" value={draft.initiative} min={0} max={100} step={5} leftLabel="0 안 함" rightLabel="100 자주" onChange={value => set('initiative', value)} />
               </View>
             ) : null}
           </Section>
@@ -590,7 +629,6 @@ function normalizeDraft(character: SNSGodCharacter): SNSGodCharacter {
     language: String(character.language || 'inherit'),
     color: String(character.color || '#8bd3dd'),
     messageStyle: character.messageStyle || 'balanced',
-    proactiveStyle: String(character.proactiveStyle || 'auto'),
     proactivePatience: Number(character.proactivePatience ?? 2),
     responseDelayMin: Number(character.responseDelayMin ?? 1),
     responseDelayMax: Number(character.responseDelayMax ?? 8),
@@ -887,9 +925,10 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: colors.accent, borderColor: '#b79427' },
   chipText: { color: colors.text, fontWeight: '900' },
   chipTextActive: { color: '#241a00' },
-  presetGrid: { gap: 8 },
-  presetCard: { borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', padding: 12, gap: 5 },
-  presetTitle: { color: colors.text, fontWeight: '900', fontSize: 15 },
+  presetGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  presetCard: { flexBasis: '48%', flexGrow: 1, minHeight: 126, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', padding: 10, gap: 5 },
+  presetTitle: { color: colors.text, fontWeight: '900', fontSize: 14 },
+  presetShort: { color: colors.text, fontSize: 12, fontWeight: '900', lineHeight: 17 },
   presetSummary: { color: colors.sub, fontSize: 12, lineHeight: 18 },
   advancedToggle: { minHeight: 42, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#eee8dc', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
   advancedToggleText: { color: colors.text, fontWeight: '900' },

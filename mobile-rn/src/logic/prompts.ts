@@ -173,23 +173,12 @@ export function proactiveInstruction(state: SNSGodState, character: SNSGodCharac
   const lastUserIndex = [...messages].map((message, index) => ({ message, index })).reverse().find(item => item.message.role === 'user')?.index ?? -1;
   const unanswered = messages.slice(lastUserIndex + 1).filter(message => message.role === 'character' && message.sourceMode === 'proactive').length;
   const patience = Math.max(0, Number(character.proactivePatience ?? 2));
-  const style = String(character.proactiveStyle || 'auto');
-  const styleLine = style === 'reserved'
-    ? 'Proactive style: reserved. Keep it short, indirect, and restrained. Do not repeat clingy concern.'
-    : style === 'steady'
-      ? 'Proactive style: steady. Lightly acknowledge silence if needed, then move to a practical or casual topic.'
-      : style === 'attached'
-        ? 'Proactive style: attached. Loneliness, missing the user, or asking for attention is allowed, but avoid repeating the same phrase.'
-        : style === 'obsessive'
-          ? 'Proactive style: obsessive. More persistent contact is allowed; silence may become anxiety, possessiveness, or intensity.'
-          : 'Proactive style: infer from character profile. Reserved characters should not over-send; obsessive characters may push harder.';
   return [
     'Write a spontaneous message that fits the current room. Do not mention automation.',
     `Unanswered proactive messages since the user's last reply: ${unanswered}. Character patience setting: ${patience}.`,
     'Do not repeat the same topic, wording, greeting, or emotional beat from recent proactive messages.',
     'Respect the current real-time context exactly. Never send a morning/good-morning/commute-start greeting during afternoon, evening, night, or late night unless the user explicitly said it is morning.',
     'For proactive messages, do not invent a completed external event unless it is extremely plausible for the current time and recent context. At early morning or late night, prefer small realistic states: waking up, getting ready, commuting, checking messages, remembering something, planning to go somewhere later, or asking about the user.',
-    styleLine,
     unanswered > patience ? 'The user has not answered beyond the patience setting. React in a way that fits the character instead of pretending nothing happened.' : ''
   ].filter(Boolean).join('\n');
 }

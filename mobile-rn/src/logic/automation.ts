@@ -34,7 +34,7 @@ function eligiblePrivateRooms(state: SNSGodState, firstMessageOnly: boolean): { 
       }
       const frequency = Math.max(1, Number(character.frequencyMinutes || 10));
       if (minutesSince(room.lastActivity || room.createdAt) < frequency) continue;
-      const chance = adjustedInitiative(state, character, room.id);
+      const chance = adjustedInitiative(character);
       if (Math.random() * 100 > chance) continue;
       pairs.push({ character, room });
     }
@@ -184,16 +184,8 @@ function unansweredProactiveCount(state: SNSGodState, roomId: string): number {
   return messages.slice(lastUserIndex + 1).filter(message => message.role === 'character' && message.sourceMode === 'proactive').length;
 }
 
-function adjustedInitiative(state: SNSGodState, character: SNSGodCharacter, roomId: string): number {
+function adjustedInitiative(character: SNSGodCharacter): number {
   const base = Math.max(0, Math.min(100, Number(character.initiative ?? 40)));
-  const unanswered = unansweredProactiveCount(state, roomId);
-  const patience = Math.max(0, Number(character.proactivePatience ?? 2));
-  const style = String(character.proactiveStyle || 'auto');
-  if (unanswered <= patience) return base;
-  if (style === 'reserved') return Math.max(0, base - unanswered * 18);
-  if (style === 'steady') return Math.max(0, base - unanswered * 8);
-  if (style === 'attached') return Math.min(100, base + unanswered * 6);
-  if (style === 'obsessive') return Math.min(100, base + unanswered * 12);
   return base;
 }
 

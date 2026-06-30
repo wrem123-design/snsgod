@@ -54,6 +54,51 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
   const dmThreads = (state.snsDmThreads || []).filter(thread => !selectedCharacterId || thread.characterId === selectedCharacterId);
 
   useEffect(() => {
+    const existingIds = new Set((state.snsDmThreads || []).map(thread => thread.id));
+    const missingThreads: SNSDmThread[] = [];
+    for (const post of state.snsPosts || []) {
+      (post.dms || []).forEach((dm, index) => {
+        const id = `postdmthread:${post.id}:${dm.id || index}`;
+        if (existingIds.has(id)) return;
+        missingThreads.push({
+          id,
+          postId: post.id,
+          platformIndex: 0,
+          characterId: post.characterId,
+          kind: 'thirdParty',
+          title: String(dm.title || 'SNS DM'),
+          context: `${post.platform === 'instagram' ? 'Instagram' : 'X'} post by ${post.displayName || 'Character'}: ${post.content}`,
+          participants: dm.participants,
+          messages: (dm.messages || []).map((message, messageIndex) => ({
+            id: String(message.id || `postdmmsg_${messageIndex}`),
+            from: message.from,
+            fromName: message.fromName,
+            body: message.body,
+            createdAt: Number(message.createdAt || post.createdAt || Date.now())
+          })),
+          createdAt: Number(post.createdAt || Date.now()),
+          updatedAt: Number(post.createdAt || Date.now()),
+          unread: Math.max(1, (dm.messages || []).length)
+        });
+      });
+    }
+    const validThreads = missingThreads.filter(thread => thread.messages.length);
+    if (validThreads.length) {
+      void onChange({ ...state, snsDmThreads: [...validThreads, ...(state.snsDmThreads || [])].slice(0, 120) });
+    }
+  }, [state.snsPosts, state.snsDmThreads]);
+
+  useEffect(() => {
+    if (!activeDmId || activeDmId.startsWith('postdm:')) return;
+    const thread = (state.snsDmThreads || []).find(item => item.id === activeDmId);
+    if (!thread?.unread) return;
+    void onChange({
+      ...state,
+      snsDmThreads: (state.snsDmThreads || []).map(item => item.id === activeDmId ? { ...item, unread: 0 } : item)
+    });
+  }, [activeDmId, state.snsDmThreads]);
+
+  useEffect(() => {
     if (selectedCharacterId && !availableCharacters.some(character => character.id === selectedCharacterId)) {
       setSelectedCharacterId('');
     }

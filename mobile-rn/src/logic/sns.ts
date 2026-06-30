@@ -6,7 +6,7 @@ import { MAX_SNS_CONTEXT_MESSAGES, MAX_SNS_DM_CONTEXT_MESSAGES } from './limits'
 import { lorePromptBlock, resolveActiveLore } from './loreEngine';
 import { pushNotification } from './notifications';
 import { DEFAULT_PROMPTS } from './prompts';
-import { SNSGodCharacter, SNSGodState, SNSPost } from '../types';
+import { SNSDmThread, SNSGodCharacter, SNSGodState, SNSPost } from '../types';
 
 type GeneratedPlatform = {
   platform?: string;
@@ -52,6 +52,7 @@ type GeneratedSns = {
 
 const autoPostingRooms = new Set<string>();
 const snsDmGeneratingThreads = new Set<string>();
+const MAX_SNS_POSTS = 120;
 
 async function logAutoSns(message: string, level: 'info' | 'warn' | 'error' = 'info') {
   await appendDebugLog('sns.auto', message, level);
@@ -366,6 +367,29 @@ function withSnsTokenBudget(state: SNSGodState, platform: SNSPost['platform']): 
   };
 }
 
+function postDmsToThreads(post: SNSPost, dms: NonNullable<SNSPost['dms']>, character: SNSGodCharacter): SNSDmThread[] {
+  return dms.map((thread, index) => ({
+    id: `postdmthread:${post.id}:${thread.id || index}`,
+    postId: post.id,
+    platformIndex: 0,
+    characterId: post.characterId,
+    kind: 'thirdParty' as const,
+    title: String(thread.title || 'SNS DM'),
+    context: `${post.platform === 'instagram' ? 'Instagram' : 'X'} post by ${post.displayName || character.name}: ${post.content}`,
+    participants: thread.participants,
+    messages: (thread.messages || []).map((message, messageIndex) => ({
+      id: String(message.id || `postdmmsg_${messageIndex}`),
+      from: message.from,
+      fromName: message.fromName,
+      body: message.body,
+      createdAt: Number(message.createdAt || Date.now())
+    })),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    unread: Math.max(1, (thread.messages || []).length)
+  })).filter(thread => thread.messages.length);
+}
+
 function snsNsfwInstruction(state: SNSGodState): string {
   const prompt = String(state.config.prompts?.snsNsfwBackAccount || DEFAULT_PROMPTS.snsNsfwBackAccount).trim();
   return prompt || DEFAULT_PROMPTS.snsNsfwBackAccount;
@@ -455,6 +479,7 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
   const posts = normalizeGeneratedPlatforms(parsed, platform, character).map(item => toPost(item, character, platform, commentCount));
   const postsWithImages = await applySnsImagePolicy(state, posts, character, options, dailyMicro ? { ...sns, autoImage: false } : sns, text);
   const postDms = sns.noDM ? [] : ensureThirdPartyDms(toPostDms(parsed), postsWithImages[0], character, sns);
+  const createdDmThreads = postDms.length && postsWithImages[0] ? postDmsToThreads(postsWithImages[0], postDms, character) : [];
   if (postDms.length && postsWithImages[0]) postsWithImages[0] = { ...postsWithImages[0], dms: postDms };
   const nextState: SNSGodState = {
     ...state,
@@ -465,7 +490,8 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
         [state.config.apiType]: { ...profile, apiKeyIndex: keyIndex }
       }
     },
-    snsPosts: [...postsWithImages, ...(state.snsPosts || [])].slice(0, 30),
+    snsPosts: [...postsWithImages, ...(state.snsPosts || [])].slice(0, MAX_SNS_POSTS),
+    snsDmThreads: [...createdDmThreads, ...(state.snsDmThreads || [])].slice(0, 120),
     characters: state.characters.map(item => item.id === character.id && options.roomId ? {
       ...item,
       lastSnsMessageCount: (state.messages[options.roomId] || []).length
@@ -485,7 +511,7 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
     const failedPost = toFailedPost(character, platform, error, options.roomId);
     return {
       ...state,
-      snsPosts: [failedPost, ...(state.snsPosts || [])].slice(0, 30)
+      snsPosts: [failedPost, ...(state.snsPosts || [])].slice(0, MAX_SNS_POSTS)
     };
   }
 }

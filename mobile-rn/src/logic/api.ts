@@ -396,13 +396,18 @@ function openAiInputForMessages(messages: ChatMessage[]): Record<string, unknown
   });
 }
 
-function chatCompletionMessages(messages: ChatMessage[]): { role: 'system' | 'user' | 'assistant'; content: string }[] {
-  return messages.map(message => ({
-    role: message.role,
-    content: message.imageData
-      ? `${message.content}\n\n[Attached image omitted: this custom chat-completions endpoint only receives text.]`
-      : message.content
-  }));
+function chatCompletionMessages(messages: ChatMessage[]): { role: 'system' | 'user' | 'assistant'; content: string | Record<string, unknown>[] }[] {
+  return messages.map(message => {
+    const role = message.role;
+    if (!message.imageData) return { role, content: message.content };
+    return {
+      role,
+      content: [
+        { type: 'text', text: message.content },
+        { type: 'image_url', image_url: { url: message.imageData } }
+      ]
+    };
+  });
 }
 
 function anthropicContentForMessage(message: ChatMessage): Record<string, unknown>[] {

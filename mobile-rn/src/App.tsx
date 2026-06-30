@@ -254,7 +254,8 @@ export default function App() {
       ).slice(0, 100),
       __randomFirstSent: { ...((latest.__randomFirstSent || {}) as Record<string, unknown>), ...((next.__randomFirstSent || {}) as Record<string, unknown>) },
       __calendarSent: { ...((latest.__calendarSent || {}) as Record<string, unknown>), ...((next.__calendarSent || {}) as Record<string, unknown>) },
-      __phoneInviteAt: { ...((latest.__phoneInviteAt || {}) as Record<string, unknown>), ...((next.__phoneInviteAt || {}) as Record<string, unknown>) }
+      __phoneInviteAt: { ...((latest.__phoneInviteAt || {}) as Record<string, unknown>), ...((next.__phoneInviteAt || {}) as Record<string, unknown>) },
+      __phoneGlobalInviteAt: next.__phoneGlobalInviteAt || latest.__phoneGlobalInviteAt
     };
   }
 

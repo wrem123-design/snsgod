@@ -17,6 +17,9 @@ function minutesSince(timestamp?: number): number {
   return (Date.now() - timestamp) / 60000;
 }
 
+const PHONE_INVITE_GLOBAL_COOLDOWN_MINUTES = 3 * 60;
+const PHONE_INVITE_CHARACTER_MIN_COOLDOWN_MINUTES = 6 * 60;
+
 function eligiblePrivateRooms(state: SNSGodState, firstMessageOnly: boolean): { character: SNSGodCharacter; room: SNSGodRoom }[] {
   if (state.config.autoEnabled === false) return [];
   if (firstMessageOnly && state.config.randomDmEnabled === false) return [];
@@ -143,13 +146,14 @@ async function runCalendarEvent(state: SNSGodState): Promise<SNSGodState | undef
 
 function runPhoneInvite(state: SNSGodState): SNSGodState | undefined {
   if (state.config.autoEnabled === false || state.config.characterPhoneCallEnabled === false) return undefined;
+  if (minutesSince(Number(state.__phoneGlobalInviteAt || 0)) < PHONE_INVITE_GLOBAL_COOLDOWN_MINUTES) return undefined;
   const sent = (state.__phoneInviteAt || {}) as Record<string, number>;
   const candidates = state.characters.filter(character => {
     if (character.randomTemporary === true || character.enabled === false || character.proactiveEnabled === false) return false;
     const rhythmCharacter = characterWithConversationRhythm(state, character);
-    const intervalMinutes = Math.max(60, Number(rhythmCharacter.frequencyMinutes || 10) * 6);
+    const intervalMinutes = Math.max(PHONE_INVITE_CHARACTER_MIN_COOLDOWN_MINUTES, Number(rhythmCharacter.frequencyMinutes || 10) * 12);
     if (minutesSince(sent[character.id]) < intervalMinutes) return false;
-    const chance = Math.max(0, Math.min(18, Number(rhythmCharacter.initiative ?? 40) / 6));
+    const chance = Math.max(0, Math.min(6, Number(rhythmCharacter.initiative ?? 40) / 18));
     return Math.random() * 100 <= chance;
   });
   if (!candidates.length) return undefined;
@@ -158,7 +162,8 @@ function runPhoneInvite(state: SNSGodState): SNSGodState | undefined {
   if (roomId && isRoomBusy(roomId)) return undefined;
   let next: SNSGodState = {
     ...state,
-    __phoneInviteAt: { ...sent, [character.id]: Date.now() }
+    __phoneInviteAt: { ...sent, [character.id]: Date.now() },
+    __phoneGlobalInviteAt: Date.now()
   };
   if (roomId) {
     next = appendMessage(next, roomId, {

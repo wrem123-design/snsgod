@@ -944,12 +944,13 @@ function PostCard({ platform, post, character, dmEnabled, onLike, onDelete, onCo
         </Pressable>
       </View>
       {failed ? (
-        <View style={[styles.snsFailureBody, platform === 'twitter' && styles.xSnsFailureBody]}>
+        <Pressable accessibilityLabel="SNS 재생성" onPress={onRetryFailed} style={[styles.snsFailureBody, platform === 'twitter' && styles.xSnsFailureBody]}>
           <Text style={[styles.snsFailureText, platform === 'twitter' && styles.xSnsFailureText]} numberOfLines={2}>SNS 생성 실패</Text>
-          <Pressable accessibilityLabel="SNS 재생성" onPress={onRetryFailed} style={styles.snsRetryButton}>
+          <View style={styles.snsRetryButton}>
             <Text style={styles.snsRetryButtonText}>!</Text>
-          </Pressable>
-        </View>
+          </View>
+          <Text style={[styles.snsFailureHint, platform === 'twitter' && styles.xSnsFailureText]}>눌러서 재생성</Text>
+        </Pressable>
       ) : null}
       {!failed && (platform === 'instagram' ? (
         <>
@@ -1109,6 +1110,7 @@ const styles = StyleSheet.create({
   snsFailureBody: { minHeight: 96, margin: 12, borderRadius: 8, backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#fed7aa', alignItems: 'center', justifyContent: 'center', position: 'relative', padding: 16 },
   xSnsFailureBody: { backgroundColor: '#111111', borderColor: '#2f3336' },
   snsFailureText: { color: '#9a3412', fontSize: 13, fontWeight: '900' },
+  snsFailureHint: { marginTop: 8, color: '#9a3412', fontSize: 11, fontWeight: '800' },
   xSnsFailureText: { color: '#c9d1d9' },
   snsRetryButton: { position: 'absolute', right: 8, bottom: 8, width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#22c55e', borderWidth: 2, borderColor: '#dcfce7' },
   snsRetryButtonText: { color: '#073d24', fontSize: 16, lineHeight: 18, fontWeight: '900' },

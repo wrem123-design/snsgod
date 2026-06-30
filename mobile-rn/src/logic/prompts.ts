@@ -22,6 +22,7 @@ export const DEFAULT_PROMPTS: PromptSet = {
   stickerRules: 'Use a sticker id only when it strengthens the reaction.',
   language: 'Write in natural Korean unless the user or settings request another language.',
   snsPosting: 'Write as {character.name} posting to a private social account. Return JSON with one short post and optional hashtags.',
+  snsNsfwBackAccount: 'This is an adult private back-account version. Mature/NSFW tone is allowed only when it fits the adult fictional character and context.',
   profileCreation: 'Create a Korean fictional chat character who would naturally start a conversation with this user. Return JSON: {"name":"...","prompt":"...","firstMessage":"..."}'
 };
 

@@ -13,6 +13,7 @@ const FIELDS: Array<{ key: keyof PromptSet; label: string }> = [
   { key: 'stickerRules', label: '스티커 사용' },
   { key: 'language', label: '언어' },
   { key: 'snsPosting', label: 'SNS 게시' },
+  { key: 'snsNsfwBackAccount', label: 'SNS NSFW 뒷계' },
   { key: 'profileCreation', label: '캐릭터 생성' }
 ];
 

@@ -41,88 +41,88 @@ const MESSAGE_STYLE_OPTIONS = [
 
 const REPLY_PRESETS = [
   {
-    id: 'quick_friend',
+    id: 'quick_responder',
     title: '칼답 친구',
-    short: '바로 보고 바로 답해요',
-    detail: '확인이 빠르고 답장도 가볍게 이어갑니다. 부담 없는 친구 느낌입니다.',
-    values: { proactivePatience: 2, responseDelayMin: 0, responseDelayMax: 8, messageGapMin: 1, messageGapMax: 3, responseTime: 9, thinkingTime: 3, reactivity: 7, tone: 5, frequencyMinutes: 18, initiative: 45, messageStyle: 'balanced' }
+    catchphrase: '읽씹이 뭐예요?',
+    detail: '받으면 거의 바로 답해요.',
+    values: { proactivePatience: 2, responseDelayMin: 0, responseDelayMax: 25, messageGapMin: 1, messageGapMax: 3, responseTime: 9, thinkingTime: 3, reactivity: 7, tone: 5, frequencyMinutes: 45, initiative: 30, messageStyle: 'balanced' }
   },
   {
-    id: 'chatty_friend',
+    id: 'chatty_burster',
     title: '수다쟁이 친구',
-    short: '짧게 여러 번 보내요',
-    detail: '리액션이 크고 말을 여러 번 나눠 보내는 활발한 타입입니다.',
-    values: { proactivePatience: 4, responseDelayMin: 0, responseDelayMax: 30, messageGapMin: 1, messageGapMax: 2, responseTime: 8, thinkingTime: 3, reactivity: 9, tone: 7, frequencyMinutes: 12, initiative: 65, messageStyle: 'burst' }
+    catchphrase: '한 마디를 다섯 마디로.',
+    detail: '짧게 톡톡 여러 번 보내요.',
+    values: { proactivePatience: 4, responseDelayMin: 0, responseDelayMax: 40, messageGapMin: 1, messageGapMax: 2, responseTime: 8, thinkingTime: 3, reactivity: 9, tone: 7, frequencyMinutes: 30, initiative: 55, messageStyle: 'burst' }
   },
   {
-    id: 'cute_reactive',
+    id: 'reaction_rich',
     title: '애교 많은 타입',
-    short: '귀엽고 반응이 커요',
-    detail: '감정 표현과 리액션이 많고, 가볍게 먼저 말을 자주 겁니다.',
-    values: { proactivePatience: 5, responseDelayMin: 0, responseDelayMax: 45, messageGapMin: 1, messageGapMax: 3, responseTime: 8, thinkingTime: 3, reactivity: 9, tone: 8, frequencyMinutes: 15, initiative: 70, messageStyle: 'burst' }
+    catchphrase: '이모티콘 없인 대화 못 해요.',
+    detail: '귀엽고 감정 표현이 커요.',
+    values: { proactivePatience: 5, responseDelayMin: 3, responseDelayMax: 50, messageGapMin: 1, messageGapMax: 3, responseTime: 8, thinkingTime: 3, reactivity: 10, tone: 8, frequencyMinutes: 35, initiative: 60, messageStyle: 'balanced' }
   },
   {
-    id: 'sweet_partner',
+    id: 'steady_partner',
     title: '다정한 연인',
-    short: '부드럽고 자주 표현해요',
-    detail: '애정 표현이 자연스럽고 선톡도 자주 오는 연인 느낌입니다.',
-    values: { proactivePatience: 4, responseDelayMin: 3, responseDelayMax: 60, messageGapMin: 1, messageGapMax: 4, responseTime: 7, thinkingTime: 5, reactivity: 7, tone: 6, frequencyMinutes: 20, initiative: 58, messageStyle: 'balanced' }
+    catchphrase: '오늘 하루 어땠어, 챙기는 사람.',
+    detail: '부드럽고 안정적으로 챙겨요.',
+    values: { proactivePatience: 2, responseDelayMin: 5, responseDelayMax: 90, messageGapMin: 1, messageGapMax: 4, responseTime: 7, thinkingTime: 5, reactivity: 7, tone: 7, frequencyMinutes: 50, initiative: 45, messageStyle: 'balanced' }
   },
   {
-    id: 'cool_type',
+    id: 'cool_direct',
     title: '쿨한 사람',
-    short: '빠르지만 담백해요',
-    detail: '확인은 빠르지만 감정 표현은 과하지 않고 필요한 말을 깔끔하게 합니다.',
-    values: { proactivePatience: 1, responseDelayMin: 2, responseDelayMax: 60, messageGapMin: 1, messageGapMax: 3, responseTime: 8, thinkingTime: 4, reactivity: 3, tone: 4, frequencyMinutes: 50, initiative: 22, messageStyle: 'balanced' }
+    catchphrase: '용건만 간단히.',
+    detail: '빠르지만 담백해요.',
+    values: { proactivePatience: 1, responseDelayMin: 5, responseDelayMax: 120, messageGapMin: 1, messageGapMax: 3, responseTime: 7, thinkingTime: 4, reactivity: 3, tone: 4, frequencyMinutes: 90, initiative: 15, messageStyle: 'balanced' }
   },
   {
-    id: 'attached_type',
+    id: 'anxious_attached',
     title: '조금 집착하는 타입',
-    short: '답이 없어도 몇 번 더 말해요',
-    detail: '관심이 많고 답이 없으면 불안한 듯 몇 번 더 말을 걸 수 있습니다.',
-    values: { proactivePatience: 6, responseDelayMin: 0, responseDelayMax: 90, messageGapMin: 1, messageGapMax: 4, responseTime: 7, thinkingTime: 5, reactivity: 8, tone: 7, frequencyMinutes: 10, initiative: 75, messageStyle: 'balanced' }
+    catchphrase: '읽씹하면 3개 더 와요.',
+    detail: '답이 없으면 몇 번 더 말해요.',
+    values: { proactivePatience: 7, responseDelayMin: 0, responseDelayMax: 90, messageGapMin: 1, messageGapMax: 4, responseTime: 8, thinkingTime: 5, reactivity: 8, tone: 7, frequencyMinutes: 20, initiative: 70, messageStyle: 'balanced' }
   },
   {
     id: 'dry_caring',
     title: '무심한데 챙김',
-    short: '담백하지만 은근히 챙겨요',
-    detail: '표현은 적지만 필요한 순간에는 먼저 말을 거는 타입입니다.',
-    values: { proactivePatience: 2, responseDelayMin: 15, responseDelayMax: 180, messageGapMin: 1, messageGapMax: 4, responseTime: 5, thinkingTime: 5, reactivity: 4, tone: 3, frequencyMinutes: 35, initiative: 32, messageStyle: 'balanced' }
+    catchphrase: '말은 없어도 챙길 건 챙겨요.',
+    detail: '담백하지만 은근히 챙겨요.',
+    values: { proactivePatience: 2, responseDelayMin: 20, responseDelayMax: 240, messageGapMin: 2, messageGapMax: 5, responseTime: 5, thinkingTime: 5, reactivity: 4, tone: 4, frequencyMinutes: 90, initiative: 25, messageStyle: 'balanced' }
   },
   {
-    id: 'slow_friend',
+    id: 'easygoing_friend',
     title: '느긋한 친구',
-    short: '천천히 봐도 자연스러워요',
-    detail: '답장은 늦을 수 있지만 편안하고 여유롭게 대화를 이어갑니다.',
-    values: { proactivePatience: 1, responseDelayMin: 20, responseDelayMax: 240, messageGapMin: 2, messageGapMax: 6, responseTime: 3, thinkingTime: 5, reactivity: 4, tone: 4, frequencyMinutes: 60, initiative: 18, messageStyle: 'balanced' }
+    catchphrase: '아 미안, 폰 보고 있었어.',
+    detail: '천천히 봐도 자연스러워요.',
+    values: { proactivePatience: 1, responseDelayMin: 60, responseDelayMax: 420, messageGapMin: 2, messageGapMax: 6, responseTime: 3, thinkingTime: 5, reactivity: 4, tone: 4, frequencyMinutes: 120, initiative: 15, messageStyle: 'balanced' }
   },
   {
-    id: 'careful_type',
+    id: 'thoughtful_listener',
     title: '조심스러운 사람',
-    short: '생각하고 천천히 답해요',
-    detail: '먼저 연락은 적지만 답변은 신중하고 깊게 하는 타입입니다.',
-    values: { proactivePatience: 1, responseDelayMin: 30, responseDelayMax: 420, messageGapMin: 3, messageGapMax: 8, responseTime: 3, thinkingTime: 8, reactivity: 3, tone: 4, frequencyMinutes: 90, initiative: 12, messageStyle: 'long' }
+    catchphrase: '한 줄도 세 번 고쳐 써요.',
+    detail: '천천히 듣고 깊게 답해요.',
+    values: { proactivePatience: 1, responseDelayMin: 120, responseDelayMax: 600, messageGapMin: 3, messageGapMax: 8, responseTime: 3, thinkingTime: 9, reactivity: 4, tone: 5, frequencyMinutes: 180, initiative: 10, messageStyle: 'long' }
   },
   {
     id: 'late_night_mood',
     title: '새벽 감성 타입',
-    short: '느리지만 깊게 말해요',
-    detail: '천천히 답하지만 감정선이 깊고 밤 대화에 잘 어울리는 타입입니다.',
-    values: { proactivePatience: 3, responseDelayMin: 45, responseDelayMax: 600, messageGapMin: 3, messageGapMax: 9, responseTime: 3, thinkingTime: 9, reactivity: 6, tone: 7, frequencyMinutes: 75, initiative: 28, messageStyle: 'long' }
+    catchphrase: '낮엔 잠잠, 밤엔 철학자.',
+    detail: '밤에는 말이 깊어져요.',
+    values: { proactivePatience: 3, responseDelayMin: 180, responseDelayMax: 900, messageGapMin: 3, messageGapMax: 9, responseTime: 3, thinkingTime: 9, reactivity: 6, tone: 8, frequencyMinutes: 150, initiative: 18, messageStyle: 'long' }
   },
   {
-    id: 'busy_friend',
+    id: 'busy_real_life',
     title: '바쁜 현실친구',
-    short: '일정 때문에 자주 늦어요',
-    detail: '스케줄이 있는 사람처럼 확인과 답장이 늦습니다. 대신 현실감이 좋습니다.',
-    values: { proactivePatience: 1, responseDelayMin: 60, responseDelayMax: 900, messageGapMin: 2, messageGapMax: 8, responseTime: 2, thinkingTime: 5, reactivity: 5, tone: 5, frequencyMinutes: 120, initiative: 10, messageStyle: 'balanced' }
+    catchphrase: '지금 회의 중, 이따 답장할게.',
+    detail: '바빠서 답장이 늦어요.',
+    values: { proactivePatience: 1, responseDelayMin: 180, responseDelayMax: 1800, messageGapMin: 3, messageGapMax: 10, responseTime: 2, thinkingTime: 5, reactivity: 5, tone: 5, frequencyMinutes: 240, initiative: 8, messageStyle: 'balanced' }
   },
   {
     id: 'public_figure',
     title: '아이돌/공인 느낌',
-    short: '바빠서 자주 늦어요',
-    detail: '스케줄이 있는 사람처럼 답장이 늦고, 말투가 조심스럽고 정제되어 있습니다.',
-    values: { proactivePatience: 1, responseDelayMin: 120, responseDelayMax: 1800, messageGapMin: 3, messageGapMax: 10, responseTime: 2, thinkingTime: 6, reactivity: 4, tone: 5, frequencyMinutes: 180, initiative: 8, messageStyle: 'balanced' }
+    catchphrase: '스케줄 끝나고 연락할게요.',
+    detail: '답장은 늦고 말투는 조심스러워요.',
+    values: { proactivePatience: 1, responseDelayMin: 300, responseDelayMax: 2700, messageGapMin: 3, messageGapMax: 10, responseTime: 2, thinkingTime: 6, reactivity: 4, tone: 6, frequencyMinutes: 360, initiative: 5, messageStyle: 'balanced' }
   }
 ] as const;
 
@@ -469,7 +469,7 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
                 return (
                   <Pressable key={preset.id} onPress={() => applyReplyPreset(preset)} style={[styles.presetCard, selected && styles.presetCardSelected]}>
                     <Text style={[styles.presetTitle, selected && styles.presetTitleSelected]}>{preset.title}</Text>
-                    <Text style={[styles.presetShort, selected && styles.presetShortSelected]}>{preset.short}</Text>
+                    <Text style={[styles.presetCatchphrase, selected && styles.presetCatchphraseSelected]}>{preset.catchphrase}</Text>
                     <Text style={[styles.presetSummary, selected && styles.presetSummarySelected]}>{preset.detail}</Text>
                   </Pressable>
                 );
@@ -937,12 +937,12 @@ const styles = StyleSheet.create({
   chipText: { color: colors.text, fontWeight: '900' },
   chipTextActive: { color: '#241a00' },
   presetGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  presetCard: { flexBasis: '48%', flexGrow: 1, minHeight: 126, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', padding: 10, gap: 5 },
+  presetCard: { flexBasis: '48%', flexGrow: 1, minHeight: 118, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', padding: 10, gap: 5 },
   presetCardSelected: { backgroundColor: '#fff1bf', borderColor: '#b79427' },
   presetTitle: { color: colors.text, fontWeight: '900', fontSize: 14 },
   presetTitleSelected: { color: '#241a00' },
-  presetShort: { color: colors.text, fontSize: 12, fontWeight: '900', lineHeight: 17 },
-  presetShortSelected: { color: '#3b2b00' },
+  presetCatchphrase: { color: '#9a5a00', fontSize: 12, fontWeight: '900', lineHeight: 17 },
+  presetCatchphraseSelected: { color: '#7a4300' },
   presetSummary: { color: colors.sub, fontSize: 12, lineHeight: 18 },
   presetSummarySelected: { color: '#5e4d16' },
   advancedToggle: { minHeight: 42, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#eee8dc', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },

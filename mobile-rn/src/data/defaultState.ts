@@ -47,7 +47,10 @@ export function createDefaultState(): SNSGodState {
       randomDmEnabled: true,
       snsAutoPostEnabled: true,
       characterPhoneCallEnabled: true,
+      characterPhoneCallRarityLevel: 0,
       characterPhoneCallChancePercent: 33,
+      characterPhoneCallMinCooldownMinutes: 360,
+      characterPhoneCallGlobalCooldownMinutes: 180,
       characterPhoneCallMinCooldownHours: 6,
       characterPhoneCallGlobalCooldownHours: 3
       ,

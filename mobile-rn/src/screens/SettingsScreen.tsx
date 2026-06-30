@@ -76,6 +76,25 @@ function snsPlatformOptions(config: SNSGodState['config']['sns'] | undefined, pl
   };
 }
 
+function phoneRarityFromChancePercent(value: unknown): number {
+  const numeric = Number(value);
+  const chance = Math.max(0, Math.min(33, Number.isFinite(numeric) ? numeric : 33));
+  return Math.max(0, Math.min(10, Math.round((33 - chance) / 3)));
+}
+
+function phoneChancePercentFromRarity(value: unknown): number {
+  const rarity = Math.max(0, Math.min(10, Math.round(Number(value) || 0)));
+  return Math.round(3 + ((10 - rarity) / 10) * 30);
+}
+
+function phoneCooldownMinutes(value: unknown, fallbackMinutes: number, legacyHours?: unknown): number {
+  const minutes = Number(value);
+  if (Number.isFinite(minutes)) return Math.max(0, Math.min(10080, Math.round(minutes)));
+  const hours = Number(legacyHours);
+  if (Number.isFinite(hours)) return Math.max(0, Math.min(10080, Math.round(hours * 60)));
+  return fallbackMinutes;
+}
+
 const EVENT_PRESETS = [
   { title: "나's birthday", date: '1985-02-08', type: '유저 생일', prompt: "Event type: the user's birthday. The celebrant is 나. Write as the character directly to 나 in a private DM." },
   { title: '연인 기념일', date: 'MM-DD', type: '연인', prompt: 'Event type: relationship anniversary. The character remembers it naturally and may contact the user first.' },
@@ -178,9 +197,9 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   const [randomDmEnabled, setRandomDmEnabled] = useState(state.config.randomDmEnabled !== false);
   const [snsAutoPostEnabled, setSnsAutoPostEnabled] = useState(state.config.snsAutoPostEnabled !== false);
   const [characterPhoneCallEnabled, setCharacterPhoneCallEnabled] = useState(state.config.characterPhoneCallEnabled !== false);
-  const [characterPhoneCallChancePercent, setCharacterPhoneCallChancePercent] = useState(String(state.config.characterPhoneCallChancePercent ?? 33));
-  const [characterPhoneCallMinCooldownHours, setCharacterPhoneCallMinCooldownHours] = useState(String(state.config.characterPhoneCallMinCooldownHours ?? 6));
-  const [characterPhoneCallGlobalCooldownHours, setCharacterPhoneCallGlobalCooldownHours] = useState(String(state.config.characterPhoneCallGlobalCooldownHours ?? 3));
+  const [characterPhoneCallRarityLevel, setCharacterPhoneCallRarityLevel] = useState(Number(state.config.characterPhoneCallRarityLevel ?? phoneRarityFromChancePercent(state.config.characterPhoneCallChancePercent)));
+  const [characterPhoneCallMinCooldownMinutes, setCharacterPhoneCallMinCooldownMinutes] = useState(String(phoneCooldownMinutes(state.config.characterPhoneCallMinCooldownMinutes, 360, state.config.characterPhoneCallMinCooldownHours)));
+  const [characterPhoneCallGlobalCooldownMinutes, setCharacterPhoneCallGlobalCooldownMinutes] = useState(String(phoneCooldownMinutes(state.config.characterPhoneCallGlobalCooldownMinutes, 180, state.config.characterPhoneCallGlobalCooldownHours)));
   const imageConfig = state.config.imageGeneration || {};
   const snsConfig = state.config.sns || {};
   const [imageEnabled, setImageEnabled] = useState(imageConfig.enabled === true);
@@ -461,9 +480,12 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   async function saveAutomation() {
     if (saving) return;
     setSaving(true);
-    const phoneChance = Number(characterPhoneCallChancePercent);
-    const phoneCharacterCooldown = Number(characterPhoneCallMinCooldownHours);
-    const phoneGlobalCooldown = Number(characterPhoneCallGlobalCooldownHours);
+    const phoneRarity = Math.max(0, Math.min(10, Math.round(Number(characterPhoneCallRarityLevel) || 0)));
+    const phoneChance = phoneChancePercentFromRarity(phoneRarity);
+    const phoneCharacterCooldown = Number(characterPhoneCallMinCooldownMinutes);
+    const phoneGlobalCooldown = Number(characterPhoneCallGlobalCooldownMinutes);
+    const phoneCharacterCooldownMinutes = Math.max(1, Math.min(10080, Math.round(Number.isFinite(phoneCharacterCooldown) ? phoneCharacterCooldown : 360)));
+    const phoneGlobalCooldownMinutes = Math.max(0, Math.min(10080, Math.round(Number.isFinite(phoneGlobalCooldown) ? phoneGlobalCooldown : 180)));
     try {
       await onChange({
         ...state,
@@ -475,9 +497,12 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           randomDmEnabled,
           snsAutoPostEnabled,
           characterPhoneCallEnabled,
-          characterPhoneCallChancePercent: Math.max(0, Math.min(33, Math.round(Number.isFinite(phoneChance) ? phoneChance : 33))),
-          characterPhoneCallMinCooldownHours: Math.max(1, Math.min(168, Number.isFinite(phoneCharacterCooldown) ? phoneCharacterCooldown : 6)),
-          characterPhoneCallGlobalCooldownHours: Math.max(0, Math.min(72, Number.isFinite(phoneGlobalCooldown) ? phoneGlobalCooldown : 3)),
+          characterPhoneCallRarityLevel: phoneRarity,
+          characterPhoneCallChancePercent: phoneChance,
+          characterPhoneCallMinCooldownMinutes: phoneCharacterCooldownMinutes,
+          characterPhoneCallGlobalCooldownMinutes: phoneGlobalCooldownMinutes,
+          characterPhoneCallMinCooldownHours: phoneCharacterCooldownMinutes / 60,
+          characterPhoneCallGlobalCooldownHours: phoneGlobalCooldownMinutes / 60,
           snsAutoChance: Math.max(0, Math.min(100, Math.round(Number(snsAutoChance) || 0))),
           snsStartCount: Math.max(1, Math.round(Number(snsStartCount) || 6))
         }
@@ -1245,21 +1270,26 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           <SwitchLine label="캐릭터 먼저 전화" value={characterPhoneCallEnabled} onChange={setCharacterPhoneCallEnabled} />
           <Text style={styles.help}>캐릭터 먼저 전화: 캐릭터 주도성과 빈도 조건에 따라 드물게 전화 카드 알림을 만듭니다.</Text>
           {characterPhoneCallEnabled ? (
-            <View style={styles.twoCols}>
-              <View style={styles.col}>
-                <Text style={styles.label}>자동 전화 자주 오기(%)</Text>
-                <TextInput value={characterPhoneCallChancePercent} onChangeText={setCharacterPhoneCallChancePercent} style={styles.input} keyboardType="number-pad" />
-                <Text style={styles.help}>0-33%. 숫자를 높이면 전화가 더 자주 오고, 낮추면 덜 옵니다.</Text>
-              </View>
-              <View style={styles.col}>
-                <Text style={styles.label}>같은 캐릭터 전화 간격(시간)</Text>
-                <TextInput value={characterPhoneCallMinCooldownHours} onChangeText={setCharacterPhoneCallMinCooldownHours} style={styles.input} keyboardType="number-pad" />
-                <Text style={styles.help}>숫자를 높이면 같은 캐릭터가 더 늦게 다시 전화합니다.</Text>
-              </View>
-              <View style={styles.col}>
-                <Text style={styles.label}>전체 자동 전화 간격(시간)</Text>
-                <TextInput value={characterPhoneCallGlobalCooldownHours} onChangeText={setCharacterPhoneCallGlobalCooldownHours} style={styles.input} keyboardType="number-pad" />
-                <Text style={styles.help}>숫자를 높이면 모든 캐릭터의 자동 전화가 덜 자주 옵니다.</Text>
+            <View style={styles.subPanel}>
+              <Text style={styles.label}>자동 전화 빈도</Text>
+              <NumberScale
+                value={characterPhoneCallRarityLevel}
+                onChange={setCharacterPhoneCallRarityLevel}
+                minLabel="0 자주"
+                maxLabel="10 아주 가끔"
+              />
+              <Text style={styles.help}>0에 가까울수록 전화가 더 자주 오고, 10에 가까울수록 아주 가끔 옵니다. 현재 단계의 내부 강도는 약 {phoneChancePercentFromRarity(characterPhoneCallRarityLevel)}%입니다.</Text>
+              <View style={styles.twoCols}>
+                <View style={styles.col}>
+                  <Text style={styles.label}>같은 캐릭터 전화 간격(분)</Text>
+                  <TextInput value={characterPhoneCallMinCooldownMinutes} onChangeText={setCharacterPhoneCallMinCooldownMinutes} style={styles.input} keyboardType="number-pad" />
+                  <Text style={styles.help}>숫자를 높이면 같은 캐릭터가 더 늦게 다시 전화합니다.</Text>
+                </View>
+                <View style={styles.col}>
+                  <Text style={styles.label}>전체 자동 전화 간격(분)</Text>
+                  <TextInput value={characterPhoneCallGlobalCooldownMinutes} onChangeText={setCharacterPhoneCallGlobalCooldownMinutes} style={styles.input} keyboardType="number-pad" />
+                  <Text style={styles.help}>숫자를 높이면 모든 캐릭터의 자동 전화가 덜 자주 옵니다.</Text>
+                </View>
               </View>
             </View>
           ) : null}
@@ -1296,6 +1326,25 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           <Pressable onPress={onOpenLorebook} style={styles.secondary}><Text style={styles.secondaryText}>로어북 관리</Text></Pressable>
         </View>
       </ScrollView>
+    </View>
+  );
+}
+
+function NumberScale({ value, onChange, minLabel, maxLabel }: { value: number; onChange: (value: number) => void; minLabel: string; maxLabel: string }) {
+  const current = Math.max(0, Math.min(10, Math.round(Number(value) || 0)));
+  return (
+    <View style={styles.scaleWrap}>
+      <View style={styles.scaleLabelRow}>
+        <Text style={styles.scaleEdgeLabel}>{minLabel}</Text>
+        <Text style={styles.scaleEdgeLabel}>{maxLabel}</Text>
+      </View>
+      <View style={styles.scaleRow}>
+        {Array.from({ length: 11 }, (_, index) => (
+          <Pressable key={index} onPress={() => onChange(index)} style={[styles.scaleStep, current === index && styles.scaleStepActive]}>
+            <Text style={[styles.scaleStepText, current === index && styles.scaleStepTextActive]}>{index}</Text>
+          </Pressable>
+        ))}
+      </View>
     </View>
   );
 }
@@ -1338,6 +1387,14 @@ const styles = StyleSheet.create({
   segmentActive: { backgroundColor: colors.accent, borderColor: '#b89117' },
   segmentText: { color: colors.sub, fontWeight: '900' },
   segmentTextActive: { color: '#241a00' },
+  scaleWrap: { gap: 8 },
+  scaleLabelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  scaleEdgeLabel: { color: colors.sub, fontSize: 12, fontWeight: '900' },
+  scaleRow: { flexDirection: 'row', gap: 4 },
+  scaleStep: { flex: 1, minWidth: 0, height: 34, borderRadius: 7, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
+  scaleStepActive: { backgroundColor: colors.accent, borderColor: '#b89117' },
+  scaleStepText: { color: colors.sub, fontSize: 12, fontWeight: '900' },
+  scaleStepTextActive: { color: '#241a00' },
   presetRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
   presetButton: { minHeight: 34, paddingHorizontal: 10, borderRadius: 17, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', justifyContent: 'center' },
   presetText: { color: colors.text, fontWeight: '800', fontSize: 12 },

@@ -74,7 +74,10 @@ export type SNSGodConfig = {
   randomDmEnabled?: boolean;
   snsAutoPostEnabled?: boolean;
   characterPhoneCallEnabled?: boolean;
+  characterPhoneCallRarityLevel?: number;
   characterPhoneCallChancePercent?: number;
+  characterPhoneCallMinCooldownMinutes?: number;
+  characterPhoneCallGlobalCooldownMinutes?: number;
   characterPhoneCallMinCooldownHours?: number;
   characterPhoneCallGlobalCooldownHours?: number;
   imageGeneration?: ImageGenerationConfig;

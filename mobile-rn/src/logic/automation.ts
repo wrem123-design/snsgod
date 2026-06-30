@@ -17,23 +17,42 @@ function minutesSince(timestamp?: number): number {
   return (Date.now() - timestamp) / 60000;
 }
 
+const DEFAULT_PHONE_INVITE_RARITY_LEVEL = 0;
 const DEFAULT_PHONE_INVITE_CHANCE_PERCENT = 33;
-const DEFAULT_PHONE_INVITE_GLOBAL_COOLDOWN_HOURS = 3;
-const DEFAULT_PHONE_INVITE_CHARACTER_MIN_COOLDOWN_HOURS = 6;
+const DEFAULT_PHONE_INVITE_GLOBAL_COOLDOWN_MINUTES = 180;
+const DEFAULT_PHONE_INVITE_CHARACTER_MIN_COOLDOWN_MINUTES = 360;
+
+function phoneInviteChanceFromRarity(level: number): number {
+  const rarity = Math.max(0, Math.min(10, Math.round(Number.isFinite(level) ? level : DEFAULT_PHONE_INVITE_RARITY_LEVEL)));
+  return Math.round(3 + ((10 - rarity) / 10) * 30);
+}
 
 function phoneInviteChancePercent(state: SNSGodState): number {
+  if (state.config.characterPhoneCallRarityLevel !== undefined) {
+    return phoneInviteChanceFromRarity(Number(state.config.characterPhoneCallRarityLevel));
+  }
   const value = Number(state.config.characterPhoneCallChancePercent ?? DEFAULT_PHONE_INVITE_CHANCE_PERCENT);
   return Math.max(0, Math.min(33, Number.isFinite(value) ? value : DEFAULT_PHONE_INVITE_CHANCE_PERCENT));
 }
 
 function phoneInviteGlobalCooldownMinutes(state: SNSGodState): number {
-  const value = Number(state.config.characterPhoneCallGlobalCooldownHours ?? DEFAULT_PHONE_INVITE_GLOBAL_COOLDOWN_HOURS);
-  return Math.max(0, Math.min(72, Number.isFinite(value) ? value : DEFAULT_PHONE_INVITE_GLOBAL_COOLDOWN_HOURS)) * 60;
+  const minutes = state.config.characterPhoneCallGlobalCooldownMinutes;
+  if (minutes !== undefined) {
+    const value = Number(minutes);
+    return Math.max(0, Math.min(10080, Number.isFinite(value) ? value : DEFAULT_PHONE_INVITE_GLOBAL_COOLDOWN_MINUTES));
+  }
+  const hours = Number(state.config.characterPhoneCallGlobalCooldownHours);
+  return Math.max(0, Math.min(10080, Number.isFinite(hours) ? hours * 60 : DEFAULT_PHONE_INVITE_GLOBAL_COOLDOWN_MINUTES));
 }
 
 function phoneInviteCharacterCooldownMinutes(state: SNSGodState): number {
-  const value = Number(state.config.characterPhoneCallMinCooldownHours ?? DEFAULT_PHONE_INVITE_CHARACTER_MIN_COOLDOWN_HOURS);
-  return Math.max(1, Math.min(168, Number.isFinite(value) ? value : DEFAULT_PHONE_INVITE_CHARACTER_MIN_COOLDOWN_HOURS)) * 60;
+  const minutes = state.config.characterPhoneCallMinCooldownMinutes;
+  if (minutes !== undefined) {
+    const value = Number(minutes);
+    return Math.max(1, Math.min(10080, Number.isFinite(value) ? value : DEFAULT_PHONE_INVITE_CHARACTER_MIN_COOLDOWN_MINUTES));
+  }
+  const hours = Number(state.config.characterPhoneCallMinCooldownHours);
+  return Math.max(1, Math.min(10080, Number.isFinite(hours) ? hours * 60 : DEFAULT_PHONE_INVITE_CHARACTER_MIN_COOLDOWN_MINUTES));
 }
 
 function eligiblePrivateRooms(state: SNSGodState, firstMessageOnly: boolean): { character: SNSGodCharacter; room: SNSGodRoom }[] {

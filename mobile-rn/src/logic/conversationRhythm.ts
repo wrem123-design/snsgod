@@ -137,30 +137,33 @@ export function characterWithConversationRhythm(state: SNSGodState | undefined, 
 export function conversationRhythmInstruction(state: SNSGodState, character: SNSGodCharacter): string {
   const rhythm = activeConversationRhythm(state, character);
   const tone = String(character.uniqueBehavior?.proactiveTone || '');
+  const toneLine = tone ? contactPatternToneInstruction(tone) : '';
   const lines = [
+    '## Contact Pattern / 연락 패턴',
+    'Apply this only to how the character checks, replies, and initiates messages. Do not rewrite the character personality, relationship, values, or core speech style from the profile.',
+    toneLine ? `Contact habit: ${toneLine}` : '',
     rhythm.activeLabels.length
-      ? `Current contact rhythm: ${rhythm.snapshot.label}, active rhythm = ${rhythm.activeLabels.join(', ')}. Let availability feel natural, but do not over-explain it.`
-      : `Current contact rhythm: ${rhythm.snapshot.label}, no special rhythm modifier is active.`,
-    'Do not invent completed activities that are unrealistic for the current time and rhythm. If this is a quiet or busy period, prefer waiting, commuting, resting, checking messages late, preparing, or planning instead of claiming completed outings.',
-    tone ? proactiveToneInstruction(tone) : ''
+      ? `Current rhythm: ${rhythm.snapshot.label}; active modifiers: ${rhythm.activeLabels.join(', ')}. Let availability feel natural, but do not explain the setting itself.`
+      : `Current rhythm: ${rhythm.snapshot.label}; no special rhythm modifier is active.`,
+    'Reality guard: do not invent completed activities that are unrealistic for the current time and contact rhythm. During quiet or busy periods, prefer waiting, commuting, resting, checking messages late, preparing, or planning instead of claiming completed outings.'
   ].filter(Boolean);
   return lines.join('\n');
 }
 
-export function proactiveToneInstruction(tone: string): string {
+export function contactPatternToneInstruction(tone: string): string {
   const map: Record<string, string> = {
-    quick: 'Proactive tone: casual and quick, like someone who checks messages easily.',
-    chatty: 'Proactive tone: talkative, light, and likely to send small follow-up bubbles.',
-    cute: 'Proactive tone: affectionate, playful, and expressive without becoming childish.',
-    stable_affection: 'Proactive tone: warm and caring, checking on the user in a steady way.',
-    cool: 'Proactive tone: concise and dry; initiate only when there is a clear reason.',
-    anxious: 'Proactive tone: a little clingy and worried when ignored, but keep it realistic.',
-    dry_caring: 'Proactive tone: blunt but caring; practical reminders feel natural.',
-    easygoing: 'Proactive tone: relaxed, apologetically late, and not intense.',
-    careful: 'Proactive tone: cautious and thoughtful, avoiding pressure.',
-    late_night: 'Proactive tone: reflective and deeper at night, with fewer shallow greetings.',
-    busy: 'Proactive tone: brief during busy hours, more available later.',
-    public_figure: 'Proactive tone: careful, polite, schedule-aware, and not too frequent.'
+    quick: 'checks messages easily and replies casually without making the conversation feel heavy.',
+    chatty: 'likes light back-and-forth conversation and may send small follow-up bubbles.',
+    cute: 'shows affection and playful attention through contact, without becoming childish.',
+    stable_affection: 'checks in warmly and steadily, like someone who naturally cares about the user.',
+    cool: 'keeps contact concise and dry, initiating only when there is a clear reason.',
+    anxious: 'can become a little worried or clingy when ignored, but stays realistic and not excessive.',
+    dry_caring: 'does not say much, but practical reminders and blunt care feel natural.',
+    easygoing: 'is relaxed about late replies and does not pressure the user.',
+    careful: 'takes time to answer thoughtfully and avoids pushing too hard.',
+    late_night: 'becomes more reflective and emotionally open at night, with fewer shallow greetings.',
+    busy: 'keeps contact brief during busy hours and becomes more available later.',
+    public_figure: 'contacts carefully and politely, with schedule-aware distance and low frequency.'
   };
   return map[tone] || '';
 }

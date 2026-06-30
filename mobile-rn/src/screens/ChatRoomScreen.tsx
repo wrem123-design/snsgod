@@ -50,12 +50,13 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
   const character = findCharacter(state, room?.characterId);
   const isRandomRoom = randomMode || room?.type === 'random';
   const messages = useMemo(() => roomMessages(state, roomId), [state, roomId]);
+  const displayMessages = useMemo(() => [...messages].reverse(), [messages]);
   const pendingReplyPhase = state.pendingReplies?.[roomId]?.phase;
   const typing = pendingReplyPhase === 'typing' || pendingReplyPhase === 'generating';
 
   function scrollToLatest(animated = true) {
     requestAnimationFrame(() => {
-      listRef.current?.scrollToEnd({ animated });
+      listRef.current?.scrollToOffset({ offset: 0, animated });
     });
   }
 
@@ -273,14 +274,13 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
 
       <FlatList
         ref={listRef}
-        data={messages}
+        data={displayMessages}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.messages}
-        onContentSizeChange={() => scrollToLatest(false)}
-        onLayout={() => scrollToLatest(false)}
-        ListHeaderComponent={room.name !== '기본 채팅' ? <View style={styles.roomNotice}><Text style={styles.roomNoticeText}>{room.name}</Text></View> : null}
+        inverted
+        ListHeaderComponent={typing ? <TypingBubble character={character} /> : null}
         renderItem={({ item }) => <MessageBubble message={item} character={character} userStickers={state.userStickers || []} roomId={room.id} onOpenCall={onOpenCall} onRejectCall={rejectCall} onRetryFailed={retryFailedReply} onOpenImage={setViewerImage} onRetryImage={openImageRetryEditor} regeneratingImageId={regeneratingImageId} />}
-        ListFooterComponent={typing ? <TypingBubble character={character} /> : null}
+        ListFooterComponent={room.name !== '기본 채팅' ? <View style={styles.roomNotice}><Text style={styles.roomNoticeText}>{room.name}</Text></View> : null}
       />
 
       {viewerImage ? <ImageViewer item={viewerImage} onClose={() => setViewerImage(null)} /> : null}

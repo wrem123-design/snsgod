@@ -326,11 +326,12 @@ export default function App() {
     return stateRef.current || undefined;
   }
 
-  function requestReply(roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean; userMessageCreatedAt?: number }) {
+  function requestReply(roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean; userMessageCreatedAt?: number; latestUserImageData?: string }) {
     void startReplyJob({
       roomId,
       characterId,
       latestUserInput,
+      latestUserImageData: options?.latestUserImageData,
       userMessageCreatedAt: options?.userMessageCreatedAt,
       randomMode: options?.randomMode,
       getState: () => stateRef.current,
@@ -358,7 +359,11 @@ export default function App() {
       ].filter(Boolean).join('\n');
       if (!promptText) continue;
       void appendDebugLog('reply.recover', `resume room=${room.id} character=${character.id} message=${userMessage.id}`);
-      requestReply(room.id, character.id, promptText, { randomMode: room.type === 'random', userMessageCreatedAt: userMessage.createdAt });
+      requestReply(room.id, character.id, promptText, {
+        randomMode: room.type === 'random',
+        userMessageCreatedAt: userMessage.createdAt,
+        latestUserImageData: typeof userMessage.mediaData === 'string' ? userMessage.mediaData : undefined
+      });
     }
   }
 

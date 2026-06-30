@@ -9,6 +9,7 @@ export type ChatPromptMode = 'reply' | 'proactive' | 'reroll';
 export type ChatPromptOptions = {
   mode?: ChatPromptMode;
   replyDelaySeconds?: number;
+  latestUserImageData?: string;
 };
 
 export const DEFAULT_COVER_BACKGROUND_DIRECTION = 'Use places recently mentioned in chat or calls. Prefer calm city night streets, quiet cafes, or subway-adjacent everyday scenes. No people, no faces, no text, no logos.';
@@ -127,7 +128,11 @@ function messageTimelineText(message: SNSGodState['messages'][string][number]): 
 }
 
 function latestUserImage(messages: SNSGodState['messages'][string][number][]): string | undefined {
-  return [...messages].reverse().find(message => message.role === 'user' && typeof message.mediaData === 'string' && message.mediaData.startsWith('data:image/'))?.mediaData;
+  return [...messages].reverse().find(message =>
+    message.role === 'user'
+    && typeof message.mediaData === 'string'
+    && /^(data:image\/|file:|content:)/i.test(message.mediaData)
+  )?.mediaData;
 }
 
 function imageMimeType(imageData?: string): string | undefined {
@@ -197,7 +202,7 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
   const prompts = { ...DEFAULT_PROMPTS, ...(state.config.prompts || {}) };
   const contextLimit = Number(state.config.apiProfiles[state.config.apiType]?.contextMessageLimit || MAX_CONTEXT_MESSAGES);
   const messages = (state.messages[room.id] || []).slice(-contextLimit);
-  const latestImageData = latestUserImage(messages);
+  const latestImageData = options.latestUserImageData || latestUserImage(messages);
   const transcript = messages.map(message => {
     const speaker = message.role === 'user' ? userNameFor(state, character, room) : character.name;
     const body = messageTimelineText(message);

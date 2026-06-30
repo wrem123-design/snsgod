@@ -20,6 +20,7 @@ type StartReplyJobInput = {
   roomId: string;
   characterId: string;
   latestUserInput: string;
+  latestUserImageData?: string;
   userMessageCreatedAt?: number;
   randomMode?: boolean;
   getState: () => SNSGodState | null;
@@ -171,7 +172,7 @@ export async function startReplyJob(input: StartReplyJobInput) {
     const promptState = input.getState();
     const promptTarget = roomStillValid(promptState, input.roomId, input.characterId);
     if (!promptState || !promptTarget || !isCurrentChatJob(input.roomId, jobId)) return;
-    const promptMessages = buildChatPrompt(promptState, promptTarget.character, promptTarget.room, input.latestUserInput, { mode: 'reply', replyDelaySeconds: replyDelayMs / 1000 });
+    const promptMessages = buildChatPrompt(promptState, promptTarget.character, promptTarget.room, input.latestUserInput, { mode: 'reply', replyDelaySeconds: replyDelayMs / 1000, latestUserImageData: input.latestUserImageData });
 
     if (!tryLockGeneratingRoom(input.roomId, jobId)) return;
     await input.commitCurrent(current => setPending(current, input.roomId, jobId, 'generating'));

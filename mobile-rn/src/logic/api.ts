@@ -376,49 +376,81 @@ function imagePayloadFromDataUri(imageData?: string): { mimeType: string; data: 
   return { mimeType: match[1] || 'image/jpeg', data: match[2].replace(/\s/g, '') };
 }
 
-function geminiPartsForMessage(message: ChatMessage): Record<string, unknown>[] {
-  const parts: Record<string, unknown>[] = [{ text: message.content }];
-  const image = imagePayloadFromDataUri(message.imageData);
-  if (image) {
-    parts.push({ inlineData: { mimeType: message.imageMimeType || image.mimeType, data: image.data } });
+function imageMimeTypeFromSource(source: string, fallback?: string): string {
+  const dataMime = source.match(/^data:([^;]+);base64,/i)?.[1];
+  if (dataMime) return dataMime;
+  const clean = source.split('?')[0].toLowerCase();
+  if (clean.endsWith('.png')) return 'image/png';
+  if (clean.endsWith('.webp')) return 'image/webp';
+  if (clean.endsWith('.gif')) return 'image/gif';
+  return fallback || 'image/jpeg';
+}
+
+async function imagePayloadFromSource(imageData?: string, imageMimeType?: string): Promise<{ mimeType: string; data: string; dataUri: string } | undefined> {
+  const source = String(imageData || '').trim();
+  if (!source) return undefined;
+  const dataUri = imagePayloadFromDataUri(source);
+  if (dataUri) return { ...dataUri, dataUri: `data:${dataUri.mimeType};base64,${dataUri.data}` };
+  if (/^(file:|content:)/i.test(source) || /^[A-Za-z]:[\\/]/.test(source)) {
+    try {
+      const data = await FileSystem.readAsStringAsync(source, { encoding: FileSystem.EncodingType.Base64 });
+      const mimeType = imageMimeTypeFromSource(source, imageMimeType);
+      return { mimeType, data: data.replace(/\s/g, ''), dataUri: `data:${mimeType};base64,${data.replace(/\s/g, '')}` };
+    } catch (error) {
+      await appendDebugLog('llm.image', `local image read failed: ${source.slice(0, 120)}\n${error instanceof Error ? error.message : String(error)}`, 'warn');
+      return undefined;
+    }
   }
+  if (/^https?:\/\//i.test(source)) {
+    return { mimeType: imageMimeTypeFromSource(source, imageMimeType), data: '', dataUri: source };
+  }
+  await appendDebugLog('llm.image', `unsupported image source: ${source.slice(0, 120)}`, 'warn');
+  return undefined;
+}
+
+async function geminiPartsForMessage(message: ChatMessage): Promise<Record<string, unknown>[]> {
+  const parts: Record<string, unknown>[] = [{ text: message.content }];
+  const image = await imagePayloadFromSource(message.imageData, message.imageMimeType);
+  if (image?.data) parts.push({ inlineData: { mimeType: image.mimeType, data: image.data } });
   return parts;
 }
 
-function openAiInputForMessages(messages: ChatMessage[]): Record<string, unknown>[] {
-  return messages.map(message => {
+async function openAiInputForMessages(messages: ChatMessage[]): Promise<Record<string, unknown>[]> {
+  return Promise.all(messages.map(async message => {
     const content: Record<string, unknown>[] = [{ type: 'input_text', text: message.content }];
-    if (message.imageData) content.push({ type: 'input_image', image_url: message.imageData });
+    const image = await imagePayloadFromSource(message.imageData, message.imageMimeType);
+    if (image) content.push({ type: 'input_image', image_url: image.dataUri });
     return {
       role: message.role === 'assistant' ? 'assistant' : message.role === 'system' ? 'system' : 'user',
       content
     };
-  });
+  }));
 }
 
-function chatCompletionMessages(messages: ChatMessage[]): { role: 'system' | 'user' | 'assistant'; content: string | Record<string, unknown>[] }[] {
-  return messages.map(message => {
+async function chatCompletionMessages(messages: ChatMessage[]): Promise<{ role: 'system' | 'user' | 'assistant'; content: string | Record<string, unknown>[] }[]> {
+  return Promise.all(messages.map(async message => {
     const role = message.role;
-    if (!message.imageData) return { role, content: message.content };
+    const image = await imagePayloadFromSource(message.imageData, message.imageMimeType);
+    if (!image) return { role, content: message.content };
     return {
       role,
       content: [
         { type: 'text', text: message.content },
-        { type: 'image_url', image_url: { url: message.imageData } }
+        { type: 'image_url', image_url: { url: image.dataUri } }
       ]
     };
-  });
+  }));
 }
 
-function anthropicContentForMessage(message: ChatMessage): Record<string, unknown>[] {
+async function anthropicContentForMessage(message: ChatMessage): Promise<Record<string, unknown>[]> {
   const content: Record<string, unknown>[] = [{ type: 'text', text: message.content }];
-  const image = imagePayloadFromDataUri(message.imageData);
-  if (image) {
+  const image = await imagePayloadFromSource(message.imageData, message.imageMimeType);
+  if (image?.data) {
     content.push({
       type: 'image',
       source: {
         type: 'base64',
-        media_type: message.imageMimeType || image.mimeType,
+        media_type: image.mimeType,
         data: image.data
       }
     });
@@ -430,9 +462,9 @@ async function callGemini(profile: ApiProfile, key: string, messages: ChatMessag
   const endpoint = String(profile.apiEndpoint || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, '');
   const model = String(profile.apiModel || 'gemini-2.5-flash').replace(/^models\//, '');
   const system = messages.filter(message => message.role === 'system').map(message => message.content).join('\n\n');
-  const contents = messages
+  const contents = await Promise.all(messages
     .filter(message => message.role !== 'system')
-    .map(message => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: geminiPartsForMessage(message) }));
+    .map(async message => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: await geminiPartsForMessage(message) })));
   const response = await fetch(`${endpoint}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -525,9 +557,9 @@ async function callVertex(profile: ApiProfile, messages: ChatMessage[]): Promise
   const serviceAccount = parseVertexServiceAccount(profile.serviceAccountJson);
   const token = await fetchVertexAccessToken(profile, serviceAccount);
   const system = messages.filter(message => message.role === 'system').map(message => message.content).join('\n\n');
-  const contents = messages
+  const contents = await Promise.all(messages
     .filter(message => message.role !== 'system')
-    .map(message => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: geminiPartsForMessage(message) }));
+    .map(async message => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: await geminiPartsForMessage(message) })));
   const payload = {
     ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
     contents: contents.length ? contents : [{ role: 'user', parts: [{ text: 'Generate the next reply now.' }] }],
@@ -637,13 +669,13 @@ async function callOpenAI(profile: ApiProfile, key: string, messages: ChatMessag
     body: JSON.stringify(usesChatCompletions
       ? {
         model: profile.apiModel || 'gpt-4.1-mini',
-        messages: chatCompletionMessages(messages),
+        messages: await chatCompletionMessages(messages),
         max_tokens: Number(profile.maxTokens || 700),
         temperature: Number(profile.temperature || 0.85)
       }
       : {
         model: profile.apiModel || 'gpt-4.1-mini',
-        input: openAiInputForMessages(messages),
+        input: await openAiInputForMessages(messages),
         max_output_tokens: Number(profile.maxTokens || 700),
         temperature: Number(profile.temperature || 0.85)
       })
@@ -659,10 +691,10 @@ async function callOpenAI(profile: ApiProfile, key: string, messages: ChatMessag
 
 async function callAnthropic(profile: ApiProfile, key: string, messages: ChatMessage[]): Promise<string> {
   const system = messages.find(message => message.role === 'system')?.content || '';
-  const bodyMessages = messages.filter(message => message.role !== 'system').map(message => ({
+  const bodyMessages = await Promise.all(messages.filter(message => message.role !== 'system').map(async message => ({
     role: message.role === 'assistant' ? 'assistant' : 'user',
-    content: anthropicContentForMessage(message)
-  }));
+    content: await anthropicContentForMessage(message)
+  })));
   const response = await fetch(String(profile.apiEndpoint || 'https://api.anthropic.com/v1/messages'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },

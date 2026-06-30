@@ -43,45 +43,45 @@ const PROACTIVE_STYLE_OPTIONS = [
   ['auto', '프롬프트 기준'],
   ['reserved', '무뚝뚝/절제'],
   ['steady', '담백/가끔'],
-  ['attached', '다정/연락'],
-  ['obsessive', '집착/불안감']
+  ['attached', '외로움/애착'],
+  ['obsessive', '집착/끈질김']
 ];
 
 const REPLY_PRESETS = [
   {
     id: 'attached_realistic',
     title: '다정한 집착형',
-    summary: '답장은 보통 빠르고 긴 편입니다. 연락이 끊기면 한두 번 먼저 말을 걸지만, 과하게 몰아붙이지는 않습니다.',
+    summary: '답장은 보통 빠르고 긴 편입니다. 선톡 문장 성격은 외로움/애착 쪽이고, 연락이 끊기면 한두 번 먼저 말을 겁니다.',
     values: { proactiveStyle: 'attached', proactivePatience: 5, responseDelayMin: 8, responseDelayMax: 420, messageGapMin: 2, messageGapMax: 5, responseTime: 8, thinkingTime: 7, reactivity: 9, tone: 8, frequencyMinutes: 18, initiative: 65, messageStyle: 'long' }
   },
   {
     id: 'busy_warm',
     title: '바쁜데 성의 있는 사람',
-    summary: '확인은 늦지만 한 번 답할 때는 제대로 길게 답합니다. 선톡은 드물고 대화 온도는 따뜻합니다.',
+    summary: '확인은 늦지만 한 번 답할 때는 제대로 길게 답합니다. 선톡 문장 성격은 담백하고, 먼저 연락은 드뭅니다.',
     values: { proactiveStyle: 'steady', proactivePatience: 2, responseDelayMin: 60, responseDelayMax: 2100, messageGapMin: 4, messageGapMax: 9, responseTime: 3, thinkingTime: 8, reactivity: 6, tone: 7, frequencyMinutes: 90, initiative: 18, messageStyle: 'long' }
   },
   {
     id: 'idol_schedule',
     title: '아이돌/공인 느낌',
-    summary: '스케줄 때문에 확인은 많이 느립니다. 답장은 짧지 않게 챙기지만 먼저 연락하는 빈도는 낮습니다.',
+    summary: '스케줄 때문에 확인은 많이 느립니다. 선톡 문장 성격은 절제되어 있고, 먼저 연락하는 빈도는 낮습니다.',
     values: { proactiveStyle: 'reserved', proactivePatience: 1, responseDelayMin: 120, responseDelayMax: 2700, messageGapMin: 3, messageGapMax: 8, responseTime: 2, thinkingTime: 7, reactivity: 7, tone: 8, frequencyMinutes: 180, initiative: 10, messageStyle: 'balanced' }
   },
   {
     id: 'short_burst',
     title: '짧게 여러 번형',
-    summary: '긴 글보다 짧은 말을 여러 번 나눠 보냅니다. 확인은 빠른 편이고 필요한 말만 톡톡 던집니다.',
+    summary: '긴 글보다 짧은 말을 여러 번 나눠 보냅니다. 선톡 문장 성격은 담백하고, 필요한 말만 톡톡 던집니다.',
     values: { proactiveStyle: 'steady', proactivePatience: 3, responseDelayMin: 4, responseDelayMax: 240, messageGapMin: 1, messageGapMax: 2, responseTime: 9, thinkingTime: 4, reactivity: 7, tone: 6, frequencyMinutes: 35, initiative: 35, messageStyle: 'burst' }
   },
   {
     id: 'calm_slow',
     title: '차분한 느림형',
-    summary: '확인과 답장이 느긋합니다. 감정 표현은 크지 않지만 답할 때는 안정적으로 이어갑니다.',
+    summary: '확인과 답장이 느긋합니다. 선톡 문장 성격은 절제되어 있고, 감정 표현은 크지 않습니다.',
     values: { proactiveStyle: 'reserved', proactivePatience: 1, responseDelayMin: 40, responseDelayMax: 1500, messageGapMin: 3, messageGapMax: 7, responseTime: 4, thinkingTime: 8, reactivity: 4, tone: 5, frequencyMinutes: 120, initiative: 12, messageStyle: 'balanced' }
   },
   {
     id: 'lively_friend',
     title: '활발한 친구형',
-    summary: '확인이 빠르고 리액션이 큽니다. 선톡도 종종 하고, 부담스럽지 않은 템포로 대화를 이어갑니다.',
+    summary: '확인이 빠르고 리액션이 큽니다. 선톡 문장 성격은 외로움/애착 쪽이지만 가볍게 표현합니다.',
     values: { proactiveStyle: 'attached', proactivePatience: 4, responseDelayMin: 2, responseDelayMax: 300, messageGapMin: 1, messageGapMax: 4, responseTime: 9, thinkingTime: 5, reactivity: 9, tone: 9, frequencyMinutes: 30, initiative: 55, messageStyle: 'balanced' }
   }
 ] as const;
@@ -438,7 +438,7 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
             </Pressable>
             {replyAdvancedOpen ? (
               <View style={styles.advancedBody}>
-                <ChoiceRow label="선톡 성향" value={String(draft.proactiveStyle || 'auto')} options={PROACTIVE_STYLE_OPTIONS} onChange={value => set('proactiveStyle', value)} />
+                <ChoiceRow label="선톡 문장 성격(프롬프트에 추가)" value={String(draft.proactiveStyle || 'auto')} options={PROACTIVE_STYLE_OPTIONS} onChange={value => set('proactiveStyle', value)} help="캐릭터가 먼저 말할 때 문장에 어떤 감정 결을 더할지 정합니다. 답장 속도나 선톡 빈도는 다른 설정과 프리셋 수치가 함께 결정합니다." />
                 <SliderField label="선톡 지속도(답 없을 때 얼마나 이어갈지)" value={draft.proactivePatience} min={0} max={8} leftLabel="0 금방 멈춤" rightLabel="8 오래 이어감" onChange={value => set('proactivePatience', value)} help="사용자가 답하지 않아도 캐릭터가 먼저 말을 몇 번 더 이어갈지 정합니다." />
                 <NumberField label="메시지 확인 최소 지연(이 전엔 절대 확인 안 함, 0초-2분)" value={draft.responseDelayMin} onChange={value => set('responseDelayMin', value)} help="캐릭터가 아무리 빨라도 메시지를 확인하기 전 반드시 기다리는 시간입니다. 0-120초." />
                 <NumberField label="메시지 확인 최대 지연(늦어도 이 안엔 확인, 최대 45분)" value={draft.responseDelayMax} onChange={value => set('responseDelayMax', value)} help="캐릭터가 늦게 확인하더라도 이 시간 안에는 확인하게 만드는 상한선입니다. 0-2700초." />

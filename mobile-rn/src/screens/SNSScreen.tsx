@@ -34,6 +34,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
   const [dmText, setDmText] = useState('');
   const [showGenerator, setShowGenerator] = useState(false);
   const [showDmList, setShowDmList] = useState(false);
+  const [retryDraft, setRetryDraft] = useState<{ postId: string; prompt: string } | null>(null);
   const selectedCharacter = selectedCharacterId ? availableCharacters.find(character => character.id === selectedCharacterId) : undefined;
   const activeSnsOptions = snsOptionsFor(state, platform, selectedCharacter);
   const [snsAutoEnabled, setSnsAutoEnabled] = useState(selectedCharacter?.snsAutoEnabled !== false);
@@ -199,7 +200,20 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
     }
   }
 
-  async function retryFailedPost(post: SNSPost) {
+  function openRetryPost(post: SNSPost) {
+    const prompt = [
+      post.imagePrompt ? `이미지 프롬프트: ${post.imagePrompt}` : '',
+      post.content ? `기존 본문: ${post.content}` : '',
+      post.generationError ? `실패 이유: ${post.generationError}` : '',
+      post.imageCaption && String(post.imageCaption).includes('실패') ? `이미지 실패 이유: ${post.imageCaption}` : ''
+    ].filter(Boolean).join('\n\n');
+    setRetryDraft({
+      postId: post.id,
+      prompt: prompt || '이 SNS 게시물을 자연스럽게 다시 생성해줘.'
+    });
+  }
+
+  async function retryFailedPost(post: SNSPost, retryPrompt: string) {
     if (loading) return;
     const character = state.characters.find(item => item.id === post.characterId);
     if (!character) {
@@ -212,8 +226,9 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
         ...state,
         snsPosts: (state.snsPosts || []).filter(item => item.id !== post.id)
       };
-      const next = await generateSNSPost(retryState, character, post.platform, { manual: true, roomId: post.generationRoomId });
+      const next = await generateSNSPost(retryState, character, post.platform, { manual: true, roomId: post.generationRoomId, retryPrompt });
       await onChange(next);
+      setRetryDraft(null);
     } catch (error) {
       Alert.alert('SNS 재생성 실패', error instanceof Error ? error.message : String(error));
     } finally {
@@ -369,6 +384,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
     : undefined;
   const activeUserThread = (state.snsDmThreads || []).find(item => item.id === activeDmId);
   const activeUserThreadPost = activeUserThread?.postId ? (state.snsPosts || []).find(post => post.id === activeUserThread.postId) : undefined;
+  const retryPost = retryDraft ? (state.snsPosts || []).find(post => post.id === retryDraft.postId) : undefined;
   const activeReadOnlyThread = activePostDm && activePostDmPost
     ? postDmToThread(activePostDm, activePostDmPost, state.characters.find(character => character.id === activePostDmPost.characterId))
     : undefined;
@@ -403,6 +419,16 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
             loading={loading}
           />
         )
+      ) : null}
+      {retryDraft && retryPost ? (
+        <SnsRetryPromptEditor
+          post={retryPost}
+          prompt={retryDraft.prompt}
+          loading={loading}
+          onChangePrompt={prompt => setRetryDraft(current => current ? { ...current, prompt } : current)}
+          onCancel={() => setRetryDraft(null)}
+          onSubmit={() => retryFailedPost(retryPost, retryDraft.prompt)}
+        />
       ) : null}
       {dmHub && hubPost ? (
         <SnsDmHubModal
@@ -527,7 +553,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
         ListEmptyComponent={<Text style={styles.emptyText}>아직 {selectedCharacter?.name || '이 캐릭터'}의 {platform === 'instagram' ? 'Instagram' : 'Twitter/X'} 게시물이 없습니다.</Text>}
         renderItem={({ item }) => {
           const itemCharacter = state.characters.find(character => character.id === item.characterId);
-          return <PostCard platform={platform} post={item} character={itemCharacter} dmEnabled={!snsOptionsFor(state, item.platform, itemCharacter).noDM} onLike={() => likePost(item.id)} onDelete={() => deletePost(item.id)} onComment={content => addComment(item.id, content)} onOpenDm={() => openSnsDm(item)} onRetryFailed={() => retryFailedPost(item)} />;
+          return <PostCard platform={platform} post={item} character={itemCharacter} dmEnabled={!snsOptionsFor(state, item.platform, itemCharacter).noDM} onLike={() => likePost(item.id)} onDelete={() => deletePost(item.id)} onComment={content => addComment(item.id, content)} onOpenDm={() => openSnsDm(item)} onRetryFailed={() => openRetryPost(item)} />;
         }}
       />
     </View>
@@ -539,6 +565,41 @@ function TogglePill({ label, value, onPress }: { label: string; value: boolean; 
     <Pressable onPress={onPress} style={[styles.togglePill, value && styles.togglePillOn]}>
       <Text style={[styles.toggleText, value && styles.toggleTextOn]}>{label}</Text>
     </Pressable>
+  );
+}
+
+function SnsRetryPromptEditor({ post, prompt, loading, onChangePrompt, onCancel, onSubmit }: {
+  post: SNSPost;
+  prompt: string;
+  loading: boolean;
+  onChangePrompt: (value: string) => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <View style={styles.modal}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.retryPanel}>
+        <Text style={styles.retryTitle}>SNS 재생성</Text>
+        <Text style={styles.retryHelp}>아래 내용을 수정해서 다시 생성합니다. 이미지 검열/빈 게시물이라면 원하는 장면이나 글 방향을 더 구체적으로 적어주세요.</Text>
+        <Text style={styles.retryPostPreview} numberOfLines={3}>{post.content || post.imageCaption || post.generationError || '표시할 내용이 없는 게시물입니다.'}</Text>
+        <TextInput
+          value={prompt}
+          onChangeText={onChangePrompt}
+          editable={!loading}
+          multiline
+          textAlignVertical="top"
+          style={styles.retryInput}
+        />
+        <View style={styles.retryActions}>
+          <Pressable onPress={onCancel} disabled={loading} style={[styles.retrySecondary, loading && styles.disabled]}>
+            <Text style={styles.retrySecondaryText}>취소</Text>
+          </Pressable>
+          <Pressable onPress={onSubmit} disabled={loading || !prompt.trim()} style={[styles.retryPrimary, (loading || !prompt.trim()) && styles.disabled]}>
+            {loading ? <ActivityIndicator color="#241a00" /> : <Text style={styles.retryPrimaryText}>재생성</Text>}
+          </Pressable>
+        </View>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -1149,6 +1210,16 @@ const styles = StyleSheet.create({
   commentButtonText: { color: '#241a00', fontWeight: '900' },
   xCommentButtonText: { color: '#ffffff' },
   modal: { ...StyleSheet.absoluteFillObject, zIndex: 20, backgroundColor: 'rgba(0,0,0,0.38)', justifyContent: 'flex-end' },
+  retryPanel: { maxHeight: '86%', padding: 16, borderTopLeftRadius: 18, borderTopRightRadius: 18, backgroundColor: '#ffffff' },
+  retryTitle: { color: colors.text, fontSize: 18, fontWeight: '900' },
+  retryHelp: { marginTop: 6, color: colors.sub, fontSize: 12, lineHeight: 18, fontWeight: '800' },
+  retryPostPreview: { marginTop: 10, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', color: colors.text, lineHeight: 19, fontWeight: '700' },
+  retryInput: { marginTop: 12, minHeight: 150, maxHeight: 260, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fbfaf7', color: colors.text, fontSize: 14, lineHeight: 20 },
+  retryActions: { marginTop: 12, flexDirection: 'row', gap: 8 },
+  retrySecondary: { flex: 1, minHeight: 44, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fffefa' },
+  retrySecondaryText: { color: colors.text, fontWeight: '900' },
+  retryPrimary: { flex: 1, minHeight: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
+  retryPrimaryText: { color: '#241a00', fontWeight: '900' },
   dmPanel: { maxHeight: '88%', backgroundColor: '#ffffff', borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: 'hidden' },
   xDmPanel: { backgroundColor: '#000000' },
   dmPanelHeader: { minHeight: 70, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#dbdbdb' },

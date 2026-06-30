@@ -434,7 +434,7 @@ async function applySnsImagePolicy(state: SNSGodState, posts: SNSPost[], charact
   return result;
 }
 
-export async function generateSNSPost(state: SNSGodState, character: SNSGodCharacter, platform: SNSPost['platform'], options: { roomId?: string; manual?: boolean; image?: string } = {}): Promise<SNSGodState> {
+export async function generateSNSPost(state: SNSGodState, character: SNSGodCharacter, platform: SNSPost['platform'], options: { roomId?: string; manual?: boolean; image?: string; retryPrompt?: string } = {}): Promise<SNSGodState> {
   const sns = snsOptionsFor(state, platform, character);
   const transcript = roomTranscriptForSns(state, character, options.roomId);
   const phoneSummary = phoneSummaryForSns(state, character);
@@ -465,6 +465,7 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
     sns.noDM ? 'Do not create dms.' : 'Create one short SNS DM thread when natural.',
     sns.thirdPartyDM ? 'Third-party commenters may initiate DMs if useful.' : 'DMs should stay centered on the character and user.',
     snsSubjectInstruction(state, sns.subject),
+    options.retryPrompt ? `User retry instruction:\n${options.retryPrompt}` : '',
     sns.mood ? `Mood: ${sns.mood}` : '',
     `Character profile: ${character.prompt || '(empty)'}`,
     `User profile: ${state.config.userDescription || '(empty)'}`,

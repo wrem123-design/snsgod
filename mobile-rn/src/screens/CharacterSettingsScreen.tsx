@@ -379,17 +379,17 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
         {activeSection === 'reply' ? (
           <Section title="답장/능동 성향">
             <ChoiceRow label="선톡 성향" value={String(draft.proactiveStyle || 'auto')} options={PROACTIVE_STYLE_OPTIONS} onChange={value => set('proactiveStyle', value)} />
-            <SliderField label="무응답 인내도(빨리 멈춤 ↔ 오래 기다림)" value={draft.proactivePatience} min={0} max={8} leftLabel="0 빠른 포기" rightLabel="8 오래 기다림" onChange={value => set('proactivePatience', value)} help="답이 없을 때 먼저 말하기를 얼마나 오래 이어갈지 정합니다." />
+            <SliderField label="선톡 지속도(답 없을 때 얼마나 이어갈지)" value={draft.proactivePatience} min={0} max={8} leftLabel="0 금방 멈춤" rightLabel="8 오래 이어감" onChange={value => set('proactivePatience', value)} help="사용자가 답하지 않아도 캐릭터가 먼저 말을 몇 번 더 이어갈지 정합니다." />
             <NumberField label="메시지 확인 최소 지연(이 전엔 절대 확인 안 함, 0초-2분)" value={draft.responseDelayMin} onChange={value => set('responseDelayMin', value)} help="캐릭터가 아무리 빨라도 메시지를 확인하기 전 반드시 기다리는 시간입니다. 0-120초." />
             <NumberField label="메시지 확인 최대 지연(늦어도 이 안엔 확인, 최대 45분)" value={draft.responseDelayMax} onChange={value => set('responseDelayMax', value)} help="캐릭터가 늦게 확인하더라도 이 시간 안에는 확인하게 만드는 상한선입니다. 0-2700초." />
-            <NumberField label="연속 메시지 간격 최소(연타 최소 초)" value={draft.messageGapMin} onChange={value => set('messageGapMin', value)} />
-            <NumberField label="연속 메시지 간격 최대(연타 최대 초)" value={draft.messageGapMax} onChange={value => set('messageGapMax', value)} />
+            <NumberField label="연속 메시지 사이 최소 간격(초)" value={draft.messageGapMin} onChange={value => set('messageGapMin', value)} help="캐릭터가 여러 메시지를 나눠 보낼 때, 메시지와 메시지 사이의 가장 짧은 대기 시간입니다." />
+            <NumberField label="연속 메시지 사이 최대 간격(초)" value={draft.messageGapMax} onChange={value => set('messageGapMax', value)} help="캐릭터가 여러 메시지를 나눠 보낼 때, 메시지와 메시지 사이의 가장 긴 대기 시간입니다." />
             <SliderField label="확인 속도(성향: 느긋함 ↔ 즉각 확인)" value={draft.responseTime} min={1} max={10} leftLabel="1 느림" rightLabel="10 즉각" onChange={value => set('responseTime', value)} />
             <SliderField label="생각 깊이(즉흥 ↔ 숙고)" value={draft.thinkingTime} min={1} max={10} leftLabel="1 즉흥" rightLabel="10 깊게 생각" onChange={value => set('thinkingTime', value)} />
-            <SliderField label="반응성(무덤덤 ↔ 즉각 반응)" value={draft.reactivity} min={1} max={10} leftLabel="1 무덤덤" rightLabel="10 즉각 반응" onChange={value => set('reactivity', value)} />
+            <SliderField label="반응 민감도(차분함 ↔ 바로 호응)" value={draft.reactivity} min={1} max={10} leftLabel="1 차분함" rightLabel="10 바로 호응" onChange={value => set('reactivity', value)} help="사용자 말에 감정 표현이나 리액션을 얼마나 크게 드러낼지 정합니다. 답장 시간은 위의 확인 지연 설정을 따릅니다." />
             <SliderField label="말투 강도(담백 ↔ 강한 개성)" value={draft.tone} min={1} max={10} leftLabel="1 담백" rightLabel="10 강함" onChange={value => set('tone', value)} />
-            <NumberField label="능동 발화 간격(먼저 말할 기회 간격/분)" value={draft.frequencyMinutes} onChange={value => set('frequencyMinutes', value)} help="작을수록 먼저 말을 걸 기회가 자주 옵니다." />
-            <SliderField label="능동 발화 확률(소극적 ↔ 자주 선톡)" value={draft.initiative} min={0} max={100} step={5} leftLabel="0 안 함" rightLabel="100 자주" onChange={value => set('initiative', value)} />
+            <NumberField label="선톡 간격(먼저 말할 기회 간격/분)" value={draft.frequencyMinutes} onChange={value => set('frequencyMinutes', value)} help="작을수록 캐릭터가 먼저 말을 걸지 확인하는 기회가 자주 옵니다." />
+            <SliderField label="선톡 확률(소극적 ↔ 자주 먼저 말함)" value={draft.initiative} min={0} max={100} step={5} leftLabel="0 안 함" rightLabel="100 자주" onChange={value => set('initiative', value)} />
           </Section>
         ) : null}
 

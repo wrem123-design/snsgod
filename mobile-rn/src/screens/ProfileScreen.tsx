@@ -19,6 +19,7 @@ export function ProfileScreen({ state, characterId, roomId, onBack, onOpenChat, 
   onOpenCall: (character: SNSGodCharacter) => void;
   onOpenSettings: (character: SNSGodCharacter) => void;
 }) {
+  const [viewerImage, setViewerImage] = useState<{ uri: string; title: string } | null>(null);
   const [selectedHistoryImage, setSelectedHistoryImage] = useState('');
   const [selectedChatImageId, setSelectedChatImageId] = useState('');
   const [chatPromptOpen, setChatPromptOpen] = useState(false);
@@ -45,17 +46,23 @@ export function ProfileScreen({ state, characterId, roomId, onBack, onOpenChat, 
         <Text style={styles.headerTitle}>프로필</Text>
       </View>
       <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.cover}>
-          {cover ? <Image source={{ uri: cover }} style={StyleSheet.absoluteFill} /> : <View style={styles.coverFallback} />}
-        </View>
+        {cover ? (
+          <Pressable onPress={() => setViewerImage({ uri: cover, title: `${character.name} 배경 사진` })} style={styles.cover}>
+            <Image source={{ uri: cover }} style={StyleSheet.absoluteFill} />
+          </Pressable>
+        ) : (
+          <View style={styles.cover}>
+            <View style={styles.coverFallback} />
+          </View>
+        )}
         <View style={styles.profileCard}>
-          <View style={styles.avatarWrap}>
+          <Pressable disabled={!profile} onPress={() => setViewerImage({ uri: profile, title: `${character.name} 프로필 사진` })} style={styles.avatarWrap}>
             {profile ? (
               <Image source={{ uri: profile }} style={styles.profileImage} />
             ) : (
               <Avatar character={character} size={94} />
             )}
-          </View>
+          </Pressable>
           <Text style={styles.name}>{character.name}</Text>
           <Text style={styles.handle}>@{character.handle || character.id}</Text>
           <Text style={styles.status}>{character.statusMessage || '접속 중'}</Text>
@@ -106,6 +113,19 @@ export function ProfileScreen({ state, characterId, roomId, onBack, onOpenChat, 
           </View>
         ) : null}
       </ScrollView>
+      {viewerImage ? <ProfileImageViewer item={viewerImage} onClose={() => setViewerImage(null)} /> : null}
+    </View>
+  );
+}
+
+function ProfileImageViewer({ item, onClose }: { item: { uri: string; title: string }; onClose: () => void }) {
+  return (
+    <View style={styles.viewerOverlay}>
+      <View style={styles.viewerHeader}>
+        <Text style={styles.viewerTitle}>{item.title}</Text>
+        <Pressable onPress={onClose} style={styles.viewerClose}><Text style={styles.viewerCloseText}>닫기</Text></Pressable>
+      </View>
+      <Image source={{ uri: item.uri }} style={styles.viewerImage} resizeMode="contain" />
     </View>
   );
 }
@@ -164,6 +184,12 @@ const styles = StyleSheet.create({
   historyTile: { width: 82, padding: 5, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa' },
   historyImage: { width: 70, height: 70, borderRadius: 8, backgroundColor: '#eee8dc' },
   historyLabel: { marginTop: 4, color: colors.sub, fontSize: 11, fontWeight: '800', textAlign: 'center' },
+  viewerOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 30, backgroundColor: '#101214', padding: 12 },
+  viewerHeader: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  viewerTitle: { flex: 1, color: '#fffefa', fontSize: 18, fontWeight: '900' },
+  viewerClose: { minHeight: 38, paddingHorizontal: 14, borderRadius: 19, backgroundColor: '#fff', justifyContent: 'center' },
+  viewerCloseText: { color: '#111', fontWeight: '900' },
+  viewerImage: { width: '100%', flex: 1, borderRadius: 8, backgroundColor: '#050607' },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: colors.bg },
   emptyText: { color: colors.text, fontWeight: '900' },
   primary: { marginTop: 12, height: 42, paddingHorizontal: 16, borderRadius: 8, backgroundColor: colors.accent, justifyContent: 'center' },

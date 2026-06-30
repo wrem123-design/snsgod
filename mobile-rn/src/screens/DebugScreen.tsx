@@ -1,9 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, NativeModules, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { clearDebugLogs, DebugLogEntry, readDebugLogs } from '../logic/debugLog';
 import { colors } from '../theme';
+
+const TermuxBridge = NativeModules.TermuxBridge as undefined | {
+  copyText: (text: string) => Promise<string>;
+};
 
 export function DebugScreen({ onBack, onReloadState, onReloadBundle }: {
   onBack: () => void;
@@ -66,6 +70,16 @@ export function DebugScreen({ onBack, onReloadState, onReloadBundle }: {
     }
   }
 
+  async function copyLog(entry: DebugLogEntry) {
+    try {
+      if (!TermuxBridge) throw new Error('clipboard bridge is not ready');
+      await TermuxBridge.copyText(formatLogForCopy(entry));
+      setStatus('로그를 복사했습니다.');
+    } catch (error) {
+      Alert.alert('로그 복사 실패', error instanceof Error ? error.message : String(error));
+    }
+  }
+
   useEffect(() => {
     void refresh();
   }, []);
@@ -90,23 +104,31 @@ export function DebugScreen({ onBack, onReloadState, onReloadBundle }: {
         </View>
         <Text style={styles.help}>개발 중 화면이 바뀌지 않으면 APK 재설치 또는 JS 번들 재로드가 필요할 수 있습니다. 릴리즈 앱에서는 코드 변경 반영을 위해 새 APK 설치가 필요합니다.</Text>
         <View style={styles.logList}>
-          {logs.length ? logs.map(item => <LogRow key={item.id} entry={item} />) : <Text style={styles.empty}>아직 로그가 없습니다.</Text>}
+          {logs.length ? logs.map(item => <LogRow key={item.id} entry={item} onLongPress={() => copyLog(item)} />) : <Text style={styles.empty}>아직 로그가 없습니다.</Text>}
         </View>
       </ScrollView>
     </View>
   );
 }
 
-function LogRow({ entry }: { entry: DebugLogEntry }) {
+function formatLogForCopy(entry: DebugLogEntry): string {
+  return [
+    `[${entry.level.toUpperCase()}] ${entry.scope}`,
+    new Date(entry.createdAt).toLocaleString(),
+    entry.message
+  ].join('\n');
+}
+
+function LogRow({ entry, onLongPress }: { entry: DebugLogEntry; onLongPress: () => void }) {
   return (
-    <View style={styles.logRow}>
+    <Pressable onLongPress={onLongPress} delayLongPress={350} style={styles.logRow}>
       <View style={styles.logHead}>
         <Text style={[styles.level, entry.level === 'error' && styles.errorLevel, entry.level === 'warn' && styles.warnLevel]}>{entry.level.toUpperCase()}</Text>
         <Text style={styles.scope}>{entry.scope}</Text>
         <Text style={styles.time}>{new Date(entry.createdAt).toLocaleString()}</Text>
       </View>
       <Text style={styles.message}>{entry.message}</Text>
-    </View>
+    </Pressable>
   );
 }
 

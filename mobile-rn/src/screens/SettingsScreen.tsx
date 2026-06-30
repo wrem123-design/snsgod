@@ -31,6 +31,9 @@ const PROVIDER_PRESETS: Partial<Record<ApiProvider, { endpoint: string; model: s
   ],
   anthropic: [
     { endpoint: 'https://api.anthropic.com/v1/messages', model: 'claude-haiku-4-5' }
+  ],
+  custom: [
+    { endpoint: 'https://api.cerebras.ai/v1/chat/completions', model: 'gemma-4-31b' }
   ]
 };
 

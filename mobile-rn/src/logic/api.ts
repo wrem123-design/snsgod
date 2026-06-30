@@ -396,6 +396,15 @@ function openAiInputForMessages(messages: ChatMessage[]): Record<string, unknown
   });
 }
 
+function chatCompletionMessages(messages: ChatMessage[]): { role: 'system' | 'user' | 'assistant'; content: string }[] {
+  return messages.map(message => ({
+    role: message.role,
+    content: message.imageData
+      ? `${message.content}\n\n[Attached image omitted: this custom chat-completions endpoint only receives text.]`
+      : message.content
+  }));
+}
+
 function anthropicContentForMessage(message: ChatMessage): Record<string, unknown>[] {
   const content: Record<string, unknown>[] = [{ type: 'text', text: message.content }];
   const image = imagePayloadFromDataUri(message.imageData);
@@ -616,19 +625,30 @@ function friendlyVertexError(status: number, text: string): string {
 
 async function callOpenAI(profile: ApiProfile, key: string, messages: ChatMessage[]): Promise<string> {
   const endpoint = String(profile.apiEndpoint || 'https://api.openai.com/v1/responses');
+  const usesChatCompletions = /\/chat\/completions\/?$/i.test(endpoint);
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      model: profile.apiModel || 'gpt-4.1-mini',
-      input: openAiInputForMessages(messages),
-      max_output_tokens: Number(profile.maxTokens || 700),
-      temperature: Number(profile.temperature || 0.85)
-    })
+    body: JSON.stringify(usesChatCompletions
+      ? {
+        model: profile.apiModel || 'gpt-4.1-mini',
+        messages: chatCompletionMessages(messages),
+        max_tokens: Number(profile.maxTokens || 700),
+        temperature: Number(profile.temperature || 0.85)
+      }
+      : {
+        model: profile.apiModel || 'gpt-4.1-mini',
+        input: openAiInputForMessages(messages),
+        max_output_tokens: Number(profile.maxTokens || 700),
+        temperature: Number(profile.temperature || 0.85)
+      })
   });
   const text = await response.text();
   if (!response.ok) throw new Error(`OpenAI ${response.status}: ${text.slice(0, 240)}`);
   const data = JSON.parse(text);
+  if (usesChatCompletions) {
+    return data.choices?.map((choice: { message?: { content?: string } }) => choice.message?.content || '').join('') || '';
+  }
   return data.output_text || data.output?.flatMap((item: { content?: { text?: string }[] }) => item.content || []).map((item: { text?: string }) => item.text || '').join('') || '';
 }
 

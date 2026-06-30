@@ -99,6 +99,14 @@ function phoneCooldownMinutes(value: unknown, fallbackMinutes: number, legacyHou
   return fallbackMinutes;
 }
 
+function apiKeySlotsFromProfile(profile: SNSGodState['config']['apiProfiles'][ApiProvider] | undefined): [string, string, string] {
+  const primary = String(profile?.apiKey || '');
+  const extras = (profile?.apiKeys || [])
+    .map(value => String(value || ''))
+    .filter((value, index, values) => value && value !== primary && values.indexOf(value) === index);
+  return [primary, extras[0] || '', extras[1] || ''];
+}
+
 const EVENT_PRESETS = [
   { title: "나's birthday", date: '1985-02-08', type: '유저 생일', prompt: "Event type: the user's birthday. The celebrant is 나. Write as the character directly to 나 in a private DM." },
   { title: '연인 기념일', date: 'MM-DD', type: '연인', prompt: 'Event type: relationship anniversary. The character remembers it naturally and may contact the user first.' },
@@ -167,10 +175,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   const [activeSection, setActiveSection] = useState<SettingsSection>(() => getSettingsSection(state.config.lastSettingsSection));
   const [provider, setProvider] = useState<ApiProvider>(state.config.apiType);
   const profile = useMemo(() => state.config.apiProfiles[provider] || {}, [state.config.apiProfiles, provider]);
-  const keySlots = useMemo(() => {
-    const keys = [profile.apiKey, ...(profile.apiKeys || [])].map(value => String(value || ''));
-    return [keys[0] || '', keys[1] || '', keys[2] || ''];
-  }, [profile.apiKey, profile.apiKeys]);
+  const keySlots = useMemo(() => apiKeySlotsFromProfile(profile), [profile.apiKey, profile.apiKeys]);
   const [model, setModel] = useState(String(profile.apiModel || ''));
   const [endpoint, setEndpoint] = useState(String(profile.apiEndpoint || ''));
   const [maxTokens, setMaxTokens] = useState(String(profile.maxTokens || (provider === 'vertex' ? 4096 : 700)));
@@ -285,7 +290,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
 
   function selectProvider(nextProvider: ApiProvider) {
     const nextProfile = state.config.apiProfiles[nextProvider] || {};
-    const keys = [nextProfile.apiKey, ...(nextProfile.apiKeys || [])].map(value => String(value || ''));
+    const keys = apiKeySlotsFromProfile(nextProfile);
     setProvider(nextProvider);
     setModel(String(nextProfile.apiModel || ''));
     setEndpoint(String(nextProfile.apiEndpoint || ''));
@@ -308,7 +313,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
 
   function buildApiState(): { next: SNSGodState; keyCount: number } {
     const profile = { ...(state.config.apiProfiles[provider] || {}) };
-    const keys = [apiKey1, apiKey2, apiKey3].map(value => String(value || '').trim()).filter(Boolean);
+    const keys = Array.from(new Set([apiKey1, apiKey2, apiKey3].map(value => String(value || '').trim()).filter(Boolean)));
     const normalizedModel = model.trim() || (provider === 'vertex' ? 'gemini-3-flash-preview' : '');
     const normalizedMaxTokens = Math.max(32, Math.round(Number(maxTokens) || (provider === 'vertex' ? 4096 : 700)));
     const safeMaxTokens = provider === 'vertex' && /gemini-3/i.test(normalizedModel)
@@ -337,7 +342,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
       : {
         ...profile,
         apiKey: keys[0] || '',
-        apiKeys: keys,
+        apiKeys: keys.slice(1),
         apiEndpoint: endpoint.trim(),
         apiModel: normalizedModel,
         maxTokens: safeMaxTokens,

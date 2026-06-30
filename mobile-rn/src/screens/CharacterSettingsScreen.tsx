@@ -39,90 +39,99 @@ const MESSAGE_STYLE_OPTIONS = [
   ['burst', '짧게 여러 번']
 ];
 
+const LIFE_RHYTHM_OPTIONS = [
+  ['weekdayQuiet', '평일 낮엔 조용함', '평일 9~18시에는 답장과 선톡이 줄어듭니다.'],
+  ['eveningActive', '저녁엔 더 활발함', '저녁 이후 답장이 빨라지고 먼저 연락할 확률이 올라갑니다.'],
+  ['lateNightMood', '밤엔 말이 깊어짐', '밤 10시 이후 감정적이고 긴 답장이 늘어납니다.'],
+  ['weekendActive', '주말엔 더 자주 연락', '토/일에는 선톡과 답장이 조금 더 활발해집니다.'],
+  ['nightQuiet', '늦은 밤엔 조용함', '밤 11시부터 아침까지 선톡이 줄고 답장이 늦어집니다.'],
+  ['busySchedule', '일정이 많음', '평일 낮에는 바쁜 사람처럼 확인과 답장이 크게 늦어집니다.']
+] as const;
+
 const REPLY_PRESETS = [
   {
     id: 'quick_responder',
     title: '칼답 친구',
     catchphrase: '읽씹이 뭐예요?',
     detail: '받으면 거의 바로 답해요.',
-    values: { proactivePatience: 2, responseDelayMin: 0, responseDelayMax: 25, messageGapMin: 1, messageGapMax: 3, responseTime: 9, thinkingTime: 3, reactivity: 7, tone: 5, frequencyMinutes: 45, initiative: 30, messageStyle: 'balanced' }
+    values: { proactivePatience: 2, responseDelayMin: 0, responseDelayMax: 25, messageGapMin: 1, messageGapMax: 3, responseTime: 9, thinkingTime: 3, reactivity: 7, tone: 5, frequencyMinutes: 45, initiative: 30, messageStyle: 'balanced', lifeRhythm: {}, uniqueBehavior: { proactiveTone: 'quick' } }
   },
   {
     id: 'chatty_burster',
     title: '수다쟁이 친구',
     catchphrase: '한 마디를 다섯 마디로.',
     detail: '짧게 톡톡 여러 번 보내요.',
-    values: { proactivePatience: 4, responseDelayMin: 0, responseDelayMax: 40, messageGapMin: 1, messageGapMax: 2, responseTime: 8, thinkingTime: 3, reactivity: 9, tone: 7, frequencyMinutes: 30, initiative: 55, messageStyle: 'burst' }
+    values: { proactivePatience: 4, responseDelayMin: 0, responseDelayMax: 40, messageGapMin: 1, messageGapMax: 2, responseTime: 8, thinkingTime: 3, reactivity: 9, tone: 7, frequencyMinutes: 30, initiative: 55, messageStyle: 'burst', lifeRhythm: { eveningActive: true, weekendActive: true }, uniqueBehavior: { proactiveTone: 'chatty' } }
   },
   {
     id: 'reaction_rich',
     title: '애교 많은 타입',
     catchphrase: '이모티콘 없인 대화 못 해요.',
     detail: '귀엽고 감정 표현이 커요.',
-    values: { proactivePatience: 5, responseDelayMin: 3, responseDelayMax: 50, messageGapMin: 1, messageGapMax: 3, responseTime: 8, thinkingTime: 3, reactivity: 10, tone: 8, frequencyMinutes: 35, initiative: 60, messageStyle: 'balanced' }
+    values: { proactivePatience: 5, responseDelayMin: 3, responseDelayMax: 50, messageGapMin: 1, messageGapMax: 3, responseTime: 8, thinkingTime: 3, reactivity: 10, tone: 8, frequencyMinutes: 35, initiative: 60, messageStyle: 'balanced', lifeRhythm: { eveningActive: true }, uniqueBehavior: { proactiveTone: 'cute' } }
   },
   {
     id: 'steady_partner',
     title: '다정한 연인',
     catchphrase: '오늘 하루 어땠어, 챙기는 사람.',
     detail: '부드럽고 안정적으로 챙겨요.',
-    values: { proactivePatience: 2, responseDelayMin: 5, responseDelayMax: 90, messageGapMin: 1, messageGapMax: 4, responseTime: 7, thinkingTime: 5, reactivity: 7, tone: 7, frequencyMinutes: 50, initiative: 45, messageStyle: 'balanced' }
+    values: { proactivePatience: 2, responseDelayMin: 5, responseDelayMax: 90, messageGapMin: 1, messageGapMax: 4, responseTime: 7, thinkingTime: 5, reactivity: 7, tone: 7, frequencyMinutes: 50, initiative: 45, messageStyle: 'balanced', lifeRhythm: { eveningActive: true, weekendActive: true }, uniqueBehavior: { proactiveTone: 'stable_affection' } }
   },
   {
     id: 'cool_direct',
     title: '쿨한 사람',
     catchphrase: '용건만 간단히.',
     detail: '빠르지만 담백해요.',
-    values: { proactivePatience: 1, responseDelayMin: 5, responseDelayMax: 120, messageGapMin: 1, messageGapMax: 3, responseTime: 7, thinkingTime: 4, reactivity: 3, tone: 4, frequencyMinutes: 90, initiative: 15, messageStyle: 'balanced' }
+    values: { proactivePatience: 1, responseDelayMin: 5, responseDelayMax: 120, messageGapMin: 1, messageGapMax: 3, responseTime: 7, thinkingTime: 4, reactivity: 3, tone: 4, frequencyMinutes: 90, initiative: 15, messageStyle: 'balanced', lifeRhythm: {}, uniqueBehavior: { proactiveTone: 'cool' } }
   },
   {
     id: 'anxious_attached',
     title: '조금 집착하는 타입',
     catchphrase: '읽씹하면 3개 더 와요.',
     detail: '답이 없으면 몇 번 더 말해요.',
-    values: { proactivePatience: 7, responseDelayMin: 0, responseDelayMax: 90, messageGapMin: 1, messageGapMax: 4, responseTime: 8, thinkingTime: 5, reactivity: 8, tone: 7, frequencyMinutes: 20, initiative: 70, messageStyle: 'balanced' }
+    values: { proactivePatience: 7, responseDelayMin: 0, responseDelayMax: 90, messageGapMin: 1, messageGapMax: 4, responseTime: 8, thinkingTime: 5, reactivity: 8, tone: 7, frequencyMinutes: 20, initiative: 70, messageStyle: 'balanced', lifeRhythm: { eveningActive: true }, uniqueBehavior: { proactiveTone: 'anxious' } }
   },
   {
     id: 'dry_caring',
     title: '무심한데 챙김',
     catchphrase: '말은 없어도 챙길 건 챙겨요.',
     detail: '담백하지만 은근히 챙겨요.',
-    values: { proactivePatience: 2, responseDelayMin: 20, responseDelayMax: 240, messageGapMin: 2, messageGapMax: 5, responseTime: 5, thinkingTime: 5, reactivity: 4, tone: 4, frequencyMinutes: 90, initiative: 25, messageStyle: 'balanced' }
+    values: { proactivePatience: 2, responseDelayMin: 20, responseDelayMax: 240, messageGapMin: 2, messageGapMax: 5, responseTime: 5, thinkingTime: 5, reactivity: 4, tone: 4, frequencyMinutes: 90, initiative: 25, messageStyle: 'balanced', lifeRhythm: { weekdayQuiet: true }, uniqueBehavior: { proactiveTone: 'dry_caring' } }
   },
   {
     id: 'easygoing_friend',
     title: '느긋한 친구',
     catchphrase: '아 미안, 폰 보고 있었어.',
     detail: '천천히 봐도 자연스러워요.',
-    values: { proactivePatience: 1, responseDelayMin: 60, responseDelayMax: 420, messageGapMin: 2, messageGapMax: 6, responseTime: 3, thinkingTime: 5, reactivity: 4, tone: 4, frequencyMinutes: 120, initiative: 15, messageStyle: 'balanced' }
+    values: { proactivePatience: 1, responseDelayMin: 60, responseDelayMax: 420, messageGapMin: 2, messageGapMax: 6, responseTime: 3, thinkingTime: 5, reactivity: 4, tone: 4, frequencyMinutes: 120, initiative: 15, messageStyle: 'balanced', lifeRhythm: { nightQuiet: true }, uniqueBehavior: { proactiveTone: 'easygoing' } }
   },
   {
     id: 'thoughtful_listener',
     title: '조심스러운 사람',
     catchphrase: '한 줄도 세 번 고쳐 써요.',
     detail: '천천히 듣고 깊게 답해요.',
-    values: { proactivePatience: 1, responseDelayMin: 120, responseDelayMax: 600, messageGapMin: 3, messageGapMax: 8, responseTime: 3, thinkingTime: 9, reactivity: 4, tone: 5, frequencyMinutes: 180, initiative: 10, messageStyle: 'long' }
+    values: { proactivePatience: 1, responseDelayMin: 120, responseDelayMax: 600, messageGapMin: 3, messageGapMax: 8, responseTime: 3, thinkingTime: 9, reactivity: 4, tone: 5, frequencyMinutes: 180, initiative: 10, messageStyle: 'long', lifeRhythm: { nightQuiet: true }, uniqueBehavior: { proactiveTone: 'careful' } }
   },
   {
     id: 'late_night_mood',
     title: '새벽 감성 타입',
     catchphrase: '낮엔 잠잠, 밤엔 철학자.',
     detail: '밤에는 말이 깊어져요.',
-    values: { proactivePatience: 3, responseDelayMin: 180, responseDelayMax: 900, messageGapMin: 3, messageGapMax: 9, responseTime: 3, thinkingTime: 9, reactivity: 6, tone: 8, frequencyMinutes: 150, initiative: 18, messageStyle: 'long' }
+    values: { proactivePatience: 3, responseDelayMin: 180, responseDelayMax: 900, messageGapMin: 3, messageGapMax: 9, responseTime: 3, thinkingTime: 9, reactivity: 6, tone: 8, frequencyMinutes: 150, initiative: 18, messageStyle: 'long', lifeRhythm: { lateNightMood: true }, uniqueBehavior: { proactiveTone: 'late_night' } }
   },
   {
     id: 'busy_real_life',
     title: '바쁜 현실친구',
     catchphrase: '지금 회의 중, 이따 답장할게.',
     detail: '바빠서 답장이 늦어요.',
-    values: { proactivePatience: 1, responseDelayMin: 180, responseDelayMax: 1800, messageGapMin: 3, messageGapMax: 10, responseTime: 2, thinkingTime: 5, reactivity: 5, tone: 5, frequencyMinutes: 240, initiative: 8, messageStyle: 'balanced' }
+    values: { proactivePatience: 1, responseDelayMin: 180, responseDelayMax: 1800, messageGapMin: 3, messageGapMax: 10, responseTime: 2, thinkingTime: 5, reactivity: 5, tone: 5, frequencyMinutes: 240, initiative: 8, messageStyle: 'balanced', lifeRhythm: { weekdayQuiet: true, busySchedule: true }, uniqueBehavior: { proactiveTone: 'busy' } }
   },
   {
     id: 'public_figure',
     title: '아이돌/공인 느낌',
     catchphrase: '스케줄 끝나고 연락할게요.',
     detail: '답장은 늦고 말투는 조심스러워요.',
-    values: { proactivePatience: 1, responseDelayMin: 300, responseDelayMax: 2700, messageGapMin: 3, messageGapMax: 10, responseTime: 2, thinkingTime: 6, reactivity: 4, tone: 6, frequencyMinutes: 360, initiative: 5, messageStyle: 'balanced' }
+    values: { proactivePatience: 1, responseDelayMin: 300, responseDelayMax: 2700, messageGapMin: 3, messageGapMax: 10, responseTime: 2, thinkingTime: 6, reactivity: 4, tone: 6, frequencyMinutes: 360, initiative: 5, messageStyle: 'balanced', lifeRhythm: { busySchedule: true, nightQuiet: true }, uniqueBehavior: { proactiveTone: 'public_figure' } }
   }
 ] as const;
 
@@ -215,6 +224,8 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
       tone: clampNumber(draft.tone, 1, 10, 8),
       frequencyMinutes: Math.max(1, Number(draft.frequencyMinutes) || 10),
       initiative: clampNumber(draft.initiative, 0, 100, 40),
+      lifeRhythm: normalizeLifeRhythm(draft.lifeRhythm),
+      uniqueBehavior: normalizeUniqueBehavior(draft),
       locationName: String(draft.locationName || 'Seoul'),
       timeZone: String(draft.timeZone || 'Asia/Seoul'),
       latitude: Number(draft.latitude) || 37.5665,
@@ -256,8 +267,18 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
   }
 
   function applyReplyPreset(preset: typeof REPLY_PRESETS[number]) {
-    setDraft(prev => prev ? { ...prev, ...preset.values, replyPresetId: preset.id } : prev);
+    setDraft(prev => prev ? {
+      ...prev,
+      ...preset.values,
+      lifeRhythm: normalizeLifeRhythm(preset.values.lifeRhythm),
+      uniqueBehavior: normalizeUniqueBehavior(preset.values),
+      replyPresetId: preset.id
+    } : prev);
     setInlineStatus(`${preset.title} 연락 유형을 적용했습니다. 필요하면 세부 타이밍 조절에서 직접 바꿀 수 있습니다.`);
+  }
+
+  function setLifeRhythm(key: keyof NonNullable<SNSGodCharacter['lifeRhythm']>, value: boolean) {
+    setDraft(prev => prev ? { ...prev, lifeRhythm: { ...normalizeLifeRhythm(prev.lifeRhythm), [key]: value } } : prev);
   }
 
   async function chooseImage(key: 'avatar' | 'coverImage') {
@@ -466,9 +487,11 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
             <View style={styles.presetGrid}>
               {REPLY_PRESETS.map(preset => {
                 const selected = selectedReplyPresetId(draft) === preset.id;
+                const customized = selected && isReplyPresetCustomized(draft, preset);
                 return (
                   <Pressable key={preset.id} onPress={() => applyReplyPreset(preset)} style={[styles.presetCard, selected && styles.presetCardSelected]}>
                     <Text style={[styles.presetTitle, selected && styles.presetTitleSelected]}>{preset.title}</Text>
+                    {selected ? <Text style={styles.presetBadge}>{customized ? '기반 · 수정됨' : '선택됨'}</Text> : null}
                     <Text style={[styles.presetCatchphrase, selected && styles.presetCatchphraseSelected]}>{preset.catchphrase}</Text>
                     <Text style={[styles.presetSummary, selected && styles.presetSummarySelected]}>{preset.detail}</Text>
                   </Pressable>
@@ -492,6 +515,19 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
                 <SliderField label="캐릭터 말투 개성" value={draft.tone} min={1} max={10} leftLabel="1 담백" rightLabel="10 강한 개성" onChange={value => set('tone', value)} />
                 <NumberField label="먼저 말 걸 기회 간격(분)" value={draft.frequencyMinutes} onChange={value => set('frequencyMinutes', value)} help="작을수록 캐릭터가 먼저 말을 걸지 확인하는 기회가 자주 옵니다." />
                 <SliderField label="먼저 말 걸 확률" value={draft.initiative} min={0} max={100} step={5} leftLabel="0 안 함" rightLabel="100 자주" onChange={value => set('initiative', value)} />
+                <View style={styles.rhythmBlock}>
+                  <Text style={styles.subhead}>생활 리듬</Text>
+                  <Text style={styles.help}>사람마다 연락이 잘 되는 시간이 달라요. 켜두면 시간대에 따라 답장 속도와 선톡 빈도가 자연스럽게 달라집니다.</Text>
+                  {LIFE_RHYTHM_OPTIONS.map(([key, label, help]) => (
+                    <SwitchField
+                      key={key}
+                      label={label}
+                      help={help}
+                      value={normalizeLifeRhythm(draft.lifeRhythm)[key] === true}
+                      onValueChange={value => setLifeRhythm(key, value)}
+                    />
+                  ))}
+                </View>
               </View>
             ) : null}
           </Section>
@@ -644,6 +680,8 @@ function normalizeDraft(character: SNSGodCharacter): SNSGodCharacter {
     tone: Number(character.tone ?? 8),
     frequencyMinutes: Number(character.frequencyMinutes ?? 10),
     initiative: Number(character.initiative ?? 40),
+    lifeRhythm: normalizeLifeRhythm(character.lifeRhythm),
+    uniqueBehavior: normalizeUniqueBehavior(character),
     statusMessage: String(character.statusMessage || '접속 중'),
     locationName: String(character.locationName || 'Seoul'),
     timeZone: String(character.timeZone || 'Asia/Seoul'),
@@ -665,8 +703,43 @@ function normalizeDraft(character: SNSGodCharacter): SNSGodCharacter {
 function selectedReplyPresetId(character: Partial<SNSGodCharacter>): string {
   const saved = String(character.replyPresetId || '');
   if (REPLY_PRESETS.some(preset => preset.id === saved)) return saved;
-  const matched = REPLY_PRESETS.find(preset => Object.entries(preset.values).every(([key, value]) => character[key as keyof SNSGodCharacter] === value));
+  const matched = REPLY_PRESETS.find(preset => presetScalarKeys(preset).every(([key, value]) => character[key as keyof SNSGodCharacter] === value));
   return matched?.id || '';
+}
+
+function presetScalarKeys(preset: typeof REPLY_PRESETS[number]) {
+  return Object.entries(preset.values).filter(([key]) => key !== 'lifeRhythm' && key !== 'uniqueBehavior');
+}
+
+function isReplyPresetCustomized(character: Partial<SNSGodCharacter>, preset: typeof REPLY_PRESETS[number]): boolean {
+  const scalarChanged = presetScalarKeys(preset).some(([key, value]) => character[key as keyof SNSGodCharacter] !== value);
+  if (scalarChanged) return true;
+  const expectedRhythm = normalizeLifeRhythm(preset.values.lifeRhythm);
+  const currentRhythm = normalizeLifeRhythm(character.lifeRhythm);
+  const rhythmChanged = LIFE_RHYTHM_OPTIONS.some(([key]) => expectedRhythm[key] !== currentRhythm[key]);
+  const expectedTone = preset.values.uniqueBehavior?.proactiveTone || '';
+  const currentTone = character.uniqueBehavior?.proactiveTone || '';
+  return rhythmChanged || expectedTone !== currentTone;
+}
+
+function normalizeLifeRhythm(value: SNSGodCharacter['lifeRhythm']) {
+  return {
+    weekdayQuiet: value?.weekdayQuiet === true,
+    eveningActive: value?.eveningActive === true,
+    lateNightMood: value?.lateNightMood === true,
+    weekendActive: value?.weekendActive === true,
+    nightQuiet: value?.nightQuiet === true,
+    busySchedule: value?.busySchedule === true
+  };
+}
+
+function normalizeUniqueBehavior(character: Partial<SNSGodCharacter>) {
+  const tone = String(character.uniqueBehavior?.proactiveTone || '');
+  const allowed = REPLY_PRESETS.some(preset => preset.values.uniqueBehavior.proactiveTone === tone);
+  return {
+    ...(character.uniqueBehavior || {}),
+    proactiveTone: allowed ? tone as NonNullable<SNSGodCharacter['uniqueBehavior']>['proactiveTone'] : undefined
+  };
 }
 
 function normalizedReferenceImages(character: SNSGodCharacter): string[] {
@@ -874,6 +947,20 @@ function SwitchRow({ label, value, onValueChange }: { label: string; value: bool
   );
 }
 
+function SwitchField({ label, help, value, onValueChange }: { label: string; help: string; value: boolean; onValueChange: (value: boolean) => void }) {
+  return (
+    <View style={styles.switchField}>
+      <View style={styles.switchFieldHeader}>
+        <View style={styles.switchFieldText}>
+          <Text style={styles.switchLabel}>{label}</Text>
+          <Text style={styles.help}>{help}</Text>
+        </View>
+        <Switch value={value} onValueChange={onValueChange} />
+      </View>
+    </View>
+  );
+}
+
 function ListCard({ title, subtitle, body, onDelete }: { title: string; subtitle?: string; body?: string; onDelete: () => void }) {
   return (
     <View style={styles.listCard}>
@@ -941,6 +1028,7 @@ const styles = StyleSheet.create({
   presetCardSelected: { backgroundColor: '#fff1bf', borderColor: '#b79427' },
   presetTitle: { color: colors.text, fontWeight: '900', fontSize: 14 },
   presetTitleSelected: { color: '#241a00' },
+  presetBadge: { alignSelf: 'flex-start', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 7, backgroundColor: '#241a00', color: '#fffefa', fontSize: 10, fontWeight: '900', overflow: 'hidden' },
   presetCatchphrase: { color: '#9a5a00', fontSize: 12, fontWeight: '900', lineHeight: 17 },
   presetCatchphraseSelected: { color: '#7a4300' },
   presetSummary: { color: colors.sub, fontSize: 12, lineHeight: 18 },
@@ -949,11 +1037,15 @@ const styles = StyleSheet.create({
   advancedToggleText: { color: colors.text, fontWeight: '900' },
   advancedToggleIcon: { color: colors.text, fontWeight: '900', fontSize: 18 },
   advancedBody: { gap: 10, paddingTop: 2 },
+  rhythmBlock: { gap: 8, paddingTop: 6 },
   palette: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 },
   swatch: { width: 26, height: 26, borderRadius: 13, borderWidth: 1, borderColor: '#8b867b' },
   swatchActive: { borderWidth: 3, borderColor: '#222222' },
   switchRow: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   switchLabel: { color: colors.text, fontWeight: '900' },
+  switchField: { borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', padding: 10 },
+  switchFieldHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  switchFieldText: { flex: 1, gap: 3 },
   imageRow: { flexDirection: 'row', gap: 10, alignItems: 'center' },
   preview: { width: 74, height: 74, borderRadius: 12, backgroundColor: '#eee8dc' },
   previewWide: { width: 132 },

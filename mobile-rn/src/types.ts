@@ -114,6 +114,29 @@ export type SnsPlatformOptions = {
   autoImage?: boolean;
 };
 
+export type LifeRhythmToggles = {
+  weekdayQuiet?: boolean;
+  eveningActive?: boolean;
+  lateNightMood?: boolean;
+  weekendActive?: boolean;
+  nightQuiet?: boolean;
+  busySchedule?: boolean;
+};
+
+export type ConversationProactiveTone =
+  | 'quick'
+  | 'chatty'
+  | 'cute'
+  | 'stable_affection'
+  | 'cool'
+  | 'anxious'
+  | 'dry_caring'
+  | 'easygoing'
+  | 'careful'
+  | 'late_night'
+  | 'busy'
+  | 'public_figure';
+
 export type SNSGodCharacter = {
   id: string;
   name: string;
@@ -126,6 +149,11 @@ export type SNSGodCharacter = {
   userDescription?: string;
   firstMessage?: string;
   replyPresetId?: string;
+  lifeRhythm?: LifeRhythmToggles;
+  uniqueBehavior?: {
+    proactiveTone?: ConversationProactiveTone;
+    [key: string]: unknown;
+  };
   messageStyle?: 'balanced' | 'long' | 'burst';
   responseDelayMin?: number;
   responseDelayMax?: number;

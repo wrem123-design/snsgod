@@ -2,6 +2,7 @@ import { PromptSet, SNSGodCharacter, SNSGodRoom, SNSGodState } from '../types';
 import { MAX_CONTEXT_MESSAGES } from './limits';
 import { lorePromptBlock, resolveActiveLore } from './loreEngine';
 import { buildTimeRealityInstruction } from './timeReality';
+import { characterWithConversationRhythm, conversationRhythmInstruction } from './conversationRhythm';
 
 export type ChatPromptMode = 'reply' | 'proactive' | 'reroll';
 
@@ -190,6 +191,7 @@ function modeInstruction(state: SNSGodState, character: SNSGodCharacter, room: S
 }
 
 export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, room: SNSGodRoom, latestUserText: string, options: ChatPromptOptions = {}) {
+  const rhythmCharacter = characterWithConversationRhythm(state, character);
   const prompts = { ...DEFAULT_PROMPTS, ...(state.config.prompts || {}) };
   const contextLimit = Number(state.config.apiProfiles[state.config.apiType]?.contextMessageLimit || MAX_CONTEXT_MESSAGES);
   const messages = (state.messages[room.id] || []).slice(-contextLimit);
@@ -246,10 +248,11 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
     `User visible name in this room: ${userNameFor(state, character, room)}.`,
     `User profile: ${userProfileFor(state, character) || '(empty)'}`,
     `Character profile: ${character.prompt || '(empty)'}`,
-    `Character sliders: response=${character.responseTime ?? '(default)'}, thinking=${character.thinkingTime ?? '(default)'}, reactivity=${character.reactivity ?? '(default)'}, tone=${character.tone ?? '(default)'}`,
-    messageStyleInstruction(character),
+    `Character sliders: response=${rhythmCharacter.responseTime ?? '(default)'}, thinking=${rhythmCharacter.thinkingTime ?? '(default)'}, reactivity=${rhythmCharacter.reactivity ?? '(default)'}, tone=${rhythmCharacter.tone ?? '(default)'}`,
+    messageStyleInstruction(rhythmCharacter),
     `Reply timing: this reply is delivered after about ${Math.round(options.replyDelaySeconds || 0)} seconds. If the delay is noticeably long, you may briefly imply a natural reason, but do not over-explain.`,
     modeInstruction(state, character, room, options.mode || 'reply'),
+    conversationRhythmInstruction(state, character),
     buildTimeRealityInstruction(state, character, options.mode === 'proactive' ? 'proactive' : 'reply'),
     imageInstruction,
     roomNote ? `Room-only relationship/context note:\n${roomNote}` : '',

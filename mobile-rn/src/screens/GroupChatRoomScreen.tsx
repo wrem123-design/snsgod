@@ -13,6 +13,7 @@ import { shouldAllowChatImageGeneration } from '../logic/chatImageGuard';
 import { appendDebugLog } from '../logic/debugLog';
 import { isRenderableMediaUri } from '../logic/media';
 import { characterReferenceImageForPrompt } from '../logic/imageReference';
+import { characterWithConversationRhythm } from '../logic/conversationRhythm';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -26,10 +27,11 @@ function clampDelay(value: unknown, fallback: number, max = 2700) {
   return Math.max(0, Math.min(max, number));
 }
 
-function characterDelayMs(character: SNSGodCharacter) {
-  const min = clampDelay(character.responseDelayMin, 1, 120);
-  const max = Math.max(min, clampDelay(character.responseDelayMax, 8, 2700));
-  const speed = Math.max(1, Math.min(10, Number(character.responseTime || 6)));
+function characterDelayMs(state: SNSGodState | undefined, character: SNSGodCharacter) {
+  const timedCharacter = characterWithConversationRhythm(state, character);
+  const min = clampDelay(timedCharacter.responseDelayMin, 1, 120);
+  const max = Math.max(min, clampDelay(timedCharacter.responseDelayMax, 8, 2700));
+  const speed = Math.max(1, Math.min(10, Number(timedCharacter.responseTime || 6)));
   const randomSeconds = min + Math.random() * Math.max(0, max - min);
   const speedFactor = 1.15 - speed * 0.07;
   const seconds = Math.max(min, Math.min(max, randomSeconds * speedFactor));
@@ -192,7 +194,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
   async function markReadLater(targetRoomId: string, readers: SNSGodCharacter[]) {
     const firstReader = readers[0];
     if (!firstReader) return;
-    await sleep(characterDelayMs(firstReader));
+    await sleep(characterDelayMs(stateRef.current, firstReader));
     await commitCurrent(current => markUserMessagesRead(current, targetRoomId));
   }
 
@@ -212,7 +214,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
       const firstSpeaker = chooseFallbackSpeaker(participants, stateRef.current.messages[roomId] || []);
       if (firstSpeaker) {
         setTypingCharacters([firstSpeaker]);
-        await sleep(characterDelayMs(firstSpeaker));
+        await sleep(characterDelayMs(stateRef.current, firstSpeaker));
         if (!isCurrentChatJob(roomId, jobId)) return;
         await commitCurrent(current => markUserMessagesRead(current, roomId));
       }

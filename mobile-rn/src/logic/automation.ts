@@ -10,6 +10,7 @@ import { isRoomBusy } from './chatJobs';
 import { notifyRoomMessage, pushNotification } from './notifications';
 import { runDailyDiaryMemory } from './dailyDiary';
 import { characterReferenceImages, randomReferenceImage } from './imageReference';
+import { characterWithConversationRhythm, conversationRhythmInstruction } from './conversationRhythm';
 
 function minutesSince(timestamp?: number): number {
   if (!timestamp) return 9999;
@@ -32,9 +33,10 @@ function eligiblePrivateRooms(state: SNSGodState, firstMessageOnly: boolean): { 
         if (sent[room.id]) continue;
         if (messages.some(message => message.role === 'user')) continue;
       }
-      const frequency = Math.max(1, Number(character.frequencyMinutes || 10));
+      const rhythmCharacter = characterWithConversationRhythm(state, character);
+      const frequency = Math.max(1, Number(rhythmCharacter.frequencyMinutes || 10));
       if (minutesSince(room.lastActivity || room.createdAt) < frequency) continue;
-      const chance = adjustedInitiative(character);
+      const chance = adjustedInitiative(rhythmCharacter);
       if (Math.random() * 100 > chance) continue;
       pairs.push({ character, room });
     }
@@ -49,13 +51,15 @@ function eligibleGroupRooms(state: SNSGodState): { room: GroupRoom; speaker: SNS
     if (isRoomBusy(room.id)) continue;
     const participants = state.characters.filter(character => character.randomTemporary !== true && room.participantIds.includes(character.id) && character.enabled !== false && character.proactiveEnabled !== false);
     if (!participants.length) continue;
-    const frequency = Math.max(1, Math.min(...participants.map(character => Number(character.frequencyMinutes || 10))));
+    const rhythmParticipants = participants.map(character => characterWithConversationRhythm(state, character));
+    const frequency = Math.max(1, Math.min(...rhythmParticipants.map(character => Number(character.frequencyMinutes || 10))));
     if (minutesSince(room.lastActivity || room.createdAt) < frequency) continue;
     const lastCharacterId = [...(state.messages[room.id] || [])].reverse().find(message => message.role === 'character')?.characterId;
     const pool = participants.filter(character => character.id !== lastCharacterId);
     const speakerPool = pool.length ? pool : participants;
     const speaker = speakerPool[Math.floor(Math.random() * speakerPool.length)];
-    const chance = Math.max(0, Math.min(100, Number(speaker.initiative ?? 40)));
+    const rhythmSpeaker = characterWithConversationRhythm(state, speaker);
+    const chance = Math.max(0, Math.min(100, Number(rhythmSpeaker.initiative ?? 40)));
     if (Math.random() * 100 > chance) continue;
     pairs.push({ room, speaker, participants });
   }
@@ -142,9 +146,10 @@ function runPhoneInvite(state: SNSGodState): SNSGodState | undefined {
   const sent = (state.__phoneInviteAt || {}) as Record<string, number>;
   const candidates = state.characters.filter(character => {
     if (character.randomTemporary === true || character.enabled === false || character.proactiveEnabled === false) return false;
-    const intervalMinutes = Math.max(60, Number(character.frequencyMinutes || 10) * 6);
+    const rhythmCharacter = characterWithConversationRhythm(state, character);
+    const intervalMinutes = Math.max(60, Number(rhythmCharacter.frequencyMinutes || 10) * 6);
     if (minutesSince(sent[character.id]) < intervalMinutes) return false;
-    const chance = Math.max(0, Math.min(18, Number(character.initiative ?? 40) / 6));
+    const chance = Math.max(0, Math.min(18, Number(rhythmCharacter.initiative ?? 40) / 6));
     return Math.random() * 100 <= chance;
   });
   if (!candidates.length) return undefined;
@@ -331,6 +336,7 @@ async function runPrivateFirstMessage(state: SNSGodState, firstMessageOnly: bool
     `Character profile: ${character.prompt || '(empty)'}`,
     `Recent chat:\n${transcript || '(empty)'}`,
     firstMessageOnly ? '' : proactiveInstruction(state, character, room.id),
+    conversationRhythmInstruction(state, character),
     buildTimeRealityInstruction(state, character, 'proactive'),
     'Return only JSON: {"reactionDelay":0,"messages":[{"content":"short natural Korean message"}]}.'
   ].join('\n\n');

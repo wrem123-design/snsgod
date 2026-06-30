@@ -12,6 +12,7 @@ import { appendMessage, findCharacter, findRoom, roomMessages, updateCharacter }
 import { chatNowContext, isImplausibleCompletedActivity, repairTimeRealityInstruction, softenImplausibleCompletedActivity } from './timeReality';
 import { SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
 import { appendDebugLog } from './debugLog';
+import { characterWithConversationRhythm } from './conversationRhythm';
 
 type CommitPatch = (patch: (current: SNSGodState) => SNSGodState) => Promise<void> | void;
 
@@ -64,10 +65,11 @@ function clampDelay(value: unknown, fallback: number, max = 2700) {
   return Math.max(0, Math.min(max, number));
 }
 
-function characterDelayMs(character: SNSGodCharacter) {
-  const min = clampDelay(character.responseDelayMin, 1, 120);
-  const max = Math.max(min, clampDelay(character.responseDelayMax, 8, 2700));
-  const speed = Math.max(1, Math.min(10, Number(character.responseTime || 6)));
+function characterDelayMs(state: SNSGodState | undefined, character: SNSGodCharacter) {
+  const timedCharacter = characterWithConversationRhythm(state, character);
+  const min = clampDelay(timedCharacter.responseDelayMin, 1, 120);
+  const max = Math.max(min, clampDelay(timedCharacter.responseDelayMax, 8, 2700));
+  const speed = Math.max(1, Math.min(10, Number(timedCharacter.responseTime || 6)));
   const randomSeconds = min + Math.random() * Math.max(0, max - min);
   const speedFactor = 1.15 - speed * 0.07;
   const seconds = Math.max(min, Math.min(max, randomSeconds * speedFactor));
@@ -159,7 +161,7 @@ export async function startReplyJob(input: StartReplyJobInput) {
   try {
     const initial = roomStillValid(input.getState(), input.roomId, input.characterId);
     if (!initial) return;
-    const replyDelayMs = characterDelayMs(initial.character);
+    const replyDelayMs = characterDelayMs(input.getState() || undefined, initial.character);
     await sleep(replyDelayMs);
     if (!isCurrentChatJob(input.roomId, jobId)) return;
 

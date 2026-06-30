@@ -52,7 +52,11 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
     .filter(post => post.platform === platform && (!selectedCharacterId || post.characterId === selectedCharacterId))
     .slice()
     .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
-  const dmThreads = (state.snsDmThreads || []).filter(thread => !selectedCharacterId || thread.characterId === selectedCharacterId);
+  const dmThreads = (state.snsDmThreads || []).filter(thread => {
+    if (selectedCharacterId && thread.characterId !== selectedCharacterId) return false;
+    const post = thread.postId ? (state.snsPosts || []).find(item => item.id === thread.postId) : undefined;
+    return !post || post.platform === platform;
+  });
 
   useEffect(() => {
     const existingIds = new Set((state.snsDmThreads || []).map(thread => thread.id));
@@ -308,6 +312,35 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
     }
   }
 
+  function deleteDmThread(threadId: string) {
+    const thread = (state.snsDmThreads || []).find(item => item.id === threadId);
+    if (!thread) return;
+    Alert.alert('DM 삭제', '이 DM 대화내역을 삭제할까요?', [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '삭제',
+        style: 'destructive',
+        onPress: async () => {
+          const nextPosts = (state.snsPosts || []).map(post => {
+            if (post.id !== thread.postId || !post.dms?.length) return post;
+            const dms = post.dms.filter((dm, index) => {
+              const generatedId = `postdmthread:${post.id}:${dm.id || index}`;
+              return generatedId !== thread.id;
+            });
+            return { ...post, dms };
+          });
+          await onChange({
+            ...state,
+            snsPosts: nextPosts,
+            snsDmThreads: (state.snsDmThreads || []).filter(item => item.id !== threadId)
+          });
+          if (activeDmId === threadId) setActiveDmId('');
+          if (dmHub?.postId === thread.postId) setDmHub(null);
+        }
+      }
+    ]);
+  }
+
   function postContext(post: SNSPost) {
     return `${platform === 'instagram' ? 'Instagram' : 'X'} post by ${post.displayName || selectedCharacter?.name || 'Character'}: ${post.content}`;
   }
@@ -403,6 +436,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
             onChangeText={setDmText}
             onClose={() => setActiveDmId('')}
             onSend={() => sendDmReply(true)}
+            onDelete={activeReadOnlyThread?.id && (state.snsDmThreads || []).some(thread => thread.id === activeReadOnlyThread.id) ? () => deleteDmThread(activeReadOnlyThread.id) : undefined}
             loading={loading}
           />
         ) : (
@@ -416,6 +450,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
             onChangeText={setDmText}
             onClose={() => setActiveDmId('')}
             onSend={() => sendDmReply(true)}
+            onDelete={activeUserThread?.id ? () => deleteDmThread(activeUserThread.id) : undefined}
             loading={loading}
           />
         )
@@ -528,21 +563,21 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
         </Pressable>
       </View> : null}
 
-      {showDmList && dmThreads.length ? (
-        <View style={styles.dmStrip}>
-          <Text style={styles.dmTitle}>SNS DM</Text>
-          <FlatList
-            horizontal
-            data={dmThreads.slice(0, 8)}
-            keyExtractor={item => item.id}
-            contentContainerStyle={styles.dmList}
-            renderItem={({ item }) => (
-              <Pressable onPress={() => setActiveDmId(item.id)}>
-                <DmCard thread={item} platform={platform} character={state.characters.find(character => character.id === item.characterId)} userName={state.config.userName || '나'} />
-              </Pressable>
-            )}
-          />
-        </View>
+      {showDmList ? (
+        <DmInboxModal
+          platform={platform}
+          selectedCharacter={selectedCharacter}
+          threads={dmThreads}
+          posts={state.snsPosts || []}
+          characters={state.characters}
+          userName={state.config.userName || '나'}
+          onClose={() => setShowDmList(false)}
+          onOpen={threadId => {
+            setActiveDmId(threadId);
+            setShowDmList(false);
+          }}
+          onDelete={deleteDmThread}
+        />
       ) : null}
 
       <FlatList
@@ -812,6 +847,99 @@ function DmAvatarStack({ participants, character }: { participants: SNSDmPartici
   );
 }
 
+function dmPostPreview(post?: SNSPost) {
+  const text = String(post?.content || post?.imageCaption || '').trim();
+  if (text) return text;
+  if (post?.image) return '이미지가 포함된 SNS 게시물';
+  return '연결된 SNS 게시물';
+}
+
+function DmInboxModal({ platform, selectedCharacter, threads, posts, characters, userName, onClose, onOpen, onDelete }: {
+  platform: SNSPost['platform'];
+  selectedCharacter?: SNSGodCharacter;
+  threads: SNSDmThread[];
+  posts: SNSPost[];
+  characters: SNSGodCharacter[];
+  userName: string;
+  onClose: () => void;
+  onOpen: (threadId: string) => void;
+  onDelete: (threadId: string) => void;
+}) {
+  const sortedThreads = [...threads].sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
+  const title = selectedCharacter ? `${selectedCharacter.name} DM` : '전체 DM';
+  return (
+    <View style={styles.modal}>
+      <View style={[styles.dmInboxPanel, platform === 'twitter' && styles.xDmPanel]}>
+        <View style={[styles.dmPanelHeader, platform === 'twitter' && styles.xDmPanelHeader]}>
+          <View style={styles.dmHubHeaderLeft}>
+            {selectedCharacter ? <Avatar character={selectedCharacter} size={34} /> : <View style={styles.dmInboxAllAvatar}><Text style={styles.dmInboxAllText}>ALL</Text></View>}
+            <View>
+              <Text style={[styles.dmPanelTitle, platform === 'twitter' && styles.xDmPanelTitle]}>{title}</Text>
+              <Text style={[styles.dmHubSub, platform === 'twitter' && styles.xDmPanelSub]}>{platformName(platform)} · {sortedThreads.length}개</Text>
+            </View>
+          </View>
+          <Pressable onPress={onClose} style={styles.dmPanelClose}><Text style={styles.dmPanelCloseText}>닫기</Text></Pressable>
+        </View>
+        <FlatList
+          data={sortedThreads}
+          keyExtractor={item => item.id}
+          contentContainerStyle={styles.dmInboxList}
+          ListEmptyComponent={<Text style={[styles.dmHubEmpty, platform === 'twitter' && styles.xSubtitle]}>아직 이 캐릭터의 DM이 없습니다.</Text>}
+          renderItem={({ item }) => {
+            const character = characters.find(candidate => candidate.id === item.characterId);
+            const post = item.postId ? posts.find(candidate => candidate.id === item.postId) : undefined;
+            return (
+              <DmInboxRow
+                thread={item}
+                post={post}
+                character={character}
+                platform={platform}
+                userName={userName}
+                onOpen={() => onOpen(item.id)}
+                onDelete={() => onDelete(item.id)}
+              />
+            );
+          }}
+        />
+      </View>
+    </View>
+  );
+}
+
+function DmInboxRow({ thread, post, character, platform, userName, onOpen, onDelete }: {
+  thread: SNSDmThread;
+  post?: SNSPost;
+  character?: SNSGodCharacter;
+  platform: SNSPost['platform'];
+  userName: string;
+  onOpen: () => void;
+  onDelete: () => void;
+}) {
+  const normalized = normalizeSnsDmThread(thread, post, character, userName);
+  const last = normalized.messages[normalized.messages.length - 1];
+  const sender = last ? dmSenderName(last, character, userName, normalized) : '새 대화';
+  const visibleParticipants = normalized.kind === 'user'
+    ? [userParticipant(userName), characterParticipant(character)]
+    : normalized.participants.filter(item => item.role !== 'user').slice(0, 2);
+  return (
+    <View style={[styles.dmInboxRow, platform === 'twitter' && styles.xDmPostContextCard]}>
+      <Pressable onPress={onOpen} style={styles.dmInboxMain}>
+        <DmAvatarStack participants={visibleParticipants} character={character} />
+        <View style={styles.dmInboxText}>
+          <View style={styles.dmInboxTopLine}>
+            <Text style={[styles.dmInboxSender, platform === 'twitter' && styles.xPanelText]} numberOfLines={1}>{sender}</Text>
+            {thread.unread ? <Text style={styles.dmInboxUnread}>{thread.unread}</Text> : null}
+          </View>
+          <Text style={[styles.dmInboxTitle, platform === 'twitter' && styles.xPanelText]} numberOfLines={1}>{dmThreadTitle(normalized, character)}</Text>
+          <Text style={[styles.dmInboxPost, platform === 'twitter' && styles.xSubtitle]} numberOfLines={1}>게시물: {dmPostPreview(post)}</Text>
+          <Text style={[styles.dmInboxBody, platform === 'twitter' && styles.xSubtitle]} numberOfLines={2}>{last?.body || '아직 메시지가 없습니다.'}</Text>
+        </View>
+      </Pressable>
+      <Pressable onPress={onDelete} style={styles.dmInboxDelete}><Text style={styles.dmInboxDeleteText}>삭제</Text></Pressable>
+    </View>
+  );
+}
+
 function DmCard({ thread, platform, character, userName }: { thread: SNSDmThread; platform: SNSPost['platform']; character?: SNSGodCharacter; userName: string }) {
   const normalized = normalizeSnsDmThread(thread, undefined, character, userName);
   const last = normalized.messages[normalized.messages.length - 1];
@@ -830,7 +958,7 @@ function DmCard({ thread, platform, character, userName }: { thread: SNSDmThread
   );
 }
 
-function DmModal({ thread, post, character, platform, userName, value, onChangeText, onClose, onSend, loading }: {
+function DmModal({ thread, post, character, platform, userName, value, onChangeText, onClose, onSend, onDelete, loading }: {
   thread?: SNSDmThread;
   post?: SNSPost;
   character?: SNSGodCharacter;
@@ -840,6 +968,7 @@ function DmModal({ thread, post, character, platform, userName, value, onChangeT
   onChangeText: (value: string) => void;
   onClose: () => void;
   onSend: () => void;
+  onDelete?: () => void;
   loading: boolean;
 }) {
   if (!thread) return null;
@@ -861,6 +990,7 @@ function DmModal({ thread, post, character, platform, userName, value, onChangeT
             </View>
           </View>
           {normalized.kind === 'thirdParty' ? <Text style={styles.readOnlyBadge}>읽기 전용</Text> : null}
+          {onDelete ? <Pressable onPress={onDelete} style={styles.dmDeleteButton}><Text style={styles.dmDeleteButtonText}>삭제</Text></Pressable> : null}
           <Pressable onPress={onClose} style={styles.dmPanelClose}><Text style={styles.dmPanelCloseText}>닫기</Text></Pressable>
         </View>
         <FlatList
@@ -1221,6 +1351,7 @@ const styles = StyleSheet.create({
   retryPrimary: { flex: 1, minHeight: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
   retryPrimaryText: { color: '#241a00', fontWeight: '900' },
   dmPanel: { maxHeight: '88%', backgroundColor: '#ffffff', borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: 'hidden' },
+  dmInboxPanel: { height: '88%', backgroundColor: '#ffffff', borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: 'hidden' },
   xDmPanel: { backgroundColor: '#000000' },
   dmPanelHeader: { minHeight: 70, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#dbdbdb' },
   xDmPanelHeader: { borderBottomColor: '#2f3336' },
@@ -1233,6 +1364,20 @@ const styles = StyleSheet.create({
   dmThirdAvatar: { backgroundColor: '#fff7ed' },
   dmInitialText: { color: '#334155', fontSize: 13, fontWeight: '900' },
   dmHeaderText: { flex: 1, minWidth: 0 },
+  dmInboxAllAvatar: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
+  dmInboxAllText: { color: colors.text, fontSize: 10, fontWeight: '900' },
+  dmInboxList: { padding: 12, gap: 9, paddingBottom: 22 },
+  dmInboxRow: { minHeight: 104, flexDirection: 'row', alignItems: 'stretch', gap: 8, padding: 11, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fff' },
+  dmInboxMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  dmInboxText: { flex: 1, minWidth: 0 },
+  dmInboxTopLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  dmInboxSender: { flex: 1, color: colors.text, fontSize: 12, fontWeight: '900' },
+  dmInboxUnread: { minWidth: 19, height: 19, borderRadius: 10, overflow: 'hidden', lineHeight: 19, textAlign: 'center', backgroundColor: colors.danger, color: '#fff', fontSize: 11, fontWeight: '900' },
+  dmInboxTitle: { marginTop: 3, color: colors.text, fontSize: 15, fontWeight: '900' },
+  dmInboxPost: { marginTop: 3, color: '#7b8190', fontSize: 11, fontWeight: '800' },
+  dmInboxBody: { marginTop: 5, color: colors.sub, lineHeight: 18, fontWeight: '700' },
+  dmInboxDelete: { width: 52, borderRadius: 8, borderWidth: 1, borderColor: '#f0b7b7', backgroundColor: '#fff1f1', alignItems: 'center', justifyContent: 'center' },
+  dmInboxDeleteText: { color: colors.danger, fontWeight: '900', fontSize: 12 },
   dmHubHeaderLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 9 },
   dmHubSub: { marginTop: 2, color: colors.sub, fontSize: 11, fontWeight: '800' },
   dmPanelTitle: { color: colors.text, fontSize: 17, fontWeight: '900' },
@@ -1240,6 +1385,8 @@ const styles = StyleSheet.create({
   dmPanelSub: { marginTop: 2, color: '#737373', fontSize: 11, fontWeight: '800' },
   xDmPanelSub: { color: '#71767b' },
   readOnlyBadge: { marginRight: 6, paddingHorizontal: 9, paddingVertical: 5, borderRadius: 999, overflow: 'hidden', backgroundColor: '#fff1f2', color: '#be123c', fontSize: 11, fontWeight: '900' },
+  dmDeleteButton: { marginRight: 6, minHeight: 36, paddingHorizontal: 12, borderRadius: 18, borderWidth: 1, borderColor: '#f0b7b7', backgroundColor: '#fff1f1', justifyContent: 'center' },
+  dmDeleteButtonText: { color: colors.danger, fontWeight: '900' },
   dmPanelClose: { minHeight: 36, paddingHorizontal: 12, borderRadius: 18, backgroundColor: '#fff' },
   dmPanelCloseText: { lineHeight: 36, color: colors.text, fontWeight: '900' },
   dmMessages: { padding: 12, gap: 10, backgroundColor: '#ffffff' },

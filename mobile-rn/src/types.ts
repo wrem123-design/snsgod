@@ -88,6 +88,7 @@ export type SNSGodConfig = {
     textOnly?: boolean;
     noDM?: boolean;
     thirdPartyDM?: boolean;
+    includeUserInDM?: boolean;
     autoComments?: boolean;
     commentQty?: string;
     subject?: string;

@@ -78,6 +78,7 @@ export function createDefaultState(): SNSGodState {
         textOnly: false,
         noDM: false,
         thirdPartyDM: false,
+        includeUserInDM: true,
         autoComments: true,
         commentQty: '2-4',
         subject: '',

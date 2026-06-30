@@ -80,6 +80,7 @@ export function snsOptionsFor(state: SNSGodState, platform: SNSPost['platform'],
     subject: '',
     mood: '',
     autoImage: true,
+    includeUserInDM: state.config.sns?.includeUserInDM !== false,
     ...characterOptions,
     platform
   };
@@ -390,6 +391,33 @@ function postDmsToThreads(post: SNSPost, dms: NonNullable<SNSPost['dms']>, chara
   })).filter(thread => thread.messages.length);
 }
 
+function filterUserFromPostDms(
+  dms: NonNullable<SNSPost['dms']>,
+  userName: string,
+  includeUser: boolean
+): NonNullable<SNSPost['dms']> {
+  if (includeUser) return dms;
+  const normalizedUserName = userName.trim().toLowerCase();
+  const userAliases = new Set(['user', 'me', '나', '내가', normalizedUserName].filter(Boolean));
+  return dms
+    .map(thread => {
+      const userParticipantNames = new Set((thread.participants || [])
+        .filter(participant => participant.role === 'user' || userAliases.has(String(participant.name || '').trim().toLowerCase()))
+        .map(participant => String(participant.name || '').trim().toLowerCase())
+        .filter(Boolean));
+      const participants = (thread.participants || []).filter(participant =>
+        participant.role !== 'user'
+        && !userAliases.has(String(participant.name || '').trim().toLowerCase())
+      );
+      const messages = (thread.messages || []).filter(message => {
+        const from = String(message.from || message.fromName || '').trim().toLowerCase();
+        return !userAliases.has(from) && !userParticipantNames.has(from);
+      });
+      return { ...thread, participants, messages };
+    })
+    .filter(thread => thread.messages.length && (normalizedUserName.length <= 1 || !String(thread.title || '').toLowerCase().includes(normalizedUserName)));
+}
+
 function snsNsfwInstruction(state: SNSGodState): string {
   const prompt = String(state.config.prompts?.snsNsfwBackAccount || DEFAULT_PROMPTS.snsNsfwBackAccount).trim();
   return prompt || DEFAULT_PROMPTS.snsNsfwBackAccount;
@@ -436,6 +464,7 @@ async function applySnsImagePolicy(state: SNSGodState, posts: SNSPost[], charact
 
 export async function generateSNSPost(state: SNSGodState, character: SNSGodCharacter, platform: SNSPost['platform'], options: { roomId?: string; manual?: boolean; image?: string; retryPrompt?: string } = {}): Promise<SNSGodState> {
   const sns = snsOptionsFor(state, platform, character);
+  const includeUserInDm = sns.includeUserInDM !== false;
   const transcript = roomTranscriptForSns(state, character, options.roomId);
   const phoneSummary = phoneSummaryForSns(state, character);
   const lore = snsLoreBlock(state, character, options.roomId, `${transcript}\n${phoneSummary}`);
@@ -463,12 +492,14 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
     platform === 'instagram' ? 'Write for an Instagram-style public visual feed. Keep the tone polished and feed-friendly.' : 'Write for a Twitter/X-style timeline. Shorter, sharper, more conversational posts are allowed.',
     sns.textOnly ? 'Do not include imagePrompt.' : 'If an image fits, include imagePrompt as English visual prompt.',
     sns.noDM ? 'Do not create dms.' : 'Create one short SNS DM thread when natural.',
-    sns.thirdPartyDM ? 'Third-party commenters may initiate DMs if useful.' : 'DMs should stay centered on the character and user.',
+    includeUserInDm
+      ? (sns.thirdPartyDM ? 'Third-party commenters may initiate DMs if useful.' : 'DMs may be centered on the character and user when the generated post naturally invites it.')
+      : 'DMs must be based only on the generated SNS post and social reactions to that post. Do not include the app user, user display name, user profile, or normal private chat as a DM participant. Participants must be thirdParty and/or character only.',
     snsSubjectInstruction(state, sns.subject),
     options.retryPrompt ? `User retry instruction:\n${options.retryPrompt}` : '',
     sns.mood ? `Mood: ${sns.mood}` : '',
     `Character profile: ${character.prompt || '(empty)'}`,
-    `User profile: ${state.config.userDescription || '(empty)'}`,
+    includeUserInDm ? `User profile: ${state.config.userDescription || '(empty)'}` : 'User profile is hidden from SNS DM generation. Use private chat context only to inspire the public post, not DM participants.',
     memories ? `Character memories:\n${memories}` : '',
     lore ? `Relevant lorebook:\n${lore}` : '',
     phoneSummary ? `Recent phone-call summary:\n${phoneSummary}` : '',
@@ -484,7 +515,8 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
   const commentCount = sns.autoComments === false ? 0 : commentCountHint(sns.commentQty);
   const posts = normalizeGeneratedPlatforms(parsed, platform, character).map(item => toPost(item, character, platform, commentCount));
   const postsWithImages = await applySnsImagePolicy(state, posts, character, options, dailyMicro ? { ...sns, autoImage: false } : sns, text);
-  const postDms = sns.noDM ? [] : ensureThirdPartyDms(toPostDms(parsed), postsWithImages[0], character, sns);
+  const parsedDms = filterUserFromPostDms(toPostDms(parsed), state.config.userName || 'User', includeUserInDm);
+  const postDms = sns.noDM ? [] : ensureThirdPartyDms(parsedDms, postsWithImages[0], character, includeUserInDm ? sns : { ...sns, thirdPartyDM: true });
   const createdDmThreads = postDms.length && postsWithImages[0] ? postDmsToThreads(postsWithImages[0], postDms, character) : [];
   if (postDms.length && postsWithImages[0]) postsWithImages[0] = { ...postsWithImages[0], dms: postDms };
   const nextState: SNSGodState = {

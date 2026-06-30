@@ -202,6 +202,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   const [fontScale, setFontScale] = useState(String(state.config.fontScale || 1));
   const [snsAutoChance, setSnsAutoChance] = useState(String(state.config.snsAutoChance ?? 40));
   const [snsStartCount, setSnsStartCount] = useState(String(state.config.snsStartCount ?? 6));
+  const [snsIncludeUserInDM, setSnsIncludeUserInDM] = useState((state.config.sns || {}).includeUserInDM !== false);
   const [autoEnabled, setAutoEnabled] = useState(state.config.autoEnabled !== false);
   const [privateFirst, setPrivateFirst] = useState(state.config.privateFirst === true);
   const [groupFirst, setGroupFirst] = useState(state.config.groupFirst === true);
@@ -519,7 +520,11 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           characterPhoneCallMinCooldownHours: phoneCharacterCooldownMinutes / 60,
           characterPhoneCallGlobalCooldownHours: phoneGlobalCooldownMinutes / 60,
           snsAutoChance: Math.max(0, Math.min(100, Math.round(Number(snsAutoChance) || 0))),
-          snsStartCount: Math.max(1, Math.round(Number(snsStartCount) || 6))
+          snsStartCount: Math.max(1, Math.round(Number(snsStartCount) || 6)),
+          sns: {
+            ...(state.config.sns || {}),
+            includeUserInDM: snsIncludeUserInDM
+          }
         }
       });
       setStatus('자동화 저장 완료');
@@ -1282,6 +1287,8 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           <Text style={styles.help}>랜덤 첫 메시지: 아직 사용자가 말하지 않은 새 1:1 방에서 첫 인사를 자동으로 보냅니다.</Text>
           <SwitchLine label="SNS 자동 게시" value={snsAutoPostEnabled} onChange={setSnsAutoPostEnabled} />
           <Text style={styles.help}>SNS 자동 게시: 일반 채팅 답장 뒤 메시지 수, 쿨다운, 확률 조건을 만족하면 Instagram 또는 X 게시물을 생성합니다.</Text>
+          <SwitchLine label="SNS DM에 유저 포함" value={snsIncludeUserInDM} onChange={setSnsIncludeUserInDM} />
+          <Text style={styles.help}>켜면 게시물에서 나와 캐릭터의 DM도 만들 수 있습니다. 끄면 SNS 게시물에 반응한 제3자/캐릭터 DM만 만들고 유저 이름은 DM 참가자로 넣지 않습니다.</Text>
           <SwitchLine label="캐릭터 먼저 전화" value={characterPhoneCallEnabled} onChange={setCharacterPhoneCallEnabled} />
           <Text style={styles.help}>캐릭터 먼저 전화: 캐릭터 주도성과 빈도 조건에 따라 드물게 전화 카드 알림을 만듭니다.</Text>
           {characterPhoneCallEnabled ? (

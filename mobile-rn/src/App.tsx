@@ -10,9 +10,13 @@ import { LorebookScreen } from './screens/LorebookScreen';
 import { SNSScreen } from './screens/SNSScreen';
 import { RandomChatScreen } from './screens/RandomChatScreen';
 import { SumGodScreen } from './screens/SumGodScreen';
+import { BlindDateScreen } from './screens/BlindDateScreen';
+import { IdealWorldcupScreen } from './screens/IdealWorldcupScreen';
+import { ReferenceFaceScreen } from './screens/ReferenceFaceScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
 import { CallScreen } from './screens/CallScreen';
+import { MeetingEventScreen } from './screens/MeetingEventScreen';
 import { NotificationsScreen } from './screens/NotificationsScreen';
 import { NewGroupRoomScreen } from './screens/NewGroupRoomScreen';
 import { GroupChatRoomScreen } from './screens/GroupChatRoomScreen';
@@ -34,8 +38,28 @@ import { roomRouteKind } from './logic/roomStore';
 import { IncomingPhoneCall, markPhoneCardStatus, missIncomingPhoneCall, newestPendingPhoneCandidate, rejectIncomingPhoneCall } from './logic/phone';
 import { markRoomRead, pushNotification } from './logic/notifications';
 import { startReplyJob } from './logic/replyEngine';
+import { createManualMeetingEventPrompt, createMeetingEventSession, shouldStartMeetingEvent } from './logic/meetingEvent';
 
 const INTERRUPTED_REPLY_RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function criticalStateFingerprint(state: SNSGodState | null | undefined): string {
+  return JSON.stringify({
+    referenceFaceSlots: (state?.referenceFaceSlots || []).map(slot => ({
+      id: slot.id,
+      createdAt: slot.createdAt,
+      imageLength: String(slot.image || '').length
+    })),
+    meetingEventSessions: (state?.meetingEventSessions || []).map(session => ({
+      id: session.id,
+      status: session.status,
+      startedAt: session.startedAt,
+      endedAt: session.endedAt,
+      summary: session.summary || '',
+      lineCount: (session.lines || []).length
+    })),
+    activeMeetingEventId: state?.activeMeetingEventId || ''
+  });
+}
 
 type Route =
   | { name: 'chatList' }
@@ -58,8 +82,12 @@ type Route =
   | { name: 'random' }
   | { name: 'randomChatRoom'; roomId: string }
   | { name: 'sumgod' }
+  | { name: 'blindDate' }
+  | { name: 'idealWorldcup' }
+  | { name: 'references' }
   | { name: 'profile'; characterId: string; returnRoomId?: string }
   | { name: 'call'; characterId: string; roomId?: string; sourceMessageId?: string; returnRoute?: Route }
+  | { name: 'meeting'; sessionId: string; returnRoute?: Route }
   | { name: 'notifications' };
 
 export default function App() {
@@ -144,7 +172,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!state || incomingCall || route.name === 'call') return;
+    if (!state || incomingCall || route.name === 'call' || route.name === 'meeting') return;
     const candidate = newestPendingPhoneCandidate(state);
     if (!candidate) return;
     setIncomingCall(candidate);
@@ -153,6 +181,13 @@ export default function App() {
       void commit(markPhoneCardStatus(state, candidate.roomId, candidate.messageId, 'ringing'));
     }
   }, [state, incomingCall, route.name]);
+
+  useEffect(() => {
+    if (!state?.activeMeetingEventId || route.name === 'meeting' || route.name === 'call') return;
+    const session = (state.meetingEventSessions || []).find(item => item.id === state.activeMeetingEventId);
+    if (!session || session.status !== 'active') return;
+    navigate({ name: 'meeting', sessionId: session.id, returnRoute: routeRef.current });
+  }, [state?.activeMeetingEventId, route.name]);
 
   useEffect(() => {
     if (incomingTimerRef.current) {
@@ -317,10 +352,16 @@ export default function App() {
   }
 
   async function commit(next: SNSGodState) {
-    const committed = withUnreadForNewMessages(stateRef.current, next, visibleRoomIdForRoute(routeRef.current));
+    const previous = stateRef.current;
+    const committed = withUnreadForNewMessages(previous, next, visibleRoomIdForRoute(routeRef.current));
     setState(committed);
     stateRef.current = committed;
     saveStateDebounced(committed);
+    if (criticalStateFingerprint(previous) !== criticalStateFingerprint(committed)) {
+      void flushSaveState(committed).catch(error => {
+        void appendDebugLog('storage', `critical state flush failed: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+      });
+    }
     void appendDebugLog('storage', `state saved: characters=${committed.characters.length}, notifications=${(committed.notifications || []).length}`);
   }
 
@@ -336,6 +377,11 @@ export default function App() {
     return stateRef.current || undefined;
   }
 
+  async function commitAndFlush(next: SNSGodState) {
+    await commit(next);
+    await flushSaveState(stateRef.current || next);
+  }
+
   function requestReply(roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean; userMessageCreatedAt?: number; latestUserImageData?: string }) {
     void startReplyJob({
       roomId,
@@ -347,6 +393,32 @@ export default function App() {
       getState: () => stateRef.current,
       commitCurrent
     });
+  }
+
+  async function maybeStartMeetingEvent(roomId: string, latestUserInput: string): Promise<boolean> {
+    const current = stateRef.current;
+    if (!current) return false;
+    const room = allRooms(current).find(item => item.id === roomId);
+    if (!room || room.type === 'random') return false;
+    if ((current.meetingEventSessions || []).some(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active'))) return false;
+    const result = await shouldStartMeetingEvent(current, roomId, latestUserInput);
+    if (!result.shouldStart) return false;
+    const latest = stateRef.current || current;
+    const next = await createMeetingEventSession(latest, roomId, result);
+    await commit(next);
+    return true;
+  }
+
+  async function requestManualMeetingEvent(roomId: string): Promise<boolean> {
+    const current = stateRef.current;
+    if (!current) return false;
+    const room = allRooms(current).find(item => item.id === roomId);
+    if (!room || room.type === 'random') return false;
+    if ((current.meetingEventSessions || []).some(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active'))) return true;
+    const next = await createManualMeetingEventPrompt(current, roomId);
+    if (next === current) return false;
+    await commit(next);
+    return true;
   }
 
   function resumeInterruptedReplies(snapshot: SNSGodState) {
@@ -422,11 +494,11 @@ export default function App() {
   function activeBottomTab(): BottomTab {
     if (route.name === 'sns') return route.platform === 'twitter' ? 'twitter' : 'instagram';
     if (route.name === 'random' || route.name === 'randomHub' || route.name === 'randomChatRoom') return 'random';
-    if (route.name === 'etc' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'notifications') return 'etc';
+    if (route.name === 'etc' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'notifications' || route.name === 'references') return 'etc';
     return 'friends';
   }
 
-  const showBottomNav = route.name === 'chatList' || route.name === 'sns' || route.name === 'random' || route.name === 'etc' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug';
+  const showBottomNav = route.name === 'chatList' || route.name === 'sns' || route.name === 'random' || route.name === 'etc' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'references';
 
   async function leaveRandomRoom(roomId: string) {
     const current = stateRef.current;
@@ -515,6 +587,9 @@ export default function App() {
       ) : route.name === 'randomHub' || route.name === 'etc' ? (
         <MenuHubScreen
           mode="etc"
+          onOpenBlindDate={() => navigate({ name: 'blindDate' })}
+          onOpenIdealWorldcup={() => navigate({ name: 'idealWorldcup' })}
+          onOpenReferences={() => navigate({ name: 'references' })}
           onOpenSumGod={() => navigate({ name: 'sumgod' })}
           onOpenGallery={() => navigate({ name: 'gallery' })}
           onOpenNotifications={() => navigate({ name: 'notifications' })}
@@ -529,6 +604,12 @@ export default function App() {
         <RandomChatScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'randomChatRoom', roomId })} />
       ) : route.name === 'sumgod' ? (
         <SumGodScreen state={state} onChange={commit} onCommitCurrent={commitCurrentForScreen} onBack={goBack} />
+      ) : route.name === 'blindDate' ? (
+        <BlindDateScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'chatRoom', roomId }, { replace: true })} />
+      ) : route.name === 'idealWorldcup' ? (
+        <IdealWorldcupScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'chatRoom', roomId }, { replace: true })} />
+      ) : route.name === 'references' ? (
+        <ReferenceFaceScreen state={state} onChange={commitAndFlush} onBack={goBack} />
       ) : route.name === 'notifications' ? (
         <NotificationsScreen
           state={state}
@@ -552,6 +633,8 @@ export default function App() {
         />
       ) : route.name === 'call' ? (
         <CallScreen state={state} characterId={route.characterId} roomId={route.roomId} sourceMessageId={route.sourceMessageId} onBack={goBack} onChange={commit} onRequestReply={requestReply} />
+      ) : route.name === 'meeting' ? (
+        <MeetingEventScreen state={state} sessionId={route.sessionId} onBack={goBack} onChange={commit} />
       ) : route.name === 'roomSettings' ? (
         <RoomSettingsScreen state={state} roomId={route.roomId} onChange={commit} onBack={goBack} />
       ) : route.name === 'groupRoomSettings' ? (
@@ -584,6 +667,9 @@ export default function App() {
           onOpenCharacterSettings={characterId => navigate({ name: 'characterSettings', characterId, returnRoomId: route.roomId })}
           onOpenProfile={characterId => navigate({ name: 'profile', characterId, returnRoomId: route.roomId })}
           onOpenCall={(characterId, callRoomId, sourceMessageId) => navigate({ name: 'call', characterId, roomId: callRoomId, sourceMessageId, returnRoute: route })}
+          onOpenMeeting={sessionId => navigate({ name: 'meeting', sessionId, returnRoute: route })}
+          onMaybeStartMeeting={maybeStartMeetingEvent}
+          onRequestMeetingPrompt={requestManualMeetingEvent}
           onRequestReply={requestReply}
         />
       ) : route.name === 'randomChatRoom' ? (
@@ -600,6 +686,9 @@ export default function App() {
           onLeaveRandomRoom={leaveRandomRoom}
           onPromoteRandomRoom={promoteRandomRoom}
           onOpenCall={(characterId, callRoomId, sourceMessageId) => navigate({ name: 'call', characterId, roomId: callRoomId, sourceMessageId, returnRoute: route })}
+          onOpenMeeting={sessionId => navigate({ name: 'meeting', sessionId, returnRoute: route })}
+          onMaybeStartMeeting={maybeStartMeetingEvent}
+          onRequestMeetingPrompt={requestManualMeetingEvent}
           onRequestReply={requestReply}
         />
       ) : (

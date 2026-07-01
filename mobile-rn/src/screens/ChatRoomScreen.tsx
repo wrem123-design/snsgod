@@ -6,7 +6,7 @@ import { SNSGodMessage, SNSGodState, Sticker } from '../types';
 import { makeId } from '../logic/ids';
 import { appendMessage, findCharacter, findRoom, roomMessages } from '../logic/stateHelpers';
 import { isRenderableMediaUri, pickImageDataUri } from '../logic/media';
-import { formatMessageTime } from '../logic/time';
+import { formatMessageDateLabel, formatMessageTime, isSameMessageDate } from '../logic/time';
 import { markRoomRead } from '../logic/notifications';
 import { generateImageDataUri, imagePromptFor, imagePromptWithoutCharacterName } from '../logic/api';
 import { characterReferenceImageForPrompt } from '../logic/imageReference';
@@ -24,7 +24,7 @@ type RoomImageItem = {
   createdAt: number;
 };
 
-export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurrent, onOpenRoomSettings, onOpenCharacterSettings, onOpenProfile, randomMode, onLeaveRandomRoom, onPromoteRandomRoom, onOpenCall, onRequestReply }: {
+export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurrent, onOpenRoomSettings, onOpenCharacterSettings, onOpenProfile, randomMode, onLeaveRandomRoom, onPromoteRandomRoom, onOpenCall, onOpenMeeting, onMaybeStartMeeting, onRequestMeetingPrompt, onRequestReply }: {
   state: SNSGodState;
   roomId: string;
   onBack: () => void;
@@ -37,10 +37,14 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
   onLeaveRandomRoom?: (roomId: string) => void;
   onPromoteRandomRoom?: (roomId: string) => void;
   onOpenCall?: (characterId: string, roomId?: string, messageId?: string) => void;
+  onOpenMeeting?: (sessionId: string) => void;
+  onMaybeStartMeeting?: (roomId: string, latestUserInput: string) => Promise<boolean>;
+  onRequestMeetingPrompt?: (roomId: string) => Promise<boolean>;
   onRequestReply: (roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean; userMessageCreatedAt?: number; latestUserImageData?: string }) => void;
 }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [requestingMeeting, setRequestingMeeting] = useState(false);
   const [showStickers, setShowStickers] = useState(false);
   const [viewerImage, setViewerImage] = useState<RoomImageItem | null>(null);
   const [regeneratingImageId, setRegeneratingImageId] = useState('');
@@ -94,6 +98,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
       return { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
     });
     setSending(false);
+    if (!isRandomRoom && onMaybeStartMeeting && await onMaybeStartMeeting(room.id, content)) return;
     onRequestReply(room.id, character.id, content, { randomMode: isRandomRoom, userMessageCreatedAt: userMessage.createdAt });
   }
 
@@ -109,7 +114,9 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
         const next = appendMessage(current, room.id, userMessage);
         return { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
       });
-      onRequestReply(room.id, character.id, `${content}\n[사용자가 사진을 보냈습니다.]`, { randomMode: isRandomRoom, userMessageCreatedAt: userMessage.createdAt, latestUserImageData: image });
+      const promptText = `${content}\n[사용자가 사진을 보냈습니다.]`;
+      if (!isRandomRoom && onMaybeStartMeeting && await onMaybeStartMeeting(room.id, promptText)) return;
+      onRequestReply(room.id, character.id, promptText, { randomMode: isRandomRoom, userMessageCreatedAt: userMessage.createdAt, latestUserImageData: image });
     } catch (error) {
       Alert.alert('사진 첨부 실패', error instanceof Error ? error.message : String(error));
     } finally {
@@ -127,7 +134,22 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
       return { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
     });
     setSending(false);
+    if (!isRandomRoom && onMaybeStartMeeting && await onMaybeStartMeeting(room.id, `[스티커: ${sticker.name || sticker.id}]`)) return;
     onRequestReply(room.id, character.id, `[스티커: ${sticker.name || sticker.id}]`, { randomMode: isRandomRoom, userMessageCreatedAt: userMessage.createdAt });
+  }
+
+  async function requestMeetingPrompt() {
+    if (!room || isRandomRoom || !onRequestMeetingPrompt || requestingMeeting) return;
+    setRequestingMeeting(true);
+    setShowStickers(false);
+    try {
+      const created = await onRequestMeetingPrompt(room.id);
+      if (!created) Alert.alert('만남 이벤트', '현재 채팅에서는 만남 이벤트를 준비할 수 없습니다.');
+    } catch (error) {
+      Alert.alert('만남 이벤트 실패', error instanceof Error ? error.message : String(error));
+    } finally {
+      setRequestingMeeting(false);
+    }
   }
 
   async function rejectCall(message: SNSGodMessage) {
@@ -180,6 +202,31 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
       userMessageCreatedAt: previousUserMessage.createdAt,
       latestUserImageData: typeof previousUserMessage.mediaData === 'string' ? previousUserMessage.mediaData : undefined
     });
+  }
+
+  async function startMeetingEvent(sessionId: string) {
+    await commitCurrent(current => ({
+      ...current,
+      activeMeetingEventId: sessionId,
+      meetingEventSessions: (current.meetingEventSessions || []).map(session => session.id === sessionId ? { ...session, status: 'active' } : session)
+    }));
+    onOpenMeeting?.(sessionId);
+  }
+
+  async function cancelMeetingEvent(sessionId: string, messageId: string) {
+    await commitCurrent(current => ({
+      ...current,
+      meetingEventSessions: (current.meetingEventSessions || []).map(session => session.id === sessionId ? { ...session, status: 'dismissed', endedAt: Date.now() } : session),
+      messages: {
+        ...current.messages,
+        [roomId]: (current.messages[roomId] || []).map(message => message.id === messageId ? {
+          ...message,
+          content: '만남 이벤트를 취소했습니다.',
+          meetingEventPrompt: false,
+          meetingEventCancelled: true
+        } : message)
+      }
+    }));
   }
 
   function openImageRetryEditor(message: SNSGodMessage) {
@@ -279,7 +326,19 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
         contentContainerStyle={styles.messages}
         inverted
         ListHeaderComponent={typing ? <TypingBubble character={character} /> : null}
-        renderItem={({ item }) => <MessageBubble message={item} character={character} userStickers={state.userStickers || []} roomId={room.id} onOpenCall={onOpenCall} onRejectCall={rejectCall} onRetryFailed={retryFailedReply} onOpenImage={setViewerImage} onRetryImage={openImageRetryEditor} regeneratingImageId={regeneratingImageId} />}
+        renderItem={({ item }) => {
+          const meetingSessionId = String(item.meetingEventId || '');
+          const meetingSession = meetingSessionId ? (state.meetingEventSessions || []).find(session => session.id === meetingSessionId) : undefined;
+          const messageIndex = messages.findIndex(message => message.id === item.id);
+          const previousMessage = messageIndex > 0 ? messages[messageIndex - 1] : undefined;
+          const showDateDivider = messageIndex === 0 || !isSameMessageDate(previousMessage?.createdAt, item.createdAt);
+          return (
+            <View>
+              {showDateDivider ? <DateDivider timestamp={item.createdAt} /> : null}
+              <MessageBubble message={item} character={character} userStickers={state.userStickers || []} roomId={room.id} meetingStatus={meetingSession?.status} onOpenCall={onOpenCall} onStartMeeting={startMeetingEvent} onCancelMeeting={cancelMeetingEvent} onRejectCall={rejectCall} onRetryFailed={retryFailedReply} onOpenImage={setViewerImage} onRetryImage={openImageRetryEditor} regeneratingImageId={regeneratingImageId} />
+            </View>
+          );
+        }}
         ListFooterComponent={room.name !== '기본 채팅' ? <View style={styles.roomNotice}><Text style={styles.roomNoticeText}>{room.name}</Text></View> : null}
       />
 
@@ -296,8 +355,13 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
       ) : null}
       {showStickers ? <StickerTray stickers={state.userStickers || []} onPick={sendSticker} /> : null}
       <View style={styles.composer}>
-        <Pressable onPress={() => setShowStickers(value => !value)} disabled={sending} style={[styles.attachButton, sending && styles.sendDisabled]}><Text style={styles.attachText}>스티커</Text></Pressable>
-        <Pressable onPress={attachImage} disabled={sending} style={[styles.attachButton, sending && styles.sendDisabled]}><Text style={styles.attachText}>사진</Text></Pressable>
+        <Pressable accessibilityLabel="스티커" onPress={() => setShowStickers(value => !value)} disabled={sending} style={[styles.attachIconButton, sending && styles.sendDisabled]}><Text style={styles.attachIconText}>☺</Text></Pressable>
+        {!isRandomRoom ? (
+          <Pressable accessibilityLabel="만남 이벤트 불러오기" onPress={requestMeetingPrompt} disabled={sending || requestingMeeting} style={[styles.attachIconButton, (sending || requestingMeeting) && styles.sendDisabled]}>
+            <Text style={styles.attachIconText}>{requestingMeeting ? '…' : '👥'}</Text>
+          </Pressable>
+        ) : null}
+        <Pressable accessibilityLabel="사진 추가" onPress={attachImage} disabled={sending} style={[styles.attachIconButton, sending && styles.sendDisabled]}><Text style={styles.attachIconText}>+</Text></Pressable>
         <TextInput
           value={text}
           onChangeText={setText}
@@ -311,6 +375,14 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
         </Pressable>
       </View>
     </KeyboardAvoidingView>
+  );
+}
+
+function DateDivider({ timestamp }: { timestamp: number }) {
+  return (
+    <View style={styles.dateDivider}>
+      <Text style={styles.dateDividerText}>{formatMessageDateLabel(timestamp)}</Text>
+    </View>
   );
 }
 
@@ -481,12 +553,15 @@ function ImagePromptRetryEditor({ prompt, finalPrompt, busy, onChangePrompt, onC
   );
 }
 
-function MessageBubble({ message, character, userStickers, roomId, onOpenCall, onRejectCall, onRetryFailed, onOpenImage, onRetryImage, regeneratingImageId }: {
+function MessageBubble({ message, character, userStickers, roomId, meetingStatus, onOpenCall, onStartMeeting, onCancelMeeting, onRejectCall, onRetryFailed, onOpenImage, onRetryImage, regeneratingImageId }: {
   message: SNSGodMessage;
   character: NonNullable<ReturnType<typeof findCharacter>>;
   userStickers: Sticker[];
   roomId: string;
+  meetingStatus?: string;
   onOpenCall?: (characterId: string, roomId?: string, messageId?: string) => void;
+  onStartMeeting?: (sessionId: string) => void;
+  onCancelMeeting?: (sessionId: string, messageId: string) => void;
   onRejectCall?: (message: SNSGodMessage) => void;
   onRetryFailed?: (message: SNSGodMessage) => void;
   onOpenImage?: (item: RoomImageItem) => void;
@@ -512,9 +587,21 @@ function MessageBubble({ message, character, userStickers, roomId, onOpenCall, o
     }
   }
   if (system) {
+    const meetingSessionId = String(message.meetingEventId || '');
+    const pendingMeeting = Boolean(message.meetingEventPrompt && meetingSessionId && meetingStatus === 'pending');
     return (
       <Pressable onLongPress={copyMessageText} delayLongPress={380} style={styles.systemBubble}>
-        <Text style={styles.systemText}>{message.content}</Text>
+        <Text style={[styles.systemText, pendingMeeting && styles.meetingSystemText]}>{message.content}</Text>
+        {pendingMeeting ? (
+          <View style={styles.meetingActions}>
+            <Pressable onPress={() => onStartMeeting?.(meetingSessionId)} style={styles.meetingPrimary}>
+              <Text style={styles.meetingPrimaryText}>이벤트</Text>
+            </Pressable>
+            <Pressable onPress={() => onCancelMeeting?.(meetingSessionId, message.id)} style={styles.meetingSecondary}>
+              <Text style={styles.meetingSecondaryText}>취소</Text>
+            </Pressable>
+          </View>
+        ) : null}
         {message.failed ? (
           <Pressable accessibilityLabel="답장 재생성" onPress={() => onRetryFailed?.(message)} style={styles.retryButton}>
             <Text style={styles.retryButtonText}>!</Text>
@@ -599,6 +686,8 @@ const styles = StyleSheet.create({
   settingsButton: { minHeight: 38, paddingHorizontal: 12, borderRadius: 8, backgroundColor: '#eee8dc', alignItems: 'center', justifyContent: 'center' },
   settingsText: { fontWeight: '900', color: colors.text },
   messages: { padding: 12, gap: 8 },
+  dateDivider: { alignSelf: 'center', marginVertical: 8, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, backgroundColor: 'rgba(94,109,126,0.26)' },
+  dateDividerText: { color: '#425163', fontSize: 11, lineHeight: 14, fontWeight: '800' },
   roomNotice: { alignSelf: 'center', maxWidth: '88%', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: 'rgba(255,255,255,0.5)', marginBottom: 6 },
   roomNoticeText: { color: '#4f5a62', fontSize: 12, fontWeight: '900' },
   messageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginVertical: 4 },
@@ -633,6 +722,12 @@ const styles = StyleSheet.create({
   callStatus: { marginTop: 4, color: colors.sub, fontSize: 12, fontWeight: '900' },
   systemBubble: { alignSelf: 'center', maxWidth: '88%', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: 'rgba(255,255,255,0.45)', position: 'relative' },
   systemText: { color: '#4f5a62', fontSize: 12, fontWeight: '700' },
+  meetingSystemText: { color: colors.text, fontSize: 13, lineHeight: 19, fontWeight: '900', textAlign: 'center' },
+  meetingActions: { marginTop: 9, flexDirection: 'row', gap: 8, minWidth: 210 },
+  meetingPrimary: { flex: 1, minHeight: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
+  meetingPrimaryText: { color: '#241a00', fontWeight: '900' },
+  meetingSecondary: { flex: 1, minHeight: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
+  meetingSecondaryText: { color: colors.text, fontWeight: '900' },
   retryButton: { position: 'absolute', right: -8, top: -8, width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.danger, borderWidth: 2, borderColor: '#fff' },
   retryButtonText: { color: '#fff', fontSize: 13, lineHeight: 16, fontWeight: '900' },
   albumPanel: { maxHeight: 168, paddingTop: 10, paddingBottom: 10, backgroundColor: '#f7f2e9', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
@@ -679,8 +774,8 @@ const styles = StyleSheet.create({
   stickerThumbText: { width: 48, height: 48, borderRadius: 8, overflow: 'hidden', textAlign: 'center', lineHeight: 48, backgroundColor: '#eee8dc', color: colors.text, fontWeight: '900' },
   stickerTrayName: { marginTop: 4, color: colors.sub, fontSize: 11, fontWeight: '800' },
   emptyStickerText: { color: colors.sub, fontWeight: '800', padding: 8 },
-  attachButton: { minWidth: 54, minHeight: 42, paddingHorizontal: 10, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
-  attachText: { color: colors.text, fontWeight: '900' },
+  attachIconButton: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
+  attachIconText: { color: colors.text, fontSize: 22, lineHeight: 26, fontWeight: '900' },
   composerInput: { flex: 1, minHeight: 42, maxHeight: 112, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 18, backgroundColor: '#fff', color: colors.text, fontSize: 16 },
   sendButton: { minWidth: 64, minHeight: 42, paddingHorizontal: 14, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
   sendDisabled: { opacity: 0.5 },

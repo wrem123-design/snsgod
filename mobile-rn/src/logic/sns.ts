@@ -670,6 +670,7 @@ export async function generateSnsDmReply(state: SNSGodState, threadId: string, u
   const transcript = thread.messages.slice(-MAX_SNS_DM_CONTEXT_MESSAGES).map(message => `${message.from === 'user' ? state.config.userName : message.author || character?.name || 'Character'}: ${message.body}`).join('\n');
   const room = { id: `snsdm_${thread.id}`, characterId: character.id, name: 'SNS DM' };
   const lore = lorePromptBlock(resolveActiveLore(state, { room, characterId: character.id, text: `${thread.context || ''}\n${transcript}\n${userText}`, limit: 8 }));
+  const memories = (character.memories || []).slice(-10).map(item => `- ${item}`).join('\n');
   const prompt = [
     `Act as ${character.name} in a private SNS DM thread that is separate from the normal chat room.`,
     'This is not a public SNS post, normal messenger chat, phone call, or comment reply.',
@@ -678,6 +679,7 @@ export async function generateSnsDmReply(state: SNSGodState, threadId: string, u
     `Output language: ${state.config.language || 'Korean'}.`,
     `Character profile: ${character.prompt || '(empty)'}`,
     `User profile: ${state.config.userDescription || '(empty)'}`,
+    memories ? `Character memories, including real in-person meetings:\n${memories}` : '',
     lore ? `Relevant lorebook:\n${lore}` : '',
     `SNS DM title: ${thread.title}`,
     `SNS post context:\n${thread.context || '(none)'}`,

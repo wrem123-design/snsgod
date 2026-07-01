@@ -6,7 +6,7 @@ import { clampNumber, makeId } from '../logic/ids';
 import { findCharacter, updateCharacter } from '../logic/stateHelpers';
 import { isRenderableMediaUri, pickImageDataUri } from '../logic/media';
 import { callLLMText, generateImageDataUri, imagePromptWithoutCharacterName, parseJsonObject } from '../logic/api';
-import { DEFAULT_COVER_BACKGROUND_DIRECTION } from '../logic/prompts';
+import { DEFAULT_COVER_BACKGROUND_DIRECTION, LEGACY_COVER_BACKGROUND_DIRECTION } from '../logic/prompts';
 import { characterReferenceImages, randomReferenceImage } from '../logic/imageReference';
 
 type CharacterSection = 'basic' | 'reply' | 'profile' | 'time' | 'calendar' | 'lore' | 'stickers' | 'prompt';
@@ -693,7 +693,7 @@ function normalizeDraft(character: SNSGodCharacter): SNSGodCharacter {
     statusMessageChangeChance: Number(character.statusMessageChangeChance ?? 40),
     profilePhotoChangeChance: Number(character.profilePhotoChangeChance ?? 5),
     coverPhotoChangeChance: Number(character.coverPhotoChangeChance ?? 5),
-    profileCoverPrompt: String(character.profileCoverPrompt || DEFAULT_COVER_BACKGROUND_DIRECTION),
+    profileCoverPrompt: String(!character.profileCoverPrompt || character.profileCoverPrompt === LEGACY_COVER_BACKGROUND_DIRECTION ? DEFAULT_COVER_BACKGROUND_DIRECTION : character.profileCoverPrompt),
     weatherEnabled: character.weatherEnabled !== false,
     timeContextEnabled: character.timeContextEnabled !== false,
     calendarEvents: (character.calendarEvents || []).map(normalizeCalendarEvent)

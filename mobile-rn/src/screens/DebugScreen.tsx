@@ -16,6 +16,9 @@ export function DebugScreen({ onBack, onReloadState, onReloadBundle }: {
 }) {
   const [logs, setLogs] = useState<DebugLogEntry[]>([]);
   const [status, setStatus] = useState('');
+  const [hideRoutineLogs, setHideRoutineLogs] = useState(true);
+  const visibleLogs = hideRoutineLogs ? logs.filter(isImportantLog) : logs;
+  const hiddenCount = logs.length - visibleLogs.length;
 
   async function refresh() {
     setLogs(await readDebugLogs());
@@ -92,6 +95,10 @@ export function DebugScreen({ onBack, onReloadState, onReloadBundle }: {
           <Text style={styles.title}>디버그</Text>
           <Text style={styles.subtitle}>로그 / 앱 상태 재로드</Text>
         </View>
+        <Pressable onPress={() => setHideRoutineLogs(value => !value)} style={[styles.filterToggle, hideRoutineLogs && styles.filterToggleOn]}>
+          <Text style={[styles.filterCheck, hideRoutineLogs && styles.filterCheckOn]}>{hideRoutineLogs ? '✓' : ''}</Text>
+          <Text style={[styles.filterText, hideRoutineLogs && styles.filterTextOn]}>일상 숨김</Text>
+        </Pressable>
       </View>
       <ScrollView contentContainerStyle={styles.content}>
         {status ? <Text style={styles.status}>{status}</Text> : null}
@@ -103,12 +110,33 @@ export function DebugScreen({ onBack, onReloadState, onReloadBundle }: {
           <Pressable onPress={clear} style={styles.danger}><Text style={styles.dangerText}>로그 삭제</Text></Pressable>
         </View>
         <Text style={styles.help}>개발 중 화면이 바뀌지 않으면 APK 재설치 또는 JS 번들 재로드가 필요할 수 있습니다. 릴리즈 앱에서는 코드 변경 반영을 위해 새 APK 설치가 필요합니다.</Text>
+        {hideRoutineLogs && hiddenCount > 0 ? <Text style={styles.filterNotice}>일상 로그 {hiddenCount}개를 숨겼습니다.</Text> : null}
         <View style={styles.logList}>
-          {logs.length ? logs.map(item => <LogRow key={item.id} entry={item} onLongPress={() => copyLog(item)} />) : <Text style={styles.empty}>아직 로그가 없습니다.</Text>}
+          {visibleLogs.length ? visibleLogs.map(item => <LogRow key={item.id} entry={item} onLongPress={() => copyLog(item)} />) : <Text style={styles.empty}>{logs.length ? '표시할 중요 로그가 없습니다.' : '아직 로그가 없습니다.'}</Text>}
         </View>
       </ScrollView>
     </View>
   );
+}
+
+const ROUTINE_INFO_SCOPES = new Set([
+  'navigation',
+  'app',
+  'storage',
+  'reply.queue',
+  'reply.recover',
+  'llm.request',
+  'llm.response',
+  'llm-text.request',
+  'llm-text.response',
+  'sns.auto'
+]);
+
+function isImportantLog(entry: DebugLogEntry): boolean {
+  if (entry.level === 'warn' || entry.level === 'error') return true;
+  if (ROUTINE_INFO_SCOPES.has(entry.scope)) return false;
+  if (entry.scope.includes('request') || entry.scope.includes('response')) return false;
+  return /fail|failed|error|blocked|retry|softened|empty|인증|실패|오류/i.test(`${entry.scope}\n${entry.message}`);
 }
 
 function formatLogForCopy(entry: DebugLogEntry): string {
@@ -140,6 +168,12 @@ const styles = StyleSheet.create({
   titleBlock: { flex: 1 },
   title: { fontSize: 22, color: colors.text, fontWeight: '900' },
   subtitle: { marginTop: 2, color: colors.sub, fontWeight: '800' },
+  filterToggle: { minHeight: 38, paddingHorizontal: 10, borderRadius: 19, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa' },
+  filterToggleOn: { borderColor: '#d6b84c', backgroundColor: '#fff3c4' },
+  filterCheck: { width: 18, height: 18, borderRadius: 5, borderWidth: 1, borderColor: colors.border, color: colors.text, fontSize: 12, lineHeight: 16, textAlign: 'center', fontWeight: '900' },
+  filterCheckOn: { borderColor: '#6d5410', backgroundColor: '#f3dd72' },
+  filterText: { color: colors.sub, fontSize: 11, fontWeight: '900' },
+  filterTextOn: { color: '#3a2a00' },
   content: { padding: 14, paddingBottom: 28, gap: 12 },
   status: { padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#d6b84c', backgroundColor: '#fff3c4', color: '#3a2a00', fontWeight: '900' },
   actions: { gap: 8 },
@@ -148,6 +182,7 @@ const styles = StyleSheet.create({
   danger: { minHeight: 44, borderRadius: 8, borderWidth: 1, borderColor: '#f0b7b7', backgroundColor: '#fff1f1', alignItems: 'center', justifyContent: 'center' },
   dangerText: { color: colors.danger, fontWeight: '900' },
   help: { color: colors.sub, fontSize: 12, lineHeight: 18, fontWeight: '700' },
+  filterNotice: { paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, backgroundColor: '#eee8dc', color: colors.sub, fontSize: 12, fontWeight: '900', textAlign: 'center' },
   logList: { gap: 8 },
   empty: { marginTop: 30, textAlign: 'center', color: colors.sub, fontWeight: '900' },
   logRow: { padding: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', gap: 5 },

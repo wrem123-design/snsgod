@@ -1,6 +1,6 @@
 import { SNSGodState } from '../types';
 import { createDefaultState } from '../data/defaultState';
-import { DEFAULT_PROMPTS } from '../logic/prompts';
+import { DEFAULT_PROMPTS, DEFAULT_USER_APPEARANCE_PROMPT } from '../logic/prompts';
 import { ensureCharacterRooms, normalizeRandomChats } from '../logic/stateHelpers';
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -147,6 +147,7 @@ export function normalizeLegacyState(rawJson: string): SNSGodState {
         ...fallback.config.apiProfiles,
         ...(isObject(config.apiProfiles) ? config.apiProfiles : {})
       },
+      userAppearancePrompt: String(config.userAppearancePrompt || fallback.config.userAppearancePrompt || DEFAULT_USER_APPEARANCE_PROMPT),
       privateFirst: boolConfig(config, fallback.config.privateFirst === true, 'privateFirst', 'proactiveChatEnabled'),
       groupFirst: boolConfig(config, fallback.config.groupFirst === true, 'groupFirst'),
       randomDmEnabled: boolConfig(config, fallback.config.randomDmEnabled !== false, 'randomDmEnabled', 'randomFirstMessageEnabled'),

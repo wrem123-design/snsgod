@@ -845,16 +845,49 @@ export function imagePromptWithoutCharacterName(prompt: string, character: SNSGo
   return next || String(prompt || '').trim();
 }
 
+type ImagePromptKind = 'profile' | 'profile-reference-face' | 'cover' | 'general' | 'meeting';
+
 function samePromptText(a: string, b: string): boolean {
   return a.replace(/\s+/g, ' ').trim().toLowerCase() === b.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodCharacter | undefined, prompt: string, options: { usesReference?: boolean } = {}): string {
+export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodCharacter | undefined, prompt: string, options: { usesReference?: boolean; kind?: ImagePromptKind } = {}): string {
   const prefix = config.promptPrefix || 'Create a realistic in-character phone photo. Natural lighting, casual composition, no text overlay.';
   const profilePhotoPrompt = character?.profileAvatarPrompt ? imagePromptWithoutCharacterName(character.profileAvatarPrompt, character) : '';
   const requested = imagePromptWithoutCharacterName(prompt, character);
   const nsfw = config.nsfw ? 'NSFW/private fictional image is allowed when appropriate.' : 'Keep it safe and non-explicit.';
+  if (options.kind === 'cover') {
+    return [
+      'Create a wide messenger profile cover/background image, not a profile photo.',
+      'The image must be personless: no humans, no face, no body, no silhouette, no character, no crowd, no selfie, no portrait, no text, no logo, no UI.',
+      'Use only scenery, room details, objects, weather, light, or environmental traces that fit the requested mood.',
+      `Requested cover background: ${requested}`,
+      nsfw
+    ].filter(Boolean).join('\n');
+  }
+  if (options.kind === 'meeting') {
+    return [
+      options.usesReference
+        ? 'Use the attached reference image only for the female character visual identity. Preserve her face, hairstyle, and likeness from the reference. Do not apply the reference face to the male user.'
+        : '',
+      'Create a realistic horizontal cinematic still from an in-person meeting event, not a phone call, not a messenger screenshot, not SNS.',
+      'Show the fictional female character and the male user as two distinct people when the scene calls for both. Keep their clothing and posture grounded in the recent conversation, time, place, and mood.',
+      prefix,
+      `Requested meeting still: ${requested}`,
+      'No text, no captions, no UI, no logos, no watermark.',
+      nsfw
+    ].filter(Boolean).join('\n');
+  }
   if (options.usesReference) {
+    if (options.kind === 'profile-reference-face') {
+      return [
+        'Use the attached reference image only as a facial identity reference for the fictional adult female character. Preserve the face shape, facial proportions, and recognizable facial vibe.',
+        'Do not copy the reference outfit, background, pose, age context, job, personality, or story. Generate a new fictional character from the requested prompt.',
+        prefix,
+        `Requested character image: ${requested}`,
+        nsfw
+      ].filter(Boolean).join('\n');
+    }
     return [
       'Use the attached reference image as the visual identity reference. Create the same person from the reference image, preserving face, hairstyle, and overall likeness.',
       prefix,
@@ -925,7 +958,7 @@ async function appendReferenceImage(form: FormData, field: string, uri: string) 
   }
 }
 
-async function generateGrokLocalImage(state: SNSGodState, prompt: string, character?: SNSGodCharacter, options?: { referenceImage?: string; kind?: 'profile' | 'cover' | 'general' }): Promise<string> {
+async function generateGrokLocalImage(state: SNSGodState, prompt: string, character?: SNSGodCharacter, options?: { referenceImage?: string; kind?: ImagePromptKind }): Promise<string> {
   const config = state.config.imageGeneration || {};
   const provider = config.provider || 'openai';
   const hasReference = /^(data:|file:|content:|asset:)/i.test(String(options?.referenceImage || ''));
@@ -934,9 +967,9 @@ async function generateGrokLocalImage(state: SNSGodState, prompt: string, charac
     `provider=${provider} kind=${options?.kind || 'general'} character=${character?.name || '-'} reference=${hasReference ? 'yes' : 'no'} supported=${provider === 'grok-local' || provider === 'grok-cloud' ? 'yes' : 'no'} prompt=${String(prompt || '').replace(/\s+/g, ' ').slice(0, 260)}`
   );
   const baseUrl = normalizeGrokBaseUrl(config.provider === 'grok-cloud' ? config.grokCloudBaseUrl : config.grokBaseUrl);
-  const referenceImage = options?.referenceImage || '';
+  const referenceImage = options?.kind === 'cover' ? '' : options?.referenceImage || '';
   const usesReference = /^(data:|file:|content:|asset:)/i.test(referenceImage);
-  const finalPrompt = imagePromptFor(config, character, prompt, { usesReference });
+  const finalPrompt = imagePromptFor(config, character, prompt, { usesReference, kind: options?.kind });
   const resolution = String(config.grokResolution || config.quality || '1k').includes('1k') ? '1k' : String(config.grokResolution || '1k');
   const aspectRatio = String(config.grokAspectRatio || 'auto');
   if (usesReference) {
@@ -963,7 +996,7 @@ async function generateGrokLocalImage(state: SNSGodState, prompt: string, charac
   return fetchImageAsDataUri(absoluteGrokUrl(baseUrl, String(url)));
 }
 
-export async function generateImageDataUri(state: SNSGodState, prompt: string, character?: SNSGodCharacter, options?: { referenceImage?: string; kind?: 'profile' | 'cover' | 'general' }): Promise<string> {
+export async function generateImageDataUri(state: SNSGodState, prompt: string, character?: SNSGodCharacter, options?: { referenceImage?: string; kind?: ImagePromptKind }): Promise<string> {
   const config = state.config.imageGeneration || {};
   if (config.provider !== 'grok-local' && config.provider !== 'grok-cloud') {
     const provider = config.provider || 'openai';
@@ -984,8 +1017,8 @@ export async function generateImageDataUri(state: SNSGodState, prompt: string, c
   if (config.size) tool.size = config.size;
   if (config.quality) tool.quality = config.quality;
   const body = endpoint.includes('/images/generations')
-    ? { model, prompt: imagePromptFor(config, character, prompt), size: config.size || '1024x1024', response_format: 'b64_json' }
-    : { model, input: imagePromptFor(config, character, prompt), tools: [tool], tool_choice: { type: 'image_generation' } };
+    ? { model, prompt: imagePromptFor(config, character, prompt, { kind: options?.kind }), size: config.size || '1024x1024', response_format: 'b64_json' }
+    : { model, input: imagePromptFor(config, character, prompt, { kind: options?.kind }), tools: [tool], tool_choice: { type: 'image_generation' } };
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },

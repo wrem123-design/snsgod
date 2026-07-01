@@ -1,5 +1,6 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
+import * as ImagePicker from 'expo-image-picker';
 import { SNSGodState } from '../types';
 
 const MEDIA_DIR = `${FileSystem.documentDirectory || ''}snsgod-media/`;
@@ -11,6 +12,24 @@ export async function pickImageDataUri(): Promise<string | undefined> {
   const asset = result.assets[0];
   const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
   return `data:${asset.mimeType || 'image/jpeg'};base64,${base64}`;
+}
+
+export async function pickImageDataUris(limit = 0): Promise<string[] | undefined> {
+  const permission = await ImagePicker.requestMediaLibraryPermissionsAsync(false);
+  if (!permission.granted) return undefined;
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ['images'],
+    allowsMultipleSelection: true,
+    selectionLimit: Math.max(0, Math.floor(limit || 0)),
+    quality: 1,
+    base64: true
+  });
+  if (result.canceled || !result.assets?.length) return undefined;
+  return Promise.all(result.assets.map(async asset => {
+    const mimeType = asset.mimeType || 'image/jpeg';
+    const base64 = asset.base64 || await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+    return `data:${mimeType};base64,${base64}`;
+  }));
 }
 
 export async function pickStickerDataUri(): Promise<{ data: string; name: string; type?: string } | undefined> {
@@ -70,6 +89,7 @@ export async function externalizeStateMedia(state: SNSGodState): Promise<SNSGodS
     characters: [...state.characters],
     messages: { ...state.messages },
     snsPosts: [...(state.snsPosts || [])],
+    referenceFaceSlots: [...(state.referenceFaceSlots || [])],
     userStickers: [...(state.userStickers || [])]
   };
 
@@ -106,6 +126,11 @@ export async function externalizeStateMedia(state: SNSGodState): Promise<SNSGodS
   next.snsPosts = await Promise.all((next.snsPosts || []).map(async post => ({
     ...post,
     image: isLargeDataUri(post.image) ? await externalizeDataUri(post.image, `sns_${post.id}`) : post.image
+  })));
+
+  next.referenceFaceSlots = await Promise.all((next.referenceFaceSlots || []).slice(0, 30).map(async slot => ({
+    ...slot,
+    image: isLargeDataUri(slot.image) ? await externalizeDataUri(slot.image, `reference_face_${slot.id}`) : slot.image
   })));
 
   return next;

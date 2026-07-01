@@ -7,6 +7,7 @@ import { isRenderableMediaUri } from './media';
 import { markRoomRead } from './notifications';
 import { phoneCardFromReply } from './phone';
 import { buildChatPrompt, normalizeReplyMessagesForStyle } from './prompts';
+import { createMeetingEventSession, shouldStartMeetingEvent } from './meetingEvent';
 import { maybeCreateAutoSNSPost } from './sns';
 import { appendMessage, findCharacter, findRoom, roomMessages, updateCharacter } from './stateHelpers';
 import { chatNowContext, isImplausibleCompletedActivity, repairTimeRealityInstruction, softenImplausibleCompletedActivity } from './timeReality';
@@ -297,6 +298,29 @@ export async function startReplyJob(input: StartReplyJobInput) {
 
     if (input.randomMode) {
       await appendDebugLog('sns.auto', `skip room=${input.roomId} character=${input.characterId}: random mode`);
+    }
+
+    if (!input.randomMode && isCurrentChatJob(input.roomId, jobId)) {
+      const beforeMeeting = input.getState();
+      if (beforeMeeting && !beforeMeeting.activeMeetingEventId) {
+        try {
+          const meeting = await shouldStartMeetingEvent(beforeMeeting, input.roomId, input.latestUserInput);
+          if (meeting.shouldStart && isCurrentChatJob(input.roomId, jobId)) {
+            const sourceState = input.getState() || beforeMeeting;
+            const generated = await createMeetingEventSession(sourceState, input.roomId, meeting);
+            if (generated !== sourceState) {
+              await input.commitCurrent(current => ({
+                ...generated,
+                messages: { ...current.messages, ...generated.messages },
+                pendingReplies: current.pendingReplies
+              }));
+              return;
+            }
+          }
+        } catch (error) {
+          await appendDebugLog('meeting.reply', `post-reply meeting start failed room=${input.roomId}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+        }
+      }
     }
 
     if (!input.randomMode && isCurrentChatJob(input.roomId, jobId)) {

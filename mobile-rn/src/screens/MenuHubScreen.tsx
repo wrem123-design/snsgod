@@ -9,8 +9,11 @@ type MenuItem = {
   onPress: () => void;
 };
 
-export function MenuHubScreen({ mode, onOpenSumGod, onOpenGallery, onOpenNotifications, onOpenSettings, onOpenDebug }: {
+export function MenuHubScreen({ mode, onOpenBlindDate, onOpenIdealWorldcup, onOpenReferences, onOpenSumGod, onOpenGallery, onOpenNotifications, onOpenSettings, onOpenDebug }: {
   mode: 'etc';
+  onOpenBlindDate: () => void;
+  onOpenIdealWorldcup: () => void;
+  onOpenReferences: () => void;
   onOpenSumGod: () => void;
   onOpenGallery: () => void;
   onOpenNotifications: () => void;
@@ -18,8 +21,13 @@ export function MenuHubScreen({ mode, onOpenSumGod, onOpenGallery, onOpenNotific
   onOpenDebug: () => void;
 }) {
   const items: MenuItem[] = [
+    { title: '블라인드 데이트', subtitle: 'AI 후보를 비교하고 캐릭터로 가져와요', icon: 'BD', onPress: onOpenBlindDate },
+    { title: '이상형 월드컵', subtitle: '8강, 16강, 24강 토너먼트로 최종 선택', icon: '🏆', onPress: onOpenIdealWorldcup },
     { title: 'SumGod', subtitle: '커플 질문 다이어리', icon: 'S', onPress: onOpenSumGod },
-    { title: '갤러리', subtitle: '저장된 이미지 보기', icon: '□', onPress: onOpenGallery },
+    { title: '갤러리', subtitle: '저장된 이미지 보기', icon: '□', onPress: onOpenGallery }
+  ];
+  const optionItems: MenuItem[] = [
+    { title: '레퍼런스', subtitle: '얼굴 슬롯 관리', icon: 'R', onPress: onOpenReferences },
     { title: '디버그', subtitle: '로그 확인과 앱 상태 재로드', icon: 'D', onPress: onOpenDebug }
   ];
 
@@ -40,6 +48,20 @@ export function MenuHubScreen({ mode, onOpenSumGod, onOpenGallery, onOpenNotific
           </Pressable>
         ))}
       </View>
+      <View style={styles.optionArea}>
+        <Text style={styles.optionLabel}>옵션</Text>
+        <View style={styles.optionGrid}>
+          {optionItems.map(item => (
+            <Pressable key={item.title} onPress={item.onPress} style={styles.optionCard}>
+              <View style={styles.optionIconBox}><Text style={styles.optionIcon}>{item.icon}</Text></View>
+              <View style={styles.optionTextBlock}>
+                <Text style={styles.optionTitle}>{item.title}</Text>
+                <Text style={styles.optionSub} numberOfLines={1}>{item.subtitle}</Text>
+              </View>
+            </Pressable>
+          ))}
+        </View>
+      </View>
     </View>
   );
 }
@@ -56,5 +78,14 @@ const styles = StyleSheet.create({
   iconBox: { width: 52, height: 52, borderRadius: 16, backgroundColor: '#ffffff', alignItems: 'center', justifyContent: 'center' },
   icon: { color: colors.text, fontSize: 24, fontWeight: '900' },
   cardTitle: { color: '#111', fontSize: 16, fontWeight: '900' },
-  cardSub: { color: '#6f747c', fontSize: 12, lineHeight: 17, fontWeight: '700' }
+  cardSub: { color: '#6f747c', fontSize: 12, lineHeight: 17, fontWeight: '700' },
+  optionArea: { marginTop: 'auto', paddingHorizontal: 18, paddingTop: 14, paddingBottom: 22, backgroundColor: '#f2eee6', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#ded6c9' },
+  optionLabel: { marginBottom: 9, color: '#7b746a', fontSize: 12, fontWeight: '900' },
+  optionGrid: { flexDirection: 'row', gap: 10 },
+  optionCard: { flex: 1, minHeight: 68, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#fffefa', borderWidth: 1, borderColor: '#e2d8c8' },
+  optionIconBox: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#ece5d9' },
+  optionIcon: { color: colors.text, fontSize: 16, fontWeight: '900' },
+  optionTextBlock: { flex: 1, minWidth: 0 },
+  optionTitle: { color: '#17120d', fontSize: 14, fontWeight: '900' },
+  optionSub: { marginTop: 2, color: '#81786c', fontSize: 11, fontWeight: '800' }
 });

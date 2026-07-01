@@ -12,6 +12,8 @@ import { isRenderableMediaUri, pickStickerDataUri } from '../logic/media';
 import { Avatar } from '../components/Avatar';
 import { fetchGrokAccounts, fetchGrokBilling, fetchGrokStatus, GrokBilling, GrokLocalAccount, GrokLocalStatus, grokBaseUrl, grokCloudBaseUrl, logoutGrokOAuth, selectGrokOAuth, startGrokLogin } from '../logic/grokLocal';
 import { createBackupPayload } from '../logic/backup';
+import { DEFAULT_USER_APPEARANCE_PROMPT } from '../logic/prompts';
+import { MAX_CONTEXT_MESSAGES } from '../logic/limits';
 
 const PROVIDERS: ApiProvider[] = ['vertex', 'gemini', 'openai', 'anthropic', 'custom'];
 const PROVIDER_PRESETS: Partial<Record<ApiProvider, { endpoint: string; model: string }[]>> = {
@@ -193,6 +195,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   const [endpoint, setEndpoint] = useState(String(profile.apiEndpoint || ''));
   const [maxTokens, setMaxTokens] = useState(String(profile.maxTokens || (provider === 'vertex' ? 4096 : 700)));
   const [temperature, setTemperature] = useState(String(profile.temperature || 0.85));
+  const [contextMessageLimit, setContextMessageLimit] = useState(String(profile.contextMessageLimit || MAX_CONTEXT_MESSAGES));
   const [apiKey1, setApiKey1] = useState(keySlots[0]);
   const [apiKey2, setApiKey2] = useState(keySlots[1]);
   const [apiKey3, setApiKey3] = useState(keySlots[2]);
@@ -210,6 +213,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   const [roomName, setRoomName] = useState(state.config.roomName || '채팅');
   const [language, setLanguage] = useState(state.config.language || 'Korean');
   const [userDescription, setUserDescription] = useState(state.config.userDescription || '');
+  const [userAppearancePrompt, setUserAppearancePrompt] = useState(String(state.config.userAppearancePrompt || DEFAULT_USER_APPEARANCE_PROMPT));
   const [fontScale, setFontScale] = useState(String(state.config.fontScale || 1));
   const [snsAutoChance, setSnsAutoChance] = useState(String(state.config.snsAutoChance ?? 40));
   const [snsStartCount, setSnsStartCount] = useState(String(state.config.snsStartCount ?? 6));
@@ -308,8 +312,9 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     setProvider(nextProvider);
     setModel(String(nextProfile.apiModel || ''));
     setEndpoint(String(nextProfile.apiEndpoint || ''));
-    setMaxTokens(String(nextProfile.maxTokens || (provider === 'vertex' ? 4096 : 700)));
+    setMaxTokens(String(nextProfile.maxTokens || (nextProvider === 'vertex' ? 4096 : 700)));
     setTemperature(String(nextProfile.temperature || 0.85));
+    setContextMessageLimit(String(nextProfile.contextMessageLimit || MAX_CONTEXT_MESSAGES));
     setApiKey1(keys[0] || '');
     setApiKey2(keys[1] || '');
     setApiKey3(keys[2] || '');
@@ -330,6 +335,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     const keys = Array.from(new Set([apiKey1, apiKey2, apiKey3].map(value => String(value || '').trim()).filter(Boolean)));
     const normalizedModel = model.trim() || (provider === 'vertex' ? 'gemini-3-flash-preview' : '');
     const normalizedMaxTokens = Math.max(32, Math.round(Number(maxTokens) || (provider === 'vertex' ? 4096 : 700)));
+    const normalizedContextLimit = Math.max(4, Math.min(80, Math.round(Number(contextMessageLimit) || MAX_CONTEXT_MESSAGES)));
     const safeMaxTokens = provider === 'vertex' && /gemini-3/i.test(normalizedModel)
       ? Math.max(4096, normalizedMaxTokens)
       : normalizedMaxTokens;
@@ -351,7 +357,8 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
         thinkingLevel: vertexThinkingLevel.trim() || 'off',
         thinkingBudgetTokens: Math.max(0, Math.round(Number(vertexThinkingBudget) || 0)),
         maxTokens: safeMaxTokens,
-        temperature: Number.isFinite(Number(temperature)) ? Number(temperature) : 0.85
+        temperature: Number.isFinite(Number(temperature)) ? Number(temperature) : 0.85,
+        contextMessageLimit: normalizedContextLimit
       }
       : {
         ...profile,
@@ -360,7 +367,8 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
         apiEndpoint: endpoint.trim(),
         apiModel: normalizedModel,
         maxTokens: safeMaxTokens,
-        temperature: Number.isFinite(Number(temperature)) ? Number(temperature) : 0.85
+        temperature: Number.isFinite(Number(temperature)) ? Number(temperature) : 0.85,
+        contextMessageLimit: normalizedContextLimit
       };
     const next: SNSGodState = {
       ...state,
@@ -446,7 +454,8 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
         roomName: roomName.trim() || '채팅',
         language: language.trim() || 'Korean',
         fontScale: Math.max(0.7, Math.min(1.6, Number(fontScale) || 1)),
-        userDescription
+        userDescription,
+        userAppearancePrompt: userAppearancePrompt.trim() || DEFAULT_USER_APPEARANCE_PROMPT
       }
       });
       setStatus('내 프로필 저장 완료');
@@ -968,6 +977,16 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
             scrollEnabled
             textAlignVertical="top"
           />
+          <Text style={styles.label}>내 외모 프롬프트</Text>
+          <TextInput
+            value={userAppearancePrompt}
+            onChangeText={setUserAppearancePrompt}
+            style={[styles.input, styles.profileTextarea]}
+            multiline
+            scrollEnabled
+            textAlignVertical="top"
+          />
+          <Text style={styles.help}>만남 이벤트 스틸샷에서 유저 외모를 그릴 때 사용합니다. 비워두면 기본 20대 초반 한국 남성 외모로 저장됩니다.</Text>
           <Pressable onPress={saveProfile} style={styles.primary}><Text style={styles.primaryText}>프로필 저장</Text></Pressable>
         </View>
 
@@ -1096,6 +1115,9 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
               <TextInput value={temperature} onChangeText={setTemperature} style={styles.input} keyboardType="decimal-pad" />
             </View>
           </View>
+          <Text style={styles.label}>이전 대화 참조 개수</Text>
+          <TextInput value={contextMessageLimit} onChangeText={setContextMessageLimit} style={styles.input} keyboardType="number-pad" />
+          <Text style={styles.help}>일반 채팅 답장 생성에 넣는 최근 메시지 수입니다. 기본값은 {MAX_CONTEXT_MESSAGES}개이며, 너무 크게 잡으면 응답이 느려질 수 있습니다.</Text>
           <Text style={styles.help}>{provider === 'vertex' ? 'Vertex는 서비스 계정 JSON으로 OAuth 토큰을 발급받아 호출합니다. 키 1/2/3 회전은 사용하지 않습니다.' : '키 1번 실패 시 2번, 3번 순서로 자동 재시도합니다. 성공한 키 번호는 다음 호출의 시작점으로 저장됩니다.'}</Text>
           <View style={styles.buttonRow}>
             <Pressable onPress={saveApi} disabled={saving} style={[styles.primary, styles.rowButton, saving && styles.disabled]}><Text style={styles.primaryText}>API 저장</Text></Pressable>

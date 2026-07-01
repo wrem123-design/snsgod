@@ -1,7 +1,7 @@
 import { callLLM, callLLMText, generateImageDataUri, parseJsonObject } from './api';
 import { appendDebugLog } from './debugLog';
 import { makeId } from './ids';
-import { DEFAULT_COVER_BACKGROUND_DIRECTION, DEFAULT_PROMPTS, proactiveInstruction, userNameFor, userProfileFor } from './prompts';
+import { DEFAULT_COVER_BACKGROUND_DIRECTION, DEFAULT_PROMPTS, LEGACY_COVER_BACKGROUND_DIRECTION, proactiveInstruction, userNameFor, userProfileFor } from './prompts';
 import { buildTimeRealityInstruction, chatNowContext, isImplausibleCompletedActivity, repairTimeRealityInstruction, softenImplausibleCompletedActivity } from './timeReality';
 import { appendMessage, findCharacter } from './stateHelpers';
 import { MAX_GROUP_ROOM_MESSAGES, MAX_SNS_DM_CONTEXT_MESSAGES } from './limits';
@@ -234,9 +234,82 @@ function adjustedInitiative(character: SNSGodCharacter): number {
   return base;
 }
 
+function cleanStatusMessage(value: string): string {
+  return String(value || '')
+    .replace(/```(?:json)?/gi, '')
+    .replace(/```/g, '')
+    .replace(/^\s*["']?(statusMessage|status|message)["']?\s*[:=]\s*/i, '')
+    .replace(/^["']|["']$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 42);
+}
+
+async function runStatusMessageAutomation(state: SNSGodState): Promise<SNSGodState | undefined> {
+  if (state.config.autoEnabled === false) return undefined;
+  for (const character of state.characters) {
+    if (character.randomTemporary === true || character.enabled === false) continue;
+    if (character.statusMessageAutoChange === false) continue;
+    const intervalMinutes = Math.max(45, Number(character.frequencyMinutes || 10) * 6);
+    if (minutesSince(Number(character.lastStatusMessageChangeAt || 0)) < intervalMinutes) continue;
+    const chance = Math.max(0, Math.min(100, Number(character.statusMessageChangeChance ?? 40)));
+    if (Math.random() * 100 > chance) continue;
+    const recentContext = recentCharacterActivityContext(state, character);
+    try {
+      const { text, keyIndex } = await callLLMText(state, [
+        {
+          role: 'system',
+          content: [
+            'You write one short Korean messenger profile status message for a fictional character.',
+            'Return raw JSON only: {"statusMessage":"..."}. No markdown, no explanation.',
+            'It should feel like a real messenger status line: brief, casual, current, and in-character.',
+            'Base it on recent chats, calls, mood, weather, time, or ordinary activity. Do not invent completed events not in context.',
+            'Keep it 4-22 Korean characters when possible. No hashtags, no quotes, no UI labels.'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: [
+            `Character name: ${character.name}`,
+            `Current status message: ${character.statusMessage || '(empty)'}`,
+            `Character profile:\n${character.prompt || '(empty)'}`,
+            `Recent activity context:\n${recentContext || '(no recent activity)'}`
+          ].join('\n\n')
+        }
+      ]);
+      const parsed = parseJsonObject<{ statusMessage?: string; status?: string; message?: string }>(text);
+      const statusMessage = cleanStatusMessage(parsed?.statusMessage || parsed?.status || parsed?.message || text);
+      if (!statusMessage || statusMessage === String(character.statusMessage || '').trim()) continue;
+      const now = Date.now();
+      return {
+        ...state,
+        config: {
+          ...state.config,
+          apiProfiles: {
+            ...state.config.apiProfiles,
+            [state.config.apiType]: { ...(state.config.apiProfiles[state.config.apiType] || {}), apiKeyIndex: keyIndex }
+          }
+        },
+        characters: state.characters.map(item => item.id === character.id ? {
+          ...item,
+          statusMessage,
+          lastStatusMessageChangeAt: now
+        } : item)
+      };
+    } catch (error) {
+      await appendDebugLog('automation.status', `status message update failed for ${character.name}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 async function recentCoverPromptFor(state: SNSGodState, character: SNSGodCharacter): Promise<string> {
   const recentContext = recentCharacterActivityContext(state, character);
-  const extraDirection = String(character.profileCoverPrompt || DEFAULT_COVER_BACKGROUND_DIRECTION).trim();
+  const savedDirection = String(character.profileCoverPrompt || '').trim();
+  const extraDirection = !savedDirection || savedDirection === LEGACY_COVER_BACKGROUND_DIRECTION
+    ? DEFAULT_COVER_BACKGROUND_DIRECTION
+    : savedDirection;
   try {
     const { text } = await callLLMText(state, [
       {
@@ -246,7 +319,8 @@ async function recentCoverPromptFor(state: SNSGodState, character: SNSGodCharact
           'Return raw JSON only: {"prompt":"..."}. No markdown, no explanation.',
           'The cover must be based on the character\'s recent places, movements, errands, calls, chats, or implied current whereabouts.',
           'Do not create a static personality mood board. Prefer a plausible recent location or trace of activity.',
-          'The image must be a personless wide cover/background: no humans, no face, no body, no silhouette, no character, no crowd, no text, no letters, no logo, no UI, no screenshot.',
+          'The image must be a personless wide cover/background: no humans, no face, no body, no silhouette, no character, no portrait, no selfie, no crowd, no text, no letters, no logo, no UI, no screenshot.',
+          'Do not describe the character\'s appearance, clothing, pose, eyes, hair, face, body, or likeness. The prompt must contain only environment, scenery, objects, weather, light, and atmosphere.',
           'Use grounded environmental details. If recent activity is unclear, infer a subtle ordinary place from the latest chat/location instead of inventing a dramatic scene.',
           'Prompt should be 35-80 words.'
         ].join('\n')
@@ -487,6 +561,9 @@ async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | u
 }
 
 export async function runAutomationTick(state: SNSGodState): Promise<SNSGodState> {
+  const statusNext = await runStatusMessageAutomation(state);
+  if (statusNext) return statusNext;
+
   const profileImageNext = await runProfileImageAutomation(state);
   if (profileImageNext) return profileImageNext;
 

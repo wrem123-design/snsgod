@@ -10,6 +10,8 @@ import { normalizeSumGodState } from '../logic/sumgod';
 
 const STATE_KEY = 'snsgod.state.v1';
 const LEGACY_BACKUP_KEY = 'snsgod.legacyBackup.v1';
+const REFERENCE_FACE_BACKUP_KEY = 'snsgod.referenceFaceSlots.v1';
+const MEETING_EVENT_BACKUP_KEY = 'snsgod.meetingEventSessions.v1';
 const SAVE_DEBOUNCE_MS = 1200;
 
 let saveInFlight = Promise.resolve();
@@ -18,11 +20,12 @@ let saveTimer: ReturnType<typeof setTimeout> | undefined;
 
 export async function loadState(): Promise<SNSGodState> {
   const raw = await AsyncStorage.getItem(STATE_KEY);
-  if (!raw) return normalizeState(createDefaultState());
+  const backups = await readCriticalBackups();
+  if (!raw) return normalizeState(mergeCriticalBackups(createDefaultState(), backups));
   try {
-    return normalizeState(JSON.parse(raw) as SNSGodState);
+    return normalizeState(mergeCriticalBackups(JSON.parse(raw) as SNSGodState, backups));
   } catch {
-    return normalizeState(createDefaultState());
+    return normalizeState(mergeCriticalBackups(createDefaultState(), backups));
   }
 }
 
@@ -32,7 +35,11 @@ async function writeStateNow(state: SNSGodState): Promise<void> {
   saveInFlight = saveInFlight
     .catch(() => undefined)
     .then(async () => {
-      await AsyncStorage.setItem(STATE_KEY, payload);
+      await AsyncStorage.multiSet([
+        [STATE_KEY, payload],
+        [REFERENCE_FACE_BACKUP_KEY, JSON.stringify(snapshot.referenceFaceSlots || [])],
+        [MEETING_EVENT_BACKUP_KEY, JSON.stringify(snapshot.meetingEventSessions || [])]
+      ]);
       const saved = await AsyncStorage.getItem(STATE_KEY);
       if (saved !== payload) {
         throw new Error('저장 검증 실패: 저장 직후 읽은 데이터가 일치하지 않습니다.');
@@ -71,9 +78,42 @@ export async function importState(state: SNSGodState, originalJson: string): Pro
   const imported: SNSGodState = { ...prepareStateForSave(state), __importedAt: Date.now() };
   await AsyncStorage.multiSet([
     [STATE_KEY, JSON.stringify(imported)],
+    [REFERENCE_FACE_BACKUP_KEY, JSON.stringify(imported.referenceFaceSlots || [])],
+    [MEETING_EVENT_BACKUP_KEY, JSON.stringify(imported.meetingEventSessions || [])],
     [LEGACY_BACKUP_KEY, originalJson]
   ]);
   return imported;
+}
+
+async function readCriticalBackups(): Promise<Pick<SNSGodState, 'referenceFaceSlots' | 'meetingEventSessions'>> {
+  const [referenceRaw, meetingRaw] = await Promise.all([
+    AsyncStorage.getItem(REFERENCE_FACE_BACKUP_KEY),
+    AsyncStorage.getItem(MEETING_EVENT_BACKUP_KEY)
+  ]);
+  return {
+    referenceFaceSlots: parseArrayBackup(referenceRaw),
+    meetingEventSessions: parseArrayBackup(meetingRaw)
+  };
+}
+
+function parseArrayBackup<T>(raw: string | null): T[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function mergeCriticalBackups(state: SNSGodState, backups: Pick<SNSGodState, 'referenceFaceSlots' | 'meetingEventSessions'>): SNSGodState {
+  const currentReferenceSlots = Array.isArray(state.referenceFaceSlots) ? state.referenceFaceSlots : [];
+  const currentMeetingSessions = Array.isArray(state.meetingEventSessions) ? state.meetingEventSessions : [];
+  return {
+    ...state,
+    referenceFaceSlots: currentReferenceSlots.length > 0 ? currentReferenceSlots : backups.referenceFaceSlots || [],
+    meetingEventSessions: currentMeetingSessions.length > 0 ? currentMeetingSessions : backups.meetingEventSessions || []
+  };
 }
 
 export async function clearState(): Promise<SNSGodState> {

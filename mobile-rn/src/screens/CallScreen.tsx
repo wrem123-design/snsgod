@@ -224,6 +224,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
         .filter(item => item.speaker !== 'system')
         .map(item => `${item.speaker === 'user' ? userName : character.name}: ${item.text}`)
         .join('\n');
+      const memoryText = (character.memories || []).slice(-10).map(item => `- ${item}`).join('\n');
       const result = await callLLMText(state, [
         {
           role: 'system',
@@ -236,6 +237,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
             firstTurn ? 'For the first connected turn, uiMode may be next if the character is starting with a short greeting.' : 'Use choices when the user should answer meaningfully.',
             `Character profile:\n${character.prompt || '(empty)'}`,
             `User profile:\n${state.config.userDescription || '(empty)'}`,
+            memoryText ? `Character memories, including real in-person meetings:\n${memoryText}` : '',
             room?.relationshipNote ? `Room relationship/context note:\n${room.relationshipNote}` : '',
             `Recent messenger chat before this call:\n${recentChatContext() || '(empty)'}`
           ].filter(Boolean).join('\n\n')

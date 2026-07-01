@@ -1,5 +1,5 @@
 import { SNSGodState } from '../types';
-import { DEFAULT_PROMPTS } from '../logic/prompts';
+import { DEFAULT_PROMPTS, DEFAULT_USER_APPEARANCE_PROMPT } from '../logic/prompts';
 import { STATE_SCHEMA_VERSION } from '../logic/limits';
 
 export function createDefaultState(): SNSGodState {
@@ -35,6 +35,7 @@ export function createDefaultState(): SNSGodState {
       },
       userName: '나',
       userDescription: '',
+      userAppearancePrompt: DEFAULT_USER_APPEARANCE_PROMPT,
       roomName: '채팅',
       language: 'Korean',
       snsTheme: 'kakao',
@@ -152,8 +153,10 @@ export function createDefaultState(): SNSGodState {
     randomChats: [],
     loreEntries: [],
     loreFolders: [],
+    referenceFaceSlots: [],
     userStickers: [],
     notifications: [],
+    blindDate: { sessions: [], archives: [] },
     selectedRoomId: roomId
   };
 }

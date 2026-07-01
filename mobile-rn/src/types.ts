@@ -61,6 +61,7 @@ export type SNSGodConfig = {
   apiProfiles: Partial<Record<ApiProvider, ApiProfile>>;
   userName: string;
   userDescription: string;
+  userAppearancePrompt?: string;
   roomName: string;
   language: string;
   snsTheme?: 'default' | 'kakao';
@@ -177,6 +178,9 @@ export type SNSGodCharacter = {
   proactiveStyle?: string;
   proactivePatience?: number;
   statusMessage?: string;
+  statusMessageAutoChange?: boolean;
+  statusMessageChangeChance?: number;
+  lastStatusMessageChangeAt?: number;
   profileMessage?: string;
   profileImage?: string;
   coverImage?: string;
@@ -234,6 +238,170 @@ export type SNSGodMessage = {
   [key: string]: unknown;
 };
 
+export type MeetingEventLine = {
+  id: string;
+  speaker: 'user' | 'character' | 'system';
+  text: string;
+  createdAt: number;
+};
+
+export type MeetingEventSession = {
+  id: string;
+  roomId: string;
+  characterId: string;
+  startedAt: number;
+  endedAt?: number;
+  status: 'pending' | 'active' | 'dismissed' | 'ended';
+  location?: string;
+  reason?: string;
+  mood?: string;
+  seedSummary?: string;
+  stillPrompt?: string;
+  stillImage?: string;
+  turnCount: number;
+  maxTurns: number;
+  lines: MeetingEventLine[];
+  summary?: string;
+};
+
+export type BlindDateMode = 'profile' | 'question' | 'worldcup' | 'rotation';
+
+export type BlindDateStatus = 'setup' | 'generating' | 'active' | 'revealing' | 'dating' | 'completed';
+
+export type CandidateAppearance = {
+  ethnicityDetail: string;
+  faceShape: string;
+  eyes: string;
+  eyelids: string;
+  eyebrows: string;
+  nose: string;
+  lips: string;
+  cheeks: string;
+  jawline: string;
+  chin: string;
+  skinTone: string;
+  distinctiveMarks?: string[];
+  hairStyle: string;
+  hairColor: string;
+  heightCm: number;
+  bodyType: 'slender' | 'slim_glamorous' | 'petite_slim' | 'tall_slender' | 'soft_slim' | 'athletic_slim';
+  makeupStyle: string;
+  outfitStyle: string;
+};
+
+export type BlindDateAnswer = {
+  id: string;
+  candidateId: string;
+  anonymousLabel?: string;
+  text: string;
+  toneTags: string[];
+  scoreDelta?: number;
+};
+
+export type BlindDateCandidate = {
+  id: string;
+  anonymousLabel?: 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H';
+  name: string;
+  age: number;
+  nationality: 'Korean' | 'Japanese' | 'Chinese';
+  koreanFluency: 'native' | 'fluent';
+  job: string;
+  locationBase: string;
+  personalitySummary: string;
+  speechStyle: string;
+  relationshipStyle: string;
+  likes: string[];
+  dislikes: string[];
+  hobbies: string[];
+  firstDm: string;
+  contactPresetId: string;
+  snsStyle: string;
+  snsPreview?: string;
+  callPreview?: string;
+  appearance: CandidateAppearance;
+  imagePrompt: string;
+  profileImageUri?: string;
+  faceReferenceImage?: string;
+  answers: BlindDateAnswer[];
+  score: number;
+  selectedCount: number;
+  createdAt: number;
+};
+
+export type BlindDateRound = {
+  id: string;
+  roundIndex: number;
+  question: string;
+  answers: BlindDateAnswer[];
+  selectedAnswerId?: string;
+  createdAt: number;
+};
+
+export type BlindDateRanking = {
+  candidateId: string;
+  rank: number;
+  score: number;
+  selectedCount: number;
+  reason: string;
+};
+
+export type BlindDateWorldcupPair = {
+  id: string;
+  roundLabel: string;
+  criterion: string;
+  leftCandidateId: string;
+  rightCandidateId: string;
+  selectedCandidateId?: string;
+};
+
+export type BlindDateRotationTurn = {
+  id: string;
+  candidateId: string;
+  userText: string;
+  answerText: string;
+  createdAt: number;
+};
+
+export type BlindDateMemory = {
+  mode: BlindDateMode;
+  selectedAt: number;
+  selectedReason: string;
+  winningAnswers: string[];
+  userPreferenceTags: string[];
+  compatibilityScore: number;
+  firstDateSummary?: string;
+};
+
+export type BlindDateCandidateArchive = {
+  id: string;
+  candidate: BlindDateCandidate;
+  sessionId: string;
+  archivedAt: number;
+  canImport: boolean;
+};
+
+export type BlindDateSession = {
+  id: string;
+  mode: BlindDateMode;
+  status: BlindDateStatus;
+  candidateCount: number;
+  candidates: BlindDateCandidate[];
+  rounds: BlindDateRound[];
+  worldcupPairs?: BlindDateWorldcupPair[];
+  worldcupIndex?: number;
+  rotationTurns?: BlindDateRotationTurn[];
+  selectedCandidateId?: string;
+  finalRanking?: BlindDateRanking[];
+  createdAt: number;
+  completedAt?: number;
+};
+
+export type BlindDateProgress = {
+  sessions: BlindDateSession[];
+  activeSessionId?: string;
+  archives?: BlindDateCandidateArchive[];
+};
+
 export type Sticker = {
   id: string;
   name: string;
@@ -241,6 +409,13 @@ export type Sticker = {
   data?: string;
   mediaData?: string;
   type?: string;
+};
+
+export type ReferenceFaceSlot = {
+  id: string;
+  image: string;
+  name?: string;
+  createdAt: number;
 };
 
 export type CalendarEvent = {
@@ -412,11 +587,15 @@ export type SNSGodState = {
   groupRooms?: GroupRoom[];
   loreEntries?: LoreEntry[];
   loreFolders?: unknown[];
+  referenceFaceSlots?: ReferenceFaceSlot[];
   userStickers?: Sticker[];
   notifications?: NotificationItem[];
   randomChats?: RandomChatRoom[];
   randomCharacters?: SNSGodCharacter[];
   pendingReplies?: Record<string, { jobId: string; startedAt: number; phase?: 'delay' | 'typing' | 'generating' }>;
+  meetingEventSessions?: MeetingEventSession[];
+  activeMeetingEventId?: string;
+  blindDate?: BlindDateProgress;
   sumGod?: SumGodProgress;
   selectedRoomId?: string;
   __importedAt?: number;

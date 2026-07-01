@@ -1,4 +1,4 @@
-export const STATE_SCHEMA_VERSION = 2;
+export const STATE_SCHEMA_VERSION = 3;
 
 export const MAX_ROOM_MESSAGES = 120;
 export const MAX_GROUP_ROOM_MESSAGES = 120;

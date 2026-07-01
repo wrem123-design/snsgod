@@ -2,10 +2,10 @@ import React, { useState } from 'react';
 import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme';
 import { makeId } from '../logic/ids';
-import { isRenderableMediaUri, pickImageDataUri, pickImageDataUris } from '../logic/media';
+import { isRenderableMediaUri, pickPersistentReferenceImageUris } from '../logic/media';
 import { ReferenceFaceSlot, SNSGodState } from '../types';
 
-const MAX_REFERENCE_SLOTS = 30;
+const MAX_REFERENCE_SLOTS = 50;
 
 export function ReferenceFaceScreen({ state, onBack, onChange }: {
   state: SNSGodState;
@@ -20,11 +20,11 @@ export function ReferenceFaceScreen({ state, onBack, onChange }: {
   async function addSlot() {
     if (saving) return;
     if (slots.length >= MAX_REFERENCE_SLOTS) {
-      Alert.alert('슬롯 가득 참', '레퍼런스 얼굴은 최대 30장까지 등록할 수 있습니다.');
+      Alert.alert('슬롯 가득 참', '레퍼런스 얼굴은 최대 50장까지 등록할 수 있습니다.');
       return;
     }
     const emptyCount = MAX_REFERENCE_SLOTS - slots.length;
-    const images = await pickImageDataUris(emptyCount);
+    const images = await pickPersistentReferenceImageUris(emptyCount);
     if (!images?.length) return;
     if (images.length > emptyCount) {
       Alert.alert('슬롯 부족', `빈 슬롯은 ${emptyCount}개입니다. ${emptyCount}장 이하로 선택해주세요.`);
@@ -47,7 +47,8 @@ export function ReferenceFaceScreen({ state, onBack, onChange }: {
 
   async function replaceSlot(slotId: string) {
     if (saving) return;
-    const image = await pickImageDataUri();
+    const images = await pickPersistentReferenceImageUris(1);
+    const image = images?.[0];
     if (!image) return;
     setSaving(true);
     try {
@@ -91,7 +92,7 @@ export function ReferenceFaceScreen({ state, onBack, onChange }: {
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.infoCard}>
           <Text style={styles.infoTitle}>{slots.length}/{MAX_REFERENCE_SLOTS} 슬롯 사용 중</Text>
-          <Text style={styles.infoText}>블라인드 데이트와 이상형 후보 생성 시 약 40% 확률로 등록된 사진 중 1장을 골라 얼굴만 참조합니다. 성격, 직업, 말투, 취향은 계속 AI가 새로 만듭니다.</Text>
+          <Text style={styles.infoText}>블라인드 데이트와 이상형 후보 생성 시 약 48% 확률로 등록된 사진 중 1장을 골라 얼굴만 참조합니다. 성격, 직업, 말투, 취향은 계속 AI가 새로 만듭니다.</Text>
           <Pressable onPress={addSlot} style={[styles.addButton, (slots.length >= MAX_REFERENCE_SLOTS || saving) && styles.disabled]} disabled={slots.length >= MAX_REFERENCE_SLOTS || saving}>
             <Text style={styles.addButtonText}>{saving ? '저장 중...' : '사진 추가'}</Text>
           </Pressable>

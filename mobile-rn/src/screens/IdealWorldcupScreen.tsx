@@ -136,9 +136,8 @@ export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
       ) : left && right ? (
         <View style={styles.match}>
           <Text style={styles.matchTitle}>{worldcupMatchTitle(worldcupSession, currentPair)}</Text>
-          <CandidateNameBar candidate={left} variant="top" />
           <View style={styles.versusRow}>
-            <WorldcupCard candidate={left} onPress={() => choose(left)} hideNameBar />
+            <WorldcupCard candidate={left} onPress={() => choose(left)} namePosition="top" />
             <View pointerEvents="none" style={styles.vsBadge}>
               <View style={styles.vsGlass} />
               <Text style={styles.vsShadow}>VS</Text>
@@ -146,7 +145,7 @@ export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
               <Text style={styles.vsSparkLeft}>✦</Text>
               <Text style={styles.vsSparkRight}>✧</Text>
             </View>
-            <WorldcupCard candidate={right} onPress={() => choose(right)} />
+            <WorldcupCard candidate={right} onPress={() => choose(right)} namePosition="bottom" />
           </View>
         </View>
       ) : (
@@ -178,20 +177,20 @@ function worldcupMatchTitle(session: BlindDateSession, pair?: NonNullable<BlindD
   return `${label} · ${pairIndex + 1}/${Math.max(1, sameRoundPairs.length)}`;
 }
 
-function CandidateNameBar({ candidate, variant }: { candidate: BlindDateCandidate; variant?: 'top' }) {
+function CandidateNameBar({ candidate, position }: { candidate: BlindDateCandidate; position: 'top' | 'bottom' }) {
   return (
-    <View style={[styles.nameStrip, variant === 'top' && styles.topNameStrip]}>
+    <View style={[styles.nameStrip, position === 'top' ? styles.topNameStrip : styles.bottomNameStrip]}>
       <Text numberOfLines={1} style={styles.cardName}>{candidate.name}</Text>
       <Text numberOfLines={1} style={styles.cardSub}>{candidate.job}</Text>
     </View>
   );
 }
 
-function WorldcupCard({ candidate, onPress, hideNameBar }: { candidate: BlindDateCandidate; onPress: () => void; hideNameBar?: boolean }) {
+function WorldcupCard({ candidate, onPress, namePosition }: { candidate: BlindDateCandidate; onPress: () => void; namePosition: 'top' | 'bottom' }) {
   return (
     <Pressable onPress={onPress} style={styles.card}>
       {candidate.profileImageUri ? <Image source={{ uri: candidate.profileImageUri }} style={styles.cardImage} /> : <View style={styles.emptyImage}><Text style={styles.emptyText}>{candidate.name.slice(0, 1)}</Text></View>}
-      {hideNameBar ? null : <CandidateNameBar candidate={candidate} />}
+      <CandidateNameBar candidate={candidate} position={namePosition} />
     </Pressable>
   );
 }
@@ -231,13 +230,14 @@ const styles = StyleSheet.create({
   disabled: { opacity: 0.55 },
   match: { flex: 1, paddingTop: 16 },
   matchTitle: { color: '#fff', fontSize: 25, lineHeight: 32, fontWeight: '900', textAlign: 'center' },
-  versusRow: { flex: 1, flexDirection: 'column', alignItems: 'stretch', paddingTop: 18 },
+  versusRow: { flex: 1, flexDirection: 'column', alignItems: 'stretch', paddingTop: 12 },
   card: { flex: 1, width: '100%', backgroundColor: '#1d1d1d', overflow: 'hidden', justifyContent: 'center' },
   cardImage: { width: '100%', height: '100%', resizeMode: 'cover' },
   emptyImage: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#333' },
   emptyText: { color: '#fff', fontSize: 48, fontWeight: '900' },
-  nameStrip: { position: 'absolute', left: 0, right: 0, bottom: 0, minHeight: 34, paddingHorizontal: 14, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(0,0,0,0.58)' },
-  topNameStrip: { position: 'relative', marginTop: 7, minHeight: 32, backgroundColor: 'rgba(255,255,255,0.08)' },
+  nameStrip: { position: 'absolute', left: 0, right: 0, minHeight: 32, paddingHorizontal: 14, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(0,0,0,0.58)', zIndex: 4 },
+  topNameStrip: { top: 0 },
+  bottomNameStrip: { bottom: 0 },
   cardName: { color: '#fff', fontSize: 16, fontWeight: '900', textAlign: 'left' },
   cardSub: { flex: 1, color: '#e8e8e8', fontSize: 12, fontWeight: '800', textAlign: 'left' },
   vsBadge: { position: 'absolute', left: '50%', top: '50%', marginLeft: -68, marginTop: -44, width: 136, height: 88, alignItems: 'center', justifyContent: 'center', zIndex: 8, elevation: 8 },

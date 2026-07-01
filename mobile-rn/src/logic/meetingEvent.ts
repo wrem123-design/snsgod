@@ -69,6 +69,56 @@ function compactText(value: string, max = 1600): string {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
+function hasKorean(value: string): boolean {
+  return /[가-힣]/.test(value);
+}
+
+function visibleKoreanOrFallback(value: string | undefined, fallback: string, max = 240): string {
+  const text = compactText(value || '', max);
+  if (!text) return fallback;
+  return hasKorean(text) ? text : fallback;
+}
+
+function meetingLocationFallback(source: string): string {
+  const direct = source.match(/(?:직장|회사|센터|건물|학교|카페|역|집|문|입구)\s*(?:앞|입구|근처)?/)?.[0];
+  if (direct) return compactText(direct, 80);
+  return locationFromMeetingText(source);
+}
+
+function meetingMoodFallback(source: string): string {
+  if (/배고프|먹|식사|밥|빵|디저트|카페|스테이크/i.test(source)) return '배고픔과 설렘이 섞인 만남 직전 분위기';
+  if (/비|우산|젖|추워|춥/i.test(source)) return '비 오는 날의 급하지만 따뜻한 분위기';
+  if (/퇴근|일|수업|회사|직장/i.test(source)) return '바쁜 하루 끝에 잠깐 마주치는 설레는 분위기';
+  return '짧고 현실적인 만남 직전의 분위기';
+}
+
+function firstLineFallback(source: string): string {
+  if (/배고프|먹|식사|밥|빵|디저트|카페|스테이크/i.test(source)) {
+    return '문이 열리고, 살짝 들뜬 얼굴로 다가와 웃으며 말한다. “오빠, 진짜 왔네. 나 배고파서 쓰러질 뻔했어.”';
+  }
+  if (/비|우산|젖|추워|춥/i.test(source)) {
+    return '문이 열리고, 서로가 바로 앞에서 마주친다. “오빠, 비 오는데 여기까지 와줬네.”';
+  }
+  return '잠깐 뒤, 문이 열리고 서로가 바로 앞에서 마주친다.';
+}
+
+function normalizeMeetingStartText(start: MeetingStartResult, source: string): MeetingStartResult {
+  const locationFallback = meetingLocationFallback(source);
+  const moodFallback = meetingMoodFallback(source);
+  return {
+    ...start,
+    location: visibleKoreanOrFallback(start.location, locationFallback, 80),
+    mood: visibleKoreanOrFallback(start.mood, moodFallback, 80),
+    seedSummary: visibleKoreanOrFallback(start.seedSummary, compactText(source, 600), 600),
+    firstLine: visibleKoreanOrFallback(start.firstLine, firstLineFallback(source), 260),
+    promptMessage: visibleKoreanOrFallback(start.promptMessage, '최근 대화를 기준으로 만남 이벤트를 실행할까요?', 120)
+  };
+}
+
+export function normalizeMeetingVisibleLine(text: string | undefined, context = ''): string {
+  return visibleKoreanOrFallback(text, firstLineFallback(context || ''), 500);
+}
+
 function recentTranscript(state: SNSGodState, room: SNSGodRoom, character: SNSGodCharacter): string {
   const userName = userNameFor(state, character, room);
   return roomMessages(state, room.id)
@@ -164,7 +214,7 @@ export async function shouldStartMeetingEvent(state: SNSGodState, roomId: string
   const userName = userNameFor(state, character, room);
   const source = `${candidate.transcript}\n${latestUserText}`;
   if (isAutoStartStage(candidate.stage, candidate.recentCharacterSaidTheyWillComeOut)) {
-    return {
+    return normalizeMeetingStartText({
       shouldStart: true,
       reason: candidate.reason,
       location: locationFromMeetingText(source),
@@ -172,7 +222,7 @@ export async function shouldStartMeetingEvent(state: SNSGodState, roomId: string
       seedSummary: compactText(candidate.transcript || source, 600),
       stillPrompt: compactText(`A realistic horizontal cinematic still of ${character.name} briefly meeting ${userName} outside the agreed place, natural Korean everyday setting, hurried but warm mood, the female character has just come out for a short moment, the male user is waiting with a small item if mentioned in chat.`, 800),
       firstLine: '잠깐 뒤, 문이 열리고 서로가 바로 앞에서 마주친다.'
-    };
+    }, source);
   }
   try {
     const { text } = await callLLMText(state, [
@@ -189,7 +239,8 @@ export async function shouldStartMeetingEvent(state: SNSGodState, roomId: string
           'stillPrompt must be an English cinematic horizontal still image prompt for the meeting scene. It should show the female character and the user together when natural, but no text, no UI, no logos.',
           'Infer the female character outfit automatically from recent chat, current time, weather, place, and mood. Include a concrete but natural outfit in stillPrompt. Do not force the profile-photo outfit unless recent context supports it.',
           'Include the male user from the provided user appearance prompt as a separate person. Do not make him look like the female character reference.',
-          'firstLine is the first Korean in-person line or situation description shown after the still image.'
+          'location, mood, seedSummary, and firstLine are visible to the user and must be Korean only.',
+          'firstLine is the first Korean in-person line or situation description shown after the still image. Never write English dialogue or English action text in firstLine.'
         ].join('\n')
       },
       {
@@ -213,7 +264,7 @@ export async function shouldStartMeetingEvent(state: SNSGodState, roomId: string
     const llmAllowedStage = llmStage === 'face_to_face' || llmStage === 'handoff' || (llmStage === 'arrived' && candidate.recentCharacterSaidTheyWillComeOut);
     const confidence = Number(parsed?.confidence || 0);
     if (!parsed?.shouldStartNow || !llmAllowedStage || confidence < 0.85) return { shouldStart: false, reason: parsed?.reason || 'LLM rejected immediate meeting start' };
-    return {
+    return normalizeMeetingStartText({
       shouldStart: true,
       reason: compactText(parsed.reason || 'natural in-person meeting started', 260),
       location: compactText(parsed.location || parsed.detectedLocation || '만남 장소', 80),
@@ -221,7 +272,7 @@ export async function shouldStartMeetingEvent(state: SNSGodState, roomId: string
       seedSummary: compactText(parsed.seedSummary || candidate.transcript, 600),
       stillPrompt: compactText(parsed.stillPrompt || `cinematic horizontal still of ${character.name} meeting ${userName}, natural Korean everyday setting`, 800),
       firstLine: compactText(parsed.firstLine || '서로 마주 앉은 순간, 잠깐 정적이 흐른다.', 240)
-    };
+    }, source);
   } catch (error) {
     await appendDebugLog('meeting.detect', `meeting start check failed room=${roomId}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
     return { shouldStart: false, reason: 'meeting detection failed' };
@@ -254,6 +305,7 @@ export async function createManualMeetingEventPrompt(state: SNSGodState, roomId:
           'Return raw JSON only: {"location":"","mood":"","seedSummary":"","stillPrompt":"","firstLine":""}.',
           'Use the recent chat as the source. If the exact place is unclear, use a cautious generic place from the conversation instead of inventing a dramatic location.',
           'Do not claim the meeting already happened. This is only a confirmation card before the user starts the event.',
+          'location, mood, seedSummary, and firstLine are visible to the user and must be Korean only.',
           'stillPrompt must be an English realistic horizontal cinematic still image prompt for the meeting scene. No text, no UI, no logos.',
           'Infer the female character outfit from recent chat, current place, time, weather, and mood. Include the male user from the user appearance prompt as a separate person.'
         ].join('\n')
@@ -280,7 +332,7 @@ export async function createManualMeetingEventPrompt(state: SNSGodState, roomId:
   } catch (error) {
     await appendDebugLog('meeting.manual', `manual meeting prompt failed room=${roomId}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
   }
-  return createMeetingEventSession(state, roomId, start);
+  return createMeetingEventSession(state, roomId, normalizeMeetingStartText(start, transcript));
 }
 
 export async function createBlindDateFirstDatePrompt(state: SNSGodState, roomId: string): Promise<SNSGodState> {
@@ -312,6 +364,7 @@ export async function createBlindDateFirstDatePrompt(state: SNSGodState, roomId:
           'Return raw JSON only: {"location":"","mood":"","seedSummary":"","stillPrompt":"","firstLine":""}.',
           'This is a confirmation card before the user starts the event, not a completed memory.',
           'Use the selected candidate profile and blind date memory as the source.',
+          'location, mood, seedSummary, and firstLine are visible to the user and must be Korean only.',
           'stillPrompt must be English only. It must describe one realistic horizontal cinematic still for the first blind date meeting.',
           'The still should include the female character and the male user as separate adults. Use the provided user appearance prompt for the male user.',
           'Choose the female outfit naturally from her profile, personality, job, and the date context. No text, no UI, no logos.'
@@ -340,7 +393,7 @@ export async function createBlindDateFirstDatePrompt(state: SNSGodState, roomId:
   } catch (error) {
     await appendDebugLog('meeting.blindDateFirstDate', `first date prompt failed room=${roomId}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
   }
-  return createMeetingEventSession(state, roomId, start);
+  return createMeetingEventSession(state, roomId, normalizeMeetingStartText(start, blindMemory || character.prompt || ''));
 }
 
 export async function createMeetingEventSession(state: SNSGodState, roomId: string, start: MeetingStartResult): Promise<SNSGodState> {
@@ -350,7 +403,8 @@ export async function createMeetingEventSession(state: SNSGodState, roomId: stri
   const existing = (state.meetingEventSessions || []).find(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active'));
   if (existing) return state;
   const now = Date.now();
-  const firstLine = start.firstLine || '서로 마주 본 채, 대화가 시작된다.';
+  const visibleStart = normalizeMeetingStartText(start, start.seedSummary || start.reason || '');
+  const firstLine = visibleStart.firstLine || '서로 마주 본 채, 대화가 시작된다.';
   const lines: MeetingEventLine[] = [{ id: makeId('meetingline'), speaker: 'character', text: firstLine, createdAt: now }];
   let stillImage = '';
   const stillPrompt = [
@@ -376,10 +430,10 @@ export async function createMeetingEventSession(state: SNSGodState, roomId: stri
     characterId: character.id,
     startedAt: now,
     status: 'pending',
-    location: start.location,
-    reason: start.reason,
-    mood: start.mood,
-    seedSummary: start.seedSummary,
+    location: visibleStart.location,
+    reason: visibleStart.reason,
+    mood: visibleStart.mood,
+    seedSummary: visibleStart.seedSummary,
     stillPrompt,
     stillImage,
     turnCount: 0,
@@ -391,7 +445,7 @@ export async function createMeetingEventSession(state: SNSGodState, roomId: stri
   next = appendMessage(next, roomId, {
     id: makeId('msg'),
     role: 'system',
-    content: `${start.promptMessage || '만남 이벤트가 감지되었습니다. 실행할까요?'}\n${start.location || '현재 장소'} · ${start.mood || '만남 준비됨'}`,
+    content: `${visibleStart.promptMessage || '만남 이벤트가 감지되었습니다. 실행할까요?'}\n${visibleStart.location || '현재 장소'} · ${visibleStart.mood || '만남 준비됨'}`,
     createdAt: now,
     meetingEventId: session.id,
     meetingEventPrompt: true,

@@ -14,6 +14,7 @@ import { appendDebugLog } from '../logic/debugLog';
 import { isRenderableMediaUri } from '../logic/media';
 import { characterReferenceImageForPrompt } from '../logic/imageReference';
 import { characterWithConversationRhythm } from '../logic/conversationRhythm';
+import { forceUpdateRoomMemory, groupMemoryPromptBlock, updateRoomMemoryAfterAppend } from '../logic/memoryBridge';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -56,14 +57,14 @@ function markUserMessagesRead(state: SNSGodState, roomId: string) {
 }
 
 function appendGroupMessage(state: SNSGodState, roomId: string, message: SNSGodMessage) {
-  return {
+  return updateRoomMemoryAfterAppend({
     ...state,
     messages: {
       ...state.messages,
       [roomId]: [...(state.messages[roomId] || []), message].slice(-MAX_GROUP_ROOM_MESSAGES)
     },
     groupRooms: (state.groupRooms || []).map(item => item.id === roomId ? { ...item, lastActivity: message.createdAt } : item)
-  };
+  }, roomId);
 }
 
 function findGroup(state: SNSGodState, roomId: string) {
@@ -91,6 +92,7 @@ function buildGroupPrompt(state: SNSGodState, roomId: string, participants: SNSG
     .slice(0, 20)
     .map(item => `- ${item.id}: ${item.name}${item.description ? ` (${item.description})` : ''}`)
     .join('\n');
+  const memoryBlock = groupMemoryPromptBlock(state, roomId, participants, latestUserText);
   const system = [
     'This is a private fictional group messenger. Stay in character and return JSON only.',
     'Return only valid JSON: {"messages":[{"characterId":"one allowed id","content":"short Korean chat bubble","sticker":"","imagePrompt":"","imageCaption":""}]}. Do not wrap it in markdown.',
@@ -103,6 +105,7 @@ function buildGroupPrompt(state: SNSGodState, roomId: string, participants: SNSG
     `Allowed members:\n${participants.map(character => `- ${character.id} (@${character.handle || character.id}) ${character.name}: ${character.prompt || '(empty)'}`).join('\n')}`,
     `User profile: ${state.config.userDescription || '(empty)'}`,
     `Room-only relationship/context note: ${findGroup(state, roomId)?.relationshipNote || '(empty)'}`,
+    memoryBlock,
     stickerText ? `Available stickers:\n${stickerText}` : 'Available stickers: none'
   ].join('\n\n');
   const user = [
@@ -189,6 +192,10 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
       await onChange(localNext);
     }
     return stateRef.current;
+  }
+
+  function leaveRoom() {
+    void Promise.resolve(commitCurrent(current => forceUpdateRoomMemory(current, roomId))).finally(onBack);
   }
 
   async function markReadLater(targetRoomId: string, readers: SNSGodCharacter[]) {
@@ -326,7 +333,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
     return (
       <View style={styles.empty}>
         <Text style={styles.emptyText}>그룹방을 찾을 수 없습니다.</Text>
-        <Pressable onPress={onBack} style={styles.primary}><Text style={styles.primaryText}>목록으로</Text></Pressable>
+        <Pressable onPress={leaveRoom} style={styles.primary}><Text style={styles.primaryText}>목록으로</Text></Pressable>
       </View>
     );
   }
@@ -334,7 +341,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
   return (
     <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.header}>
-        <Pressable onPress={onBack} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable>
+        <Pressable onPress={leaveRoom} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable>
         <View style={styles.titleBlock}>
           <Text style={styles.title}>{room.name}</Text>
           <Text style={styles.subtitle}>{participants.length}명 · {participantNames(participants)}</Text>

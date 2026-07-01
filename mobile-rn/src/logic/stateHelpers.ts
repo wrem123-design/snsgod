@@ -1,6 +1,7 @@
 import { RandomChatRoom, SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
 import { makeId } from './ids';
 import { MAX_ROOM_MESSAGES } from './limits';
+import { updateRoomMemoryAfterAppend } from './memoryBridge';
 
 function randomRoomAsChatRoom(room: RandomChatRoom): SNSGodRoom {
   return {
@@ -72,11 +73,11 @@ export function appendMessage(state: SNSGodState, roomId: string, message: SNSGo
     : state.randomChats;
   if (room) {
     if (room.type === 'random') {
-      return {
+      return updateRoomMemoryAfterAppend({
         ...state,
         messages,
         randomChats: (state.randomChats || []).map(item => item.id === roomId ? { ...item, lastActivity: message.createdAt } : item)
-      };
+      }, roomId);
     } else {
       const rooms = [...(chatRooms[room.characterId] || [])];
       const index = rooms.findIndex(item => item.id === roomId);
@@ -84,7 +85,7 @@ export function appendMessage(state: SNSGodState, roomId: string, message: SNSGo
       chatRooms[room.characterId] = rooms;
     }
   }
-  return { ...state, messages, chatRooms, randomChats };
+  return updateRoomMemoryAfterAppend({ ...state, messages, chatRooms, randomChats }, roomId);
 }
 
 export function updateRoom(state: SNSGodState, roomId: string, patch: Partial<SNSGodRoom>): SNSGodState {

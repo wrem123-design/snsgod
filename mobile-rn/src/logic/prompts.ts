@@ -4,6 +4,7 @@ import { lorePromptBlock, resolveActiveLore } from './loreEngine';
 import { buildTimeRealityInstruction } from './timeReality';
 import { characterWithConversationRhythm, conversationRhythmInstruction } from './conversationRhythm';
 import { formatMessageDateTimeLabel } from './time';
+import { privateMemoryPromptBlock } from './memoryBridge';
 
 export type ChatPromptMode = 'reply' | 'proactive' | 'reroll';
 
@@ -223,6 +224,7 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
   }).filter(Boolean).join('\n');
   const lore = resolveActiveLore(state, { room, characterId: character.id, text: `${transcript}\n${latestUserText}`, limit: 8 });
   const memoryText = (character.memories || []).slice(-8).map(item => `- ${item}`).join('\n');
+  const bridgedMemoryText = privateMemoryPromptBlock(state, room, character, latestUserText);
   const stickerText = availableStickerText(state, character);
   const roomNote = [room.relationshipNote, room.roomPrompt].filter(Boolean).join('\n');
   const imageInstruction = state.config.imageGeneration?.enabled === false
@@ -278,6 +280,7 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
     imageInstruction,
     roomNote ? `Room-only relationship/context note:\n${roomNote}` : '',
     memoryText ? `Character memories:\n${memoryText}` : '',
+    bridgedMemoryText ? `Room summaries and cross-room memories:\n${bridgedMemoryText}` : '',
     stickerText && stickerText !== 'none' ? `Available stickers:\n${stickerText}` : 'Available stickers: none',
     lore.length ? `Lore triggered by current chat:\n${lorePromptBlock(lore)}` : '',
     localTimeContext(character, state)

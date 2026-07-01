@@ -881,8 +881,10 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
   if (options.usesReference) {
     if (options.kind === 'profile-reference-face') {
       return [
-        'Use the attached reference image only as a facial identity reference for the fictional adult female character. Preserve the face shape, facial proportions, and recognizable facial vibe.',
-        'Do not copy the reference outfit, background, pose, age context, job, personality, or story. Generate a new fictional character from the requested prompt.',
+        'MANDATORY FACE REFERENCE: use the attached reference image as the primary facial identity source for this fictional adult female character.',
+        'Preserve the reference face shape, facial proportions, eye spacing, nose/lip structure, jawline, and recognizable facial vibe. The generated face must clearly resemble the attached reference person.',
+        'Only change outfit, background, pose, job context, expression, and photo setting according to the requested prompt. Do not copy the reference outfit, background, pose, age context, job, personality, or story.',
+        'Do not ignore the attached image. Do not create a fully new unrelated face from text alone.',
         prefix,
         `Requested character image: ${requested}`,
         nsfw
@@ -953,6 +955,11 @@ async function appendReferenceImage(form: FormData, field: string, uri: string) 
     await appendDataUriImage(form, field, uri, 'reference.png');
     return;
   }
+  if (/^https?:\/\//i.test(uri)) {
+    const dataUri = await fetchImageAsDataUri(uri);
+    await appendDataUriImage(form, field, dataUri, 'reference.png');
+    return;
+  }
   if (/^(file:|content:|asset:)/i.test(uri)) {
     form.append(field, { uri, name: 'reference.jpg', type: mediaTypeForUri(uri) } as unknown as Blob);
   }
@@ -977,8 +984,8 @@ async function generateGrokLocalImage(state: SNSGodState, prompt: string, charac
     form.append('prompt', finalPrompt);
     form.append('resolution', resolution);
     await appendReferenceImage(form, 'image', referenceImage);
-    const response = await fetch(`${baseUrl}/api/i2i`, { method: 'POST', body: form });
-    const payload = await response.json();
+    const response = await fetch(`${baseUrl}/api/i2i`, { method: 'POST', body: form as unknown as RequestInit['body'] });
+    const payload = await response.json() as { ok?: boolean; error?: { message?: string }; result?: { url?: string } };
     if (!response.ok || payload?.ok === false) throw new Error(payload?.error?.message || `Grok i2i ${response.status}`);
     const url = payload?.result?.url;
     if (!url) throw new Error('Grok i2i 응답에 이미지 URL이 없습니다.');
@@ -988,8 +995,8 @@ async function generateGrokLocalImage(state: SNSGodState, prompt: string, charac
   form.append('prompt', finalPrompt);
   form.append('resolution', resolution);
   form.append('aspect_ratio', aspectRatio === 'auto' ? '1:1' : aspectRatio);
-  const response = await fetch(`${baseUrl}/api/t2i`, { method: 'POST', body: form });
-  const payload = await response.json();
+  const response = await fetch(`${baseUrl}/api/t2i`, { method: 'POST', body: form as unknown as RequestInit['body'] });
+  const payload = await response.json() as { ok?: boolean; error?: { message?: string }; result?: { url?: string } };
   if (!response.ok || payload?.ok === false) throw new Error(payload?.error?.message || `Grok t2i ${response.status}`);
   const url = payload?.result?.url;
   if (!url) throw new Error('Grok t2i 응답에 이미지 URL이 없습니다.');

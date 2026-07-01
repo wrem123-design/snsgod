@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, Image, ImageBackground, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors } from '../theme';
 import { callLLMText, parseJsonObject } from '../logic/api';
-import { finishMeetingEventSession } from '../logic/meetingEvent';
+import { finishMeetingEventSession, normalizeMeetingVisibleLine } from '../logic/meetingEvent';
 import { findCharacter, findRoom } from '../logic/stateHelpers';
 import { makeId } from '../logic/ids';
 import { isRenderableMediaUri } from '../logic/media';
@@ -24,6 +24,10 @@ type MeetingTurn = {
 };
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+function hasKorean(value: string): boolean {
+  return /[가-힣]/.test(value);
+}
 
 export function MeetingEventScreen({ state, sessionId, onBack, onChange }: {
   state: SNSGodState;
@@ -70,7 +74,7 @@ export function MeetingEventScreen({ state, sessionId, onBack, onChange }: {
   useEffect(() => {
     if (!session || bootedRef.current) return;
     bootedRef.current = true;
-    const first = session.lines.find(item => item.speaker === 'character')?.text || '서로 마주 앉은 순간, 대화가 시작된다.';
+    const first = normalizeMeetingVisibleLine(session.lines.find(item => item.speaker === 'character')?.text, session.seedSummary || session.mood || '') || '서로 마주 앉은 순간, 대화가 시작된다.';
     void showCharacterText(first, false, firstMeetingChoices(session.seedSummary || first), 'choices', true);
   }, [session?.id]);
 
@@ -128,8 +132,9 @@ export function MeetingEventScreen({ state, sessionId, onBack, onChange }: {
 
   function parseTurn(text: string): { line: string; choices: string[]; uiMode: MeetingUiMode; allowDirectReply: boolean; endEvent: boolean } {
     const parsed = parseJsonObject<MeetingTurn>(text);
-    const line = String(parsed?.line || parsed?.situation || parsed?.content || parsed?.text || text || '').trim() || '잠깐 시선이 마주친다.';
-    const parsedChoices = (parsed?.choices || parsed?.options || []).map(item => String(item || '').trim()).filter(Boolean).slice(0, 3);
+    const rawLine = String(parsed?.line || parsed?.situation || parsed?.content || parsed?.text || text || '').trim() || '잠깐 시선이 마주친다.';
+    const line = normalizeMeetingVisibleLine(rawLine, transcriptFrom(linesRef.current) || session?.seedSummary || '');
+    const parsedChoices = (parsed?.choices || parsed?.options || []).map(item => String(item || '').trim()).filter(item => item && hasKorean(item)).slice(0, 3);
     const choices = parsedChoices.length >= 2 ? parsedChoices : ['다시 말해줘.', '괜찮아, 옆에 있을게.', '이제 슬슬 가자.'];
     const mode = parsed?.uiMode === 'next' || parsed?.uiMode === 'input' || parsed?.uiMode === 'mixed' || parsed?.uiMode === 'choices'
       ? parsed.uiMode
@@ -171,6 +176,7 @@ export function MeetingEventScreen({ state, sessionId, onBack, onChange }: {
             'Return raw JSON only: {"line":"character dialogue and/or brief situation description","choices":["user option 1","user option 2","user option 3"],"uiMode":"choices|input|next|mixed","allowDirectReply":true,"endEvent":false}.',
             'This is a real physical meeting, not messenger chat and not a phone call.',
             'Line may include concise situation description plus character dialogue, in Korean. Keep it emotionally grounded.',
+            'Visible line and every choice must be Korean only. Do not output English action descriptions, English dialogue, romanized Korean, or translation notes.',
             'Each turn should move the moment forward. The event should last 3-8 user turns total.',
             'If the scene has reached a natural closing beat, set endEvent true.',
             `Character profile:\n${character.prompt || '(empty)'}`,

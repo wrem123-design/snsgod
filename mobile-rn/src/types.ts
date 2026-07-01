@@ -216,6 +216,40 @@ export type SNSGodRoom = {
   [key: string]: unknown;
 };
 
+export type RoomSummary = {
+  id: string;
+  roomId: string;
+  roomType: 'private' | 'group';
+  characterIds: string[];
+  messageCount: number;
+  summary: string;
+  topics: string[];
+  mood: string;
+  followUps: string[];
+  updatedAt: number;
+  lastMessageAt: number;
+};
+
+export type GroupRoomSummary = RoomSummary & {
+  roomType: 'group';
+  publicInfo: string[];
+  characterTakeaways: Record<string, string[]>;
+  relationshipChanges: string[];
+};
+
+export type CharacterMemory = {
+  id: string;
+  characterId: string;
+  sourceRoomId: string;
+  sourceRoomType: 'private' | 'group';
+  visibility: 'private_with_user' | 'group_public' | 'character_private' | 'global';
+  knownByCharacterIds: string[];
+  content: string;
+  importance: number;
+  createdAt: number;
+  lastUsedAt?: number;
+};
+
 export type RandomChatRoom = SNSGodRoom & {
   type: 'random';
   character: SNSGodCharacter;
@@ -264,7 +298,7 @@ export type MeetingEventSession = {
   summary?: string;
 };
 
-export type BlindDateMode = 'profile' | 'question' | 'worldcup' | 'rotation';
+export type BlindDateMode = 'encounter' | 'profile' | 'question' | 'worldcup' | 'rotation';
 
 export type BlindDateStatus = 'setup' | 'generating' | 'active' | 'revealing' | 'dating' | 'completed';
 
@@ -320,6 +354,11 @@ export type BlindDateCandidate = {
   callPreview?: string;
   appearance: CandidateAppearance;
   imagePrompt: string;
+  internalAppearancePrompt?: string;
+  internalImagePrompt?: string;
+  hiddenProfile?: string;
+  publicObservation?: string;
+  publicVibe?: string;
   profileImageUri?: string;
   faceReferenceImage?: string;
   answers: BlindDateAnswer[];
@@ -362,6 +401,28 @@ export type BlindDateRotationTurn = {
   createdAt: number;
 };
 
+export type StreetEncounterStats = {
+  affinity: number;
+  caution: number;
+  awkwardness: number;
+  curiosity: number;
+  mood: number;
+  timePressure: number;
+};
+
+export type StreetEncounterChoice = {
+  id: string;
+  text: string;
+  style: 'safe' | 'playful' | 'direct' | 'caring' | 'exit';
+  affinityDelta: number;
+  cautionDelta: number;
+  awkwardnessDelta: number;
+  curiosityDelta: number;
+  moodDelta?: number;
+};
+
+export type StreetEncounterPhase = 'locations' | 'intro' | 'talk' | 'success' | 'failed' | 'passed';
+
 export type BlindDateMemory = {
   mode: BlindDateMode;
   selectedAt: number;
@@ -385,11 +446,27 @@ export type BlindDateSession = {
   mode: BlindDateMode;
   status: BlindDateStatus;
   candidateCount: number;
+  questionTarget?: number;
   candidates: BlindDateCandidate[];
   rounds: BlindDateRound[];
   worldcupPairs?: BlindDateWorldcupPair[];
   worldcupIndex?: number;
+  worldcupByeCandidateIds?: string[];
   rotationTurns?: BlindDateRotationTurn[];
+  encounterLocations?: string[];
+  encounterLocation?: string;
+  encounterPhase?: StreetEncounterPhase;
+  encounterNarration?: string;
+  encounterNpcLine?: string;
+  encounterTurn?: number;
+  encounterMaxTurns?: number;
+  encounterContactAttempted?: boolean;
+  encounterContactChanceLabel?: string;
+  encounterContactFailureReason?: string;
+  encounterStats?: StreetEncounterStats;
+  encounterChoices?: StreetEncounterChoice[];
+  encounterHistory?: string[];
+  encounterResult?: 'passed' | 'rejected' | 'contact_exchanged';
   selectedCandidateId?: string;
   finalRanking?: BlindDateRanking[];
   createdAt: number;
@@ -585,6 +662,9 @@ export type SNSGodState = {
   snsPosts: SNSPost[];
   snsDmThreads: SNSDmThread[];
   groupRooms?: GroupRoom[];
+  roomSummaries?: RoomSummary[];
+  groupRoomSummaries?: GroupRoomSummary[];
+  characterMemories?: CharacterMemory[];
   loreEntries?: LoreEntry[];
   loreFolders?: unknown[];
   referenceFaceSlots?: ReferenceFaceSlot[];
@@ -600,5 +680,13 @@ export type SNSGodState = {
   selectedRoomId?: string;
   __importedAt?: number;
   __savedAt?: number;
+  __revision?: number;
+  __writeSeq?: number;
+  __contentHash?: string;
+  __messageCount?: number;
+  __characterCount?: number;
+  __referenceImageCount?: number;
+  __mediaCount?: number;
+  __lastMessageAt?: number;
   [key: string]: unknown;
 };

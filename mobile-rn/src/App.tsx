@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
+import * as Application from 'expo-application';
+import * as FileSystem from 'expo-file-system';
 import { ActivityIndicator, Alert, AppState, BackHandler, DevSettings, Keyboard, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { ChatListScreen } from './screens/ChatListScreen';
 import { ChatRoomScreen } from './screens/ChatRoomScreen';
@@ -27,7 +29,7 @@ import { DebugScreen } from './screens/DebugScreen';
 import { BottomNav, BottomTab } from './components/BottomNav';
 import { Avatar } from './components/Avatar';
 import { MenuHubScreen } from './screens/MenuHubScreen';
-import { flushSaveState, loadState, saveStateDebounced } from './storage/persist';
+import { flushSaveState, getStoragePaths, loadState, recordSkippedSaveBeforeHydration, saveStateDebounced } from './storage/persist';
 import { colors } from './theme';
 import { SNSGodCharacter, SNSGodState, SNSPost } from './types';
 import { isAutomationQueueBusy, runAutomationQueueTick } from './logic/automationQueue';
@@ -39,11 +41,33 @@ import { IncomingPhoneCall, markPhoneCardStatus, missIncomingPhoneCall, newestPe
 import { markRoomRead, pushNotification } from './logic/notifications';
 import { startReplyJob } from './logic/replyEngine';
 import { createManualMeetingEventPrompt, createMeetingEventSession, shouldStartMeetingEvent } from './logic/meetingEvent';
+import { forceUpdateRoomMemory } from './logic/memoryBridge';
 
 const INTERRUPTED_REPLY_RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 function criticalStateFingerprint(state: SNSGodState | null | undefined): string {
+  const messages = Object.fromEntries(Object.entries(state?.messages || {}).map(([roomId, list]) => {
+    const latest = Array.isArray(list) ? list[list.length - 1] : undefined;
+    return [roomId, {
+      count: Array.isArray(list) ? list.length : 0,
+      latestId: latest?.id || '',
+      latestAt: latest?.createdAt || 0
+    }];
+  }));
   return JSON.stringify({
+    messages,
+    snsPosts: (state?.snsPosts || []).slice(0, 12).map(post => ({
+      id: post.id,
+      characterId: post.characterId,
+      createdAt: post.createdAt,
+      contentLength: String(post.content || '').length
+    })),
+    snsDmThreads: (state?.snsDmThreads || []).slice(0, 20).map(thread => ({
+      id: thread.id,
+      postId: thread.postId || '',
+      messageCount: (thread.messages || []).length,
+      unread: thread.unread || 0
+    })),
     referenceFaceSlots: (state?.referenceFaceSlots || []).map(slot => ({
       id: slot.id,
       createdAt: slot.createdAt,
@@ -82,6 +106,7 @@ type Route =
   | { name: 'random' }
   | { name: 'randomChatRoom'; roomId: string }
   | { name: 'sumgod' }
+  | { name: 'streetEncounter' }
   | { name: 'blindDate' }
   | { name: 'idealWorldcup' }
   | { name: 'references' }
@@ -93,6 +118,7 @@ type Route =
 export default function App() {
   const [route, setRoute] = useState<Route>({ name: 'chatList' });
   const [state, setState] = useState<SNSGodState | null>(null);
+  const [hydrated, setHydrated] = useState(false);
   const [incomingCall, setIncomingCall] = useState<IncomingPhoneCall | null>(null);
   const [runtimeReloadNonce, setRuntimeReloadNonce] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -100,6 +126,7 @@ export default function App() {
   const routeRef = useRef<Route>(route);
   const routeHistoryRef = useRef<Route[]>([]);
   const incomingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hydratedRef = useRef(false);
 
   function clearRuntimeOnlyState(next: SNSGodState): SNSGodState {
     return { ...next, pendingReplies: {} };
@@ -124,10 +151,21 @@ export default function App() {
   }
 
   useEffect(() => {
+    const storagePaths = getStoragePaths();
+    console.log('[SNSGod storage identity]', {
+      applicationId: Application.applicationId,
+      nativeApplicationVersion: Application.nativeApplicationVersion,
+      nativeBuildVersion: Application.nativeBuildVersion,
+      documentDirectory: FileSystem.documentDirectory,
+      ...storagePaths
+    });
+    void appendDebugLog('storage.identity', `applicationId=${Application.applicationId || 'unknown'} version=${Application.nativeApplicationVersion || 'unknown'} build=${Application.nativeBuildVersion || 'unknown'} documentDirectory=${FileSystem.documentDirectory || 'unknown'} sqlite=${storagePaths.sqliteDatabaseName} asyncKey=${storagePaths.asyncStorageKey} media=${storagePaths.mediaDirectory} backup=${storagePaths.backupDirectory}`);
     loadState().then(next => {
       const ready = clearRuntimeOnlyState(next);
       setState(ready);
       stateRef.current = ready;
+      hydratedRef.current = true;
+      setHydrated(true);
       void appendDebugLog('app', `state loaded: characters=${next.characters.length}, rooms=${Object.values(next.chatRooms).flat().length}`);
       setTimeout(() => resumeInterruptedReplies(ready), 0);
     }).catch(error => {
@@ -157,7 +195,13 @@ export default function App() {
     const subscription = AppState.addEventListener('change', nextState => {
       if (nextState === 'active') return;
       const current = stateRef.current;
-      if (current) void flushSaveState(current);
+      if (current) {
+        const summarized = summarizeRoomsBeforeFlush(current);
+        const snapshot = summarized === current ? current : withNextRevision(summarized, current);
+        stateRef.current = snapshot;
+        setState(snapshot);
+        void flushSaveState(snapshot);
+      }
     });
     return () => subscription.remove();
   }, []);
@@ -235,6 +279,10 @@ export default function App() {
   function visibleRoomIdForRoute(currentRoute: Route): string | undefined {
     if (currentRoute.name === 'chatRoom' || currentRoute.name === 'groupChatRoom' || currentRoute.name === 'randomChatRoom') return currentRoute.roomId;
     return undefined;
+  }
+
+  function summarizeRoomsBeforeFlush(current: SNSGodState): SNSGodState {
+    return Object.keys(current.messages || {}).reduce((next, roomId) => forceUpdateRoomMemory(next, roomId), current);
   }
 
   type Identified = { id?: unknown };
@@ -351,17 +399,29 @@ export default function App() {
     return changed ? { ...result, unreadCounts } : result;
   }
 
+  function withNextRevision(next: SNSGodState, previous: SNSGodState | null): SNSGodState {
+    const previousRevision = Number(previous?.__revision || 0);
+    const incomingRevision = Number(next.__revision || 0);
+    return {
+      ...next,
+      __revision: Math.max(previousRevision, incomingRevision) + 1
+    };
+  }
+
   async function commit(next: SNSGodState) {
     const previous = stateRef.current;
-    const committed = withUnreadForNewMessages(previous, next, visibleRoomIdForRoute(routeRef.current));
+    const committed = withNextRevision(withUnreadForNewMessages(previous, next, visibleRoomIdForRoute(routeRef.current)), previous);
     setState(committed);
     stateRef.current = committed;
-    saveStateDebounced(committed);
-    if (criticalStateFingerprint(previous) !== criticalStateFingerprint(committed)) {
-      void flushSaveState(committed).catch(error => {
-        void appendDebugLog('storage', `critical state flush failed: ${error instanceof Error ? error.message : String(error)}`, 'warn');
-      });
+    if (!hydratedRef.current) {
+      recordSkippedSaveBeforeHydration();
+      void appendDebugLog('storage', 'skip save before hydration', 'warn');
+      return;
     }
+    saveStateDebounced(committed);
+    void flushSaveState(committed).catch(error => {
+      void appendDebugLog('storage', `state flush failed: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+    });
     void appendDebugLog('storage', `state saved: characters=${committed.characters.length}, notifications=${(committed.notifications || []).length}`);
   }
 
@@ -494,11 +554,11 @@ export default function App() {
   function activeBottomTab(): BottomTab {
     if (route.name === 'sns') return route.platform === 'twitter' ? 'twitter' : 'instagram';
     if (route.name === 'random' || route.name === 'randomHub' || route.name === 'randomChatRoom') return 'random';
-    if (route.name === 'etc' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'notifications' || route.name === 'references') return 'etc';
+    if (route.name === 'etc' || route.name === 'streetEncounter' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'notifications' || route.name === 'references') return 'etc';
     return 'friends';
   }
 
-  const showBottomNav = route.name === 'chatList' || route.name === 'sns' || route.name === 'random' || route.name === 'etc' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'references';
+  const showBottomNav = route.name === 'chatList' || route.name === 'sns' || route.name === 'random' || route.name === 'etc' || route.name === 'streetEncounter' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'references';
 
   async function leaveRandomRoom(roomId: string) {
     const current = stateRef.current;
@@ -587,6 +647,7 @@ export default function App() {
       ) : route.name === 'randomHub' || route.name === 'etc' ? (
         <MenuHubScreen
           mode="etc"
+          onOpenEncounter={() => navigate({ name: 'streetEncounter' })}
           onOpenBlindDate={() => navigate({ name: 'blindDate' })}
           onOpenIdealWorldcup={() => navigate({ name: 'idealWorldcup' })}
           onOpenReferences={() => navigate({ name: 'references' })}
@@ -599,11 +660,13 @@ export default function App() {
       ) : route.name === 'gallery' ? (
         <GalleryScreen state={state} onChange={commit} onBack={goBack} />
       ) : route.name === 'debug' ? (
-        <DebugScreen onBack={goBack} onReloadState={reloadSavedState} onReloadBundle={reloadBundle} />
+        <DebugScreen state={state} onBack={goBack} onReloadState={reloadSavedState} onReloadBundle={reloadBundle} onSaveNow={() => flushSaveState(stateRef.current || undefined)} />
       ) : route.name === 'random' ? (
         <RandomChatScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'randomChatRoom', roomId })} />
       ) : route.name === 'sumgod' ? (
         <SumGodScreen state={state} onChange={commit} onCommitCurrent={commitCurrentForScreen} onBack={goBack} />
+      ) : route.name === 'streetEncounter' ? (
+        <BlindDateScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'chatRoom', roomId }, { replace: true })} entryMode="encounter" />
       ) : route.name === 'blindDate' ? (
         <BlindDateScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'chatRoom', roomId }, { replace: true })} />
       ) : route.name === 'idealWorldcup' ? (

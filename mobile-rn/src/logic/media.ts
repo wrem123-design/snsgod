@@ -4,7 +4,19 @@ import * as ImagePicker from 'expo-image-picker';
 import { SNSGodState } from '../types';
 
 const MEDIA_DIR = `${FileSystem.documentDirectory || ''}snsgod-media/`;
+export const MEDIA_ROOT_DIR = MEDIA_DIR;
+export const REFERENCE_MEDIA_DIR = `${MEDIA_DIR}reference/`;
+export const MEDIA_MANIFEST_FILE = `${MEDIA_DIR}mediaManifest.json`;
 const EXTERNALIZE_THRESHOLD = 180_000;
+
+export type MediaManifestEntry = {
+  mediaId: string;
+  fileUri: string;
+  type: string;
+  characterId?: string;
+  createdAt: number;
+  size?: number;
+};
 
 export async function pickImageDataUri(): Promise<string | undefined> {
   const result = await DocumentPicker.getDocumentAsync({ type: 'image/*', copyToCacheDirectory: true });
@@ -32,6 +44,22 @@ export async function pickImageDataUris(limit = 0): Promise<string[] | undefined
   }));
 }
 
+export async function pickPersistentReferenceImageUris(limit = 0): Promise<string[] | undefined> {
+  const permission = await ImagePicker.requestMediaLibraryPermissionsAsync(false);
+  if (!permission.granted) return undefined;
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ['images'],
+    allowsMultipleSelection: true,
+    selectionLimit: Math.max(0, Math.floor(limit || 0)),
+    quality: 1
+  });
+  if (result.canceled || !result.assets?.length) return undefined;
+  return Promise.all(result.assets.map(asset => copyMediaToPermanentStorage(asset.uri, {
+    type: asset.mimeType || 'image/jpeg',
+    mediaKind: 'reference'
+  })));
+}
+
 export async function pickStickerDataUri(): Promise<{ data: string; name: string; type?: string } | undefined> {
   const result = await DocumentPicker.getDocumentAsync({ type: ['image/*', 'video/*', 'audio/*'], copyToCacheDirectory: true });
   if (result.canceled || !result.assets?.length) return undefined;
@@ -47,6 +75,10 @@ export async function pickStickerDataUri(): Promise<{ data: string; name: string
 
 function isLargeDataUri(value: unknown): value is string {
   return typeof value === 'string' && value.startsWith('data:') && value.length > EXTERNALIZE_THRESHOLD;
+}
+
+function isDataUri(value: unknown): value is string {
+  return typeof value === 'string' && value.startsWith('data:');
 }
 
 export function isRenderableMediaUri(value: unknown): value is string {
@@ -71,8 +103,88 @@ async function ensureMediaDir() {
   return MEDIA_DIR;
 }
 
-export async function externalizeDataUri(value: string, hint: string): Promise<string> {
-  if (!isLargeDataUri(value)) return value;
+async function ensureMediaSubdir(subdir?: string) {
+  const root = await ensureMediaDir();
+  if (!root) return undefined;
+  if (!subdir) return root;
+  const dir = `${root}${subdir.replace(/^\/+|\/+$/g, '')}/`;
+  const info = await FileSystem.getInfoAsync(dir);
+  if (!info.exists) await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+  return dir;
+}
+
+export async function readMediaManifest(): Promise<MediaManifestEntry[]> {
+  if (!FileSystem.documentDirectory) return [];
+  try {
+    const info = await FileSystem.getInfoAsync(MEDIA_MANIFEST_FILE);
+    if (!info.exists) return [];
+    const parsed = JSON.parse(await FileSystem.readAsStringAsync(MEDIA_MANIFEST_FILE, { encoding: FileSystem.EncodingType.UTF8 }));
+    return Array.isArray(parsed) ? parsed.filter(item => item && typeof item.fileUri === 'string') as MediaManifestEntry[] : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeMediaManifest(entries: MediaManifestEntry[]): Promise<void> {
+  const dir = await ensureMediaDir();
+  if (!dir) return;
+  await FileSystem.writeAsStringAsync(MEDIA_MANIFEST_FILE, JSON.stringify(entries, null, 2), { encoding: FileSystem.EncodingType.UTF8 });
+}
+
+async function upsertMediaManifest(entry: MediaManifestEntry): Promise<void> {
+  const entries = await readMediaManifest();
+  const withoutSame = entries.filter(item => item.fileUri !== entry.fileUri && item.mediaId !== entry.mediaId);
+  await writeMediaManifest([...withoutSame, entry]);
+}
+
+function extensionForMime(mimeType: string) {
+  if (mimeType.includes('png')) return 'png';
+  if (mimeType.includes('webp')) return 'webp';
+  if (mimeType.includes('gif')) return 'gif';
+  if (mimeType.includes('mp4')) return 'mp4';
+  return 'jpg';
+}
+
+export async function copyMediaToPermanentStorage(uri: string, options: { type?: string; mediaKind?: string; characterId?: string } = {}): Promise<string> {
+  const kind = options.mediaKind || 'misc';
+  const dir = await ensureMediaSubdir(kind);
+  if (!dir || uri.startsWith(dir)) return uri;
+  const type = options.type || 'image/jpeg';
+  const ext = uri.split('.').pop()?.split('?')[0]?.toLowerCase();
+  const safeExt = ext && /^[a-z0-9]{2,5}$/.test(ext) ? ext : extensionForMime(type);
+  const mediaId = `${kind}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const fileUri = `${dir}${mediaId}.${safeExt}`;
+  await FileSystem.copyAsync({ from: uri, to: fileUri });
+  const info = await FileSystem.getInfoAsync(fileUri);
+  if (!info.exists) {
+    throw new Error('미디어 파일 복사 후 파일을 찾을 수 없습니다.');
+  }
+  await upsertMediaManifest({
+    mediaId,
+    fileUri,
+    type,
+    characterId: options.characterId,
+    createdAt: Date.now(),
+    size: 'size' in info ? info.size : undefined
+  });
+  return fileUri;
+}
+
+export async function inspectMediaFiles(): Promise<{ manifest: MediaManifestEntry[]; checked: number; existing: number; missing: string[]; mediaDir: string; manifestFile: string }> {
+  const manifest = await readMediaManifest();
+  const results = await Promise.all(manifest.map(async entry => ({ entry, info: await FileSystem.getInfoAsync(entry.fileUri) })));
+  return {
+    manifest,
+    checked: results.length,
+    existing: results.filter(item => item.info.exists).length,
+    missing: results.filter(item => !item.info.exists).map(item => item.entry.fileUri),
+    mediaDir: MEDIA_DIR,
+    manifestFile: MEDIA_MANIFEST_FILE
+  };
+}
+
+export async function externalizeDataUri(value: string, hint: string, force = false): Promise<string> {
+  if (!force && !isLargeDataUri(value)) return value;
   const dir = await ensureMediaDir();
   if (!dir) return value;
   const ext = extensionFor(value);
@@ -80,6 +192,17 @@ export async function externalizeDataUri(value: string, hint: string): Promise<s
   const safeHint = hint.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 48) || 'media';
   const uri = `${dir}${safeHint}_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
   await FileSystem.writeAsStringAsync(uri, base64, { encoding: FileSystem.EncodingType.Base64 });
+  const info = await FileSystem.getInfoAsync(uri);
+  if (!info.exists) {
+    throw new Error('미디어 파일 저장 후 파일을 찾을 수 없습니다.');
+  }
+  await upsertMediaManifest({
+    mediaId: safeHint,
+    fileUri: uri,
+    type: /^data:([^;]+);base64,/.exec(value)?.[1] || 'image/jpeg',
+    createdAt: Date.now(),
+    size: 'size' in info ? info.size : undefined
+  });
   return uri;
 }
 
@@ -128,9 +251,9 @@ export async function externalizeStateMedia(state: SNSGodState): Promise<SNSGodS
     image: isLargeDataUri(post.image) ? await externalizeDataUri(post.image, `sns_${post.id}`) : post.image
   })));
 
-  next.referenceFaceSlots = await Promise.all((next.referenceFaceSlots || []).slice(0, 30).map(async slot => ({
+  next.referenceFaceSlots = await Promise.all((next.referenceFaceSlots || []).slice(0, 50).map(async slot => ({
     ...slot,
-    image: isLargeDataUri(slot.image) ? await externalizeDataUri(slot.image, `reference_face_${slot.id}`) : slot.image
+    image: isDataUri(slot.image) ? await externalizeDataUri(slot.image, `reference_face_${slot.id}`, true) : slot.image
   })));
 
   return next;

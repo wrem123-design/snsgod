@@ -1,4 +1,4 @@
-import { BlindDateAnswer, BlindDateCandidate, BlindDateMode, BlindDateProgress, BlindDateRanking, BlindDateRotationTurn, BlindDateRound, BlindDateSession, BlindDateWorldcupPair, CandidateAppearance, SNSGodCharacter, SNSGodState } from '../types';
+import { BlindDateAnswer, BlindDateCandidate, BlindDateMode, BlindDateProgress, BlindDateRanking, BlindDateRotationTurn, BlindDateRound, BlindDateSession, BlindDateWorldcupPair, CandidateAppearance, SNSGodCharacter, SNSGodState, StreetEncounterChoice, StreetEncounterStats } from '../types';
 import { callLLMText, generateImageDataUri, parseJsonObject } from './api';
 import { appendDebugLog } from './debugLog';
 import { makeId } from './ids';
@@ -7,6 +7,8 @@ import { DEFAULT_COVER_BACKGROUND_DIRECTION } from './prompts';
 const LABELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'] as const;
 export type BlindDateSessionOptions = {
   includeExistingCharacters?: boolean;
+  encounterLocation?: string;
+  questionTarget?: number;
 };
 const DEFAULT_QUESTIONS = [
   '연인이 힘들다고 하면 어떻게 해줄 거야?',
@@ -59,7 +61,56 @@ const DEFAULT_QUESTIONS = [
   '네가 은근히 시험해보는 상대 행동은 뭐야?',
   '연애할 때 가장 위험한 네 습관은 뭐라고 생각해?',
   '나랑 사귀면 제일 먼저 바뀔 네 일상은 뭐야?',
-  '오늘 여기서 한 명만 고른다면 너는 뭘로 승부 볼 거야?'
+  '오늘 여기서 한 명만 고른다면 너는 뭘로 승부 볼 거야?',
+  '좋아하는 사람에게 일부러 차갑게 굴어본 적 있어?',
+  '상대가 너보다 인기 많으면 솔직히 신경 쓰여?',
+  '나한테 호감이 있는데 내가 눈치 못 채면 어디까지 표현할 거야?',
+  '연애할 때 상대의 친구 관계까지 신경 쓰는 편이야?',
+  '너는 사랑받는 쪽이 편해, 사랑하는 쪽이 편해?',
+  '상대가 너를 너무 빨리 좋아하면 부담스러워, 귀여워?',
+  '썸인데 하루 종일 연락이 없으면 너는 어떻게 행동해?',
+  '좋아하는 사람이 애매하게 굴면 바로 정리해, 한 번 더 확인해?',
+  '나랑 가치관이 안 맞아도 끌리면 만날 수 있어?',
+  '네가 연애에서 제일 이기적으로 변하는 순간은?',
+  '상대가 네 SNS를 자주 확인하는 걸 알면 어때?',
+  '전 연인과 친구로 지내는 사람을 이해할 수 있어?',
+  '사랑한다고 말하면서 행동이 부족한 사람을 얼마나 기다려줄 수 있어?',
+  '연애 초반에 상대의 단점을 어디까지 눈감아줄 수 있어?',
+  '너는 헤어질 때 이유를 끝까지 설명하는 편이야, 조용히 멀어지는 편이야?',
+  '상대가 네 약점을 농담처럼 말하면 웃어넘길 수 있어?',
+  '첫 만남에서 상대가 너무 적극적이면 끌려, 부담스러워?',
+  '친구들이 반대하는 사람을 계속 좋아할 수 있어?',
+  '나랑 싸운 뒤 내가 먼저 연락 안 하면 얼마나 기다릴 것 같아?',
+  '연애에서 확인받고 싶은 욕구가 큰 편이야?',
+  '너한테 “좋은 사람인데 안 끌리는 사람”은 왜 안 끌릴까?',
+  '상대가 너를 질투하게 만들려고 행동하면 바로 알아차려?',
+  '연애 중 상대가 혼자 여행 간다고 하면 어디까지 괜찮아?',
+  '너는 안정적인 사람과 재밌는 사람 중 누구에게 약해?',
+  '나한테 딱 하나 경고해야 한다면 뭐라고 할래?',
+  '상대가 돈을 아끼는 모습과 인색한 모습의 기준은 어디야?',
+  '너는 사과를 말로 듣고 싶어, 행동으로 확인하고 싶어?',
+  '처음부터 너무 잘 맞으면 오히려 의심하는 편이야?',
+  '좋아하는 사람이 네 계획을 자꾸 흔들면 설레, 피곤해?',
+  '연애할 때 네가 제일 자주 하는 방어기제는 뭐야?',
+  '내가 갑자기 잠수 타면 너는 화를 내, 걱정부터 해?',
+  '상대가 네 과거를 많이 궁금해하면 어디까지 말해줄 거야?',
+  '좋아하는 사람 앞에서 일부러 괜찮은 척한 적 있어?',
+  '너한테 오래 남는 사람은 다정한 사람, 솔직한 사람, 재밌는 사람 중 누구야?',
+  '연애에서 “이건 사랑이 아니라 습관이다”라고 느끼는 순간은?',
+  '나랑 사귀면 네가 제일 먼저 시험받을 부분은 뭐야?',
+  '상대가 불안해할 때 매번 달래주는 연애를 할 수 있어?',
+  '네가 먼저 마음이 식었을 때 티가 나는 편이야?',
+  '연애에서 자존심을 내려놓을 수 있는 선은 어디까지야?',
+  '상대가 너를 공개적으로 자랑하는 걸 좋아해, 부담스러워?',
+  '처음 만난 사람에게 묘하게 기대고 싶어진 적이 있다면 왜였을까?',
+  '사랑하면 생활 리듬까지 맞추려고 하는 편이야?',
+  '너는 상대의 말투 변화에 예민한 편이야?',
+  '내가 너를 좋아하는지 헷갈리게 굴면 어떻게 확인할 거야?',
+  '데이트 중 상대가 계속 휴대폰을 보면 바로 말해?',
+  '너한테 “센스 있다”는 건 어떤 행동이야?',
+  '연애에서 네가 제일 무서워하는 결말은 뭐야?',
+  '좋아하는 사람의 단점이 귀여워 보이는 순간은 언제야?',
+  '나랑 단둘이 있으면 어떤 침묵은 괜찮고 어떤 침묵은 어색해?'
 ];
 const WORLDCUP_CRITERIA = [
   '첫인상이 더 끌리는 사람은?',
@@ -177,6 +228,95 @@ const IMAGE_VARIATION_TRIGGERS = [
   '학생스타일의 메이크업',
   'K-pop idol inspired makeup'
 ];
+const STREET_ENCOUNTER_LOCATIONS = [
+  '성수 카페거리',
+  '한강 산책로',
+  '전시회/갤러리',
+  '독립서점',
+  '편집샵 거리',
+  '베이커리 앞',
+  '지하철역 근처',
+  '회사 밀집 거리',
+  '대학가 카페',
+  '야간 편의점 앞',
+  '주말 플리마켓',
+  '반려동물 산책로'
+];
+const ENCOUNTER_MAX_TURNS = 4;
+const STREET_LOCATION_TRAITS: Record<string, { jobs: string[]; moods: string[]; outfits: string[]; reasons: string[] }> = {
+  '성수 카페거리': {
+    jobs: ['브랜드 디자이너', '콘텐츠 마케터', '프리랜서 포토그래퍼', '쇼룸 스태프'],
+    moods: ['감성적이지만 처음엔 조심스러운', '트렌디하고 관찰이 빠른'],
+    outfits: ['minimal jacket with wide pants', 'cropped hoodie and casual denim', 'soft knit cardigan with tote bag'],
+    reasons: ['친구를 기다리며 테이크아웃 컵을 들고 있다', '카페 앞 메뉴판을 보며 잠깐 고민 중이다']
+  },
+  '한강 산책로': {
+    jobs: ['요가 강사', '헬스케어 상담사', '앱 서비스 기획자', '러닝 크루 운영자'],
+    moods: ['털털하고 밝은', '조금 지쳤지만 여유를 찾는'],
+    outfits: ['light windbreaker and sneakers', 'hoodie zip-up with training pants', 'simple sweatshirt and cap'],
+    reasons: ['산책하다 벤치 옆에서 물을 마시고 있다', '이어폰을 빼고 강 쪽을 바라보고 있다']
+  },
+  '전시회/갤러리': {
+    jobs: ['전시 코디네이터', '박물관 도슨트', '공연 기획자', '일러스트레이터'],
+    moods: ['차분하고 취향이 분명한', '말수는 적지만 호기심 있는'],
+    outfits: ['black coat with a small necklace', 'simple one-piece dress and loafers', 'tailored jacket with muted colors'],
+    reasons: ['작품 설명 앞에서 오래 멈춰 서 있다', '팸플릿을 접어 들고 다음 전시실을 살피고 있다']
+  },
+  '독립서점': {
+    jobs: ['번역가', '로컬 매거진 에디터', '북카페 운영자', '작가 지망생'],
+    moods: ['조용하고 생각이 많은', '낯을 가리지만 섬세한'],
+    outfits: ['oversized knit and long skirt', 'shirt with cardigan in calm colors', 'loose cotton blouse and canvas bag'],
+    reasons: ['시집 코너 앞에서 책등을 천천히 훑고 있다', '계산대 근처에서 책갈피를 고르고 있다']
+  },
+  '편집샵 거리': {
+    jobs: ['소품샵 바이어', '패션 MD', '향수 브랜드 스태프', '주얼리 디자이너'],
+    moods: ['쿨하고 센스 있는', '도도해 보이지만 반응이 빠른'],
+    outfits: ['statement jacket with wide trousers', 'vintage layered outfit', 'hip makeup with edited-shop street fashion'],
+    reasons: ['쇼윈도 앞에서 작은 액세서리를 바라보고 있다', '종이 쇼핑백을 들고 골목을 서성인다']
+  },
+  '베이커리 앞': {
+    jobs: ['브런치 셰프', '카페 매니저', '플로리스트', '초등학교 교사'],
+    moods: ['다정하고 생활감 있는', '밝지만 살짝 바쁜'],
+    outfits: ['warm cardigan and clean casual knit', 'soft blouse with beige skirt', 'simple sweater and tote bag'],
+    reasons: ['빵 봉투를 들고 영수증을 확인하고 있다', '품절 안내문 앞에서 아쉬운 표정을 짓고 있다']
+  },
+  '지하철역 근처': {
+    jobs: ['스타트업 HR', '간호사', '외국계 회사 직장인', '데이터 라벨링 매니저'],
+    moods: ['현실적이고 경계심 있는', '바쁘지만 예의 있는'],
+    outfits: ['trench coat with slacks', 'office blouse and neat shoulder bag', 'minimal jacket and black turtleneck'],
+    reasons: ['출구 근처에서 시간을 확인하고 있다', '누군가를 기다리는 듯 휴대폰을 보고 있다']
+  },
+  '회사 밀집 거리': {
+    jobs: ['UX 리서처', '브랜드 마케터', '앱 서비스 기획자', '호텔 컨시어지'],
+    moods: ['바쁘고 선이 분명한', '단정하고 현실적인'],
+    outfits: ['clean office makeup with blouse and slacks', 'tailored blazer and low ponytail', 'minimal office look with trench coat'],
+    reasons: ['커피를 들고 회사 입구 쪽으로 걷고 있다', '점심시간 끝 무렵 횡단보도 앞에 서 있다']
+  },
+  '대학가 카페': {
+    jobs: ['대학원생', '학원 상담 매니저', '웹툰 어시스턴트', '영상 편집자'],
+    moods: ['밝고 친근한', '피곤하지만 농담을 잘 받는'],
+    outfits: ['학생스타일의 메이크업 with hoodie and denim', 'soft college makeup with cardigan', 'casual sweatshirt and backpack'],
+    reasons: ['노트북을 접고 자리에서 일어나려 한다', '과제 자료를 보며 음료를 기다리고 있다']
+  },
+  '야간 편의점 앞': {
+    jobs: ['방송 작가', '응급실 간호사', '프리랜서 디자이너', '와인바 매니저'],
+    moods: ['피곤하지만 솔직한', '경계심이 높지만 말은 따뜻한'],
+    outfits: ['comfortable hoodie and jogger pants', 'oversized sweatshirt, natural no-filter makeup', 'casual cardigan over lounge outfit'],
+    reasons: ['편의점 봉투를 들고 잠깐 숨을 고르고 있다', '우산을 접고 처마 밑에 서 있다']
+  },
+  '주말 플리마켓': {
+    jobs: ['도자기 공방 운영자', '빈티지 소품 셀러', '플로리스트', '공간 디자이너'],
+    moods: ['호기심 많고 활발한', '취향 이야기에 금방 풀리는'],
+    outfits: ['vintage casual outfit with canvas tote', 'linen shirt and colorful scarf', 'warm casual outfit with handmade accessories'],
+    reasons: ['작은 소품을 들고 가격표를 살피고 있다', '부스 사이에서 향초를 시향하고 있다']
+  },
+  '반려동물 산책로': {
+    jobs: ['동물병원 테크니션', '펫 브랜드 MD', '초등학교 교사', '콘텐츠 마케터'],
+    moods: ['다정하고 조심스러운', '말랑하지만 낯을 가리는'],
+    outfits: ['light cardigan and comfortable sneakers', 'soft sweatshirt with crossbody bag', 'windbreaker and natural daily makeup'],
+    reasons: ['강아지 리드줄을 정리하며 천천히 걷고 있다', '벤치 옆에서 반려견에게 물을 먹이고 있다']
+  }
+};
 
 function progressOf(state: SNSGodState): BlindDateProgress {
   return state.blindDate || { sessions: [], archives: [] };
@@ -184,6 +324,14 @@ function progressOf(state: SNSGodState): BlindDateProgress {
 
 function clampCandidateCount(count: number) {
   return Math.min(8, Math.max(3, Math.round(count || 5)));
+}
+
+function clampMiniGameCandidateCount(count: number) {
+  return Math.min(5, Math.max(3, Math.round(count || 5)));
+}
+
+function clampQuestionTarget(count: number | undefined) {
+  return Math.min(10, Math.max(5, Math.round(Number(count || 5))));
 }
 
 function clampWorldcupCount(count: number) {
@@ -194,7 +342,8 @@ function clampWorldcupCount(count: number) {
 }
 
 function candidateCountForMode(mode: BlindDateMode, candidateCount: number): number {
-  if (mode === 'question' || mode === 'rotation') return 5;
+  if (mode === 'encounter') return 1;
+  if (mode === 'question' || mode === 'rotation') return clampMiniGameCandidateCount(candidateCount);
   if (mode === 'worldcup') return clampWorldcupCount(candidateCount);
   return clampCandidateCount(candidateCount);
 }
@@ -214,6 +363,22 @@ function shuffled<T>(items: T[]): T[] {
 
 function sampleStrings(items: string[], count: number): string[] {
   return shuffled(items).slice(0, count);
+}
+
+function streetTraits(location?: string) {
+  return STREET_LOCATION_TRAITS[String(location || '')] || STREET_LOCATION_TRAITS['성수 카페거리'];
+}
+
+function randomStreetLocations(): string[] {
+  return shuffled(STREET_ENCOUNTER_LOCATIONS).slice(0, 4);
+}
+
+function clampStat(value: number, min = 0, max = 100): number {
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+function clampMood(value: number): number {
+  return Math.max(-50, Math.min(50, Math.round(value)));
 }
 
 function pickNationality(index: number): BlindDateCandidate['nationality'] {
@@ -376,6 +541,48 @@ function fallbackCandidates(count: number): BlindDateCandidate[] {
   }, index + Math.floor(Math.random() * 1000)));
 }
 
+function withEncounterFlavor(candidate: BlindDateCandidate, location: string, index = 0): BlindDateCandidate {
+  const traits = streetTraits(location);
+  const reason = pickFrom(traits.reasons);
+  const mood = pickFrom(traits.moods);
+  const job = pickFrom(traits.jobs);
+  const outfit = pickFrom(traits.outfits);
+  const appearance = { ...candidate.appearance, outfitStyle: outfit };
+  const imagePrompt = applyImageVariationTriggers([
+    `adult Asian woman, ${candidate.nationality}, age ${candidate.age}`,
+    `chance encounter at ${location} in Seoul`,
+    `public place, respectful distance, ${reason}`,
+    appearance.faceShape,
+    appearance.eyes,
+    appearance.eyelids,
+    appearance.nose,
+    appearance.lips,
+    appearance.skinTone,
+    appearance.hairStyle,
+    appearance.makeupStyle,
+    outfit,
+    'realistic Korean visual novel still, natural candid portrait, clear face, everyday urban lighting, shallow depth of field, low quality'
+  ].filter(Boolean).join(', '), index);
+  const publicObservation = buildPublicObservation(location, reason, outfit, candidate.contactPresetId);
+  const publicVibe = buildPublicVibe(candidate.contactPresetId, mood);
+  return {
+    ...candidate,
+    job,
+    locationBase: location,
+    personalitySummary: `${mood} 타입. ${candidate.personalitySummary}`,
+    appearance,
+    imagePrompt,
+    internalAppearancePrompt: appearanceSummary(appearance),
+    internalImagePrompt: imagePrompt,
+    hiddenProfile: compactCandidateText(`${candidate.name}, ${candidate.age}, ${job}, ${mood}. ${candidate.personalitySummary}`, 220),
+    publicObservation,
+    publicVibe,
+    firstDm: `그때 ${location}에서 처음 말 걸었던 거 아직 기억나요. 짧았는데 은근히 인상에 남았어요.`,
+    snsPreview: `${location}에서 잠깐 멈춘 시간. 생각보다 괜찮은 우연이었다.`,
+    callPreview: '처음 만났을 때처럼 너무 부담스럽지 않게, 짧게 얘기해도 좋아요.'
+  };
+}
+
 function candidateFromCharacter(character: SNSGodCharacter, index: number): BlindDateCandidate {
   const appearance = appearanceFor(index + 200);
   const record = character as SNSGodCharacter & Record<string, unknown>;
@@ -435,9 +642,14 @@ function randomGlobalFaceReference(state: SNSGodState): string | undefined {
   const slots = (state.referenceFaceSlots || [])
     .map(slot => String(slot.image || '').trim())
     .filter(value => /^(data:|file:|content:|asset:|https?:\/\/)/i.test(value))
-    .slice(0, 30);
+    .slice(0, 50);
   if (!slots.length) return undefined;
-  if (Math.random() >= 0.4) return undefined;
+  const provider = state.config.imageGeneration?.provider || 'openai';
+  if (provider !== 'grok-local' && provider !== 'grok-cloud') {
+    void appendDebugLog('blindDate.reference', `reference slots=${slots.length}, provider=${provider}, skipped because this provider does not support image reference generation`, 'warn');
+    return undefined;
+  }
+  if (Math.random() >= 0.48) return undefined;
   return slots[Math.floor(Math.random() * slots.length)];
 }
 
@@ -456,18 +668,23 @@ async function generateBlindDateCandidates(state: SNSGodState, mode: BlindDateMo
     ? shuffled(state.characters.filter(character => character.enabled !== false)).slice(0, count).map((character, index) => candidateFromCharacter(character, index))
     : [];
   const generatedCount = Math.max(0, count - existingCandidates.length);
-  let candidates = [...existingCandidates, ...fallbackCandidates(generatedCount)];
+  const traits = streetTraits(options.encounterLocation);
+  let candidates = [...existingCandidates, ...fallbackCandidates(generatedCount).map((candidate, index) => mode === 'encounter' ? withEncounterFlavor(candidate, options.encounterLocation || '성수 카페거리', index) : candidate)];
   try {
     const { text } = generatedCount > 0 ? await callLLMText(state, [
       {
         role: 'system',
         content: [
-          'You generate fictional adult AI dating candidates for a Korean SNS messenger app.',
+          mode === 'encounter'
+            ? 'You generate one fictional adult woman for a respectful chance-encounter mini game in a Korean SNS messenger app.'
+            : 'You generate fictional adult AI dating candidates for a Korean SNS messenger app.',
           'All candidates must be adults age 20 or older. All candidates must be Asian.',
           'Nationality distribution: about 95% Korean, about 5% Japanese or Chinese. Japanese or Chinese candidates must be fluent Korean speakers due to studying, working, or living in Korea.',
           'Do not create minors, teenagers, school-uniform characters, or ambiguous underage appearances.',
           'Each candidate must have a distinct Korean name, job, lifestyle, face, personality, speech style, SNS style, and contact pattern.',
           'Avoid reusing common names or the same office/cafe/marketing jobs. Use varied contemporary Korean lifestyles and occupations.',
+          mode === 'encounter' ? `The encounter location is "${options.encounterLocation || '성수 카페거리'}". Use these local traits: jobs=${traits.jobs.join(', ')}, moods=${traits.moods.join(', ')}, outfits=${traits.outfits.join(', ')}, reasons=${traits.reasons.join(', ')}.` : '',
+          mode === 'encounter' ? 'The character should feel like a person met in that place, not a profile card. firstDm should reference the first meeting naturally after contact exchange.' : '',
           mode === 'question' || mode === 'rotation' ? 'These candidates are fixed people for this session. Later answers must be generated only from these saved profiles, so make their personalities and speech styles strongly distinguishable now.' : '',
           'Avoid generic duplicate Korean beauty faces. Make every candidate look like a different real person, not sisters, not twins, not the same model with small changes.',
           'For every candidate, strongly vary face shape, eye shape, eyelids, eyebrows, nose bridge, nose tip, lips, cheeks, jawline, chin, skin tone, hair length, hair texture, hair color, makeup intensity, outfit color, camera angle, background, and photo composition.',
@@ -482,12 +699,17 @@ async function generateBlindDateCandidates(state: SNSGodState, mode: BlindDateMo
       },
       {
         role: 'user',
-        content: `Create ${generatedCount} blind date candidates. They should be adult Asian women, mostly Korean, all fluent Korean speakers. Make their faces visibly different and include imagePrompt for each. imagePrompt must be English only.`
+        content: mode === 'encounter'
+          ? `Create ${generatedCount} chance-encounter candidate for "${options.encounterLocation || '성수 카페거리'}". Return a realistic adult Asian woman, mostly Korean or fluent Korean speaker. The profile must support a short respectful conversation before contact exchange. imagePrompt must be English only.`
+          : `Create ${generatedCount} blind date candidates. They should be adult Asian women, mostly Korean, all fluent Korean speakers. Make their faces visibly different and include imagePrompt for each. imagePrompt must be English only.`
       }
     ]) : { text: '{"candidates":[]}' };
     const parsed = parseJsonObject<{ candidates?: Partial<BlindDateCandidate>[] }>(text);
     if (Array.isArray(parsed?.candidates) && parsed.candidates.length) {
-      const generated = parsed.candidates.slice(0, generatedCount).map((item, index) => normalizeCandidate(item, index + Math.floor(Math.random() * 1000)));
+      const generated = parsed.candidates.slice(0, generatedCount).map((item, index) => {
+        const normalized = normalizeCandidate(item, index + Math.floor(Math.random() * 1000));
+        return mode === 'encounter' ? withEncounterFlavor(normalized, options.encounterLocation || '성수 카페거리', index) : normalized;
+      });
       candidates = diversifyCandidates([...existingCandidates, ...generated, ...fallbackCandidates(generatedCount)].slice(0, count));
     }
   } catch (error) {
@@ -500,6 +722,10 @@ async function generateBlindDateCandidates(state: SNSGodState, mode: BlindDateMo
     try {
       if (candidate.profileImageUri) return candidate;
       const faceReferenceImage = randomGlobalFaceReference(state);
+      void appendDebugLog(
+        'blindDate.reference',
+        `mode=${mode} candidate=${candidate.name || candidate.anonymousLabel || '-'} slots=${Math.min(50, (state.referenceFaceSlots || []).filter(slot => String(slot.image || '').trim()).length)} reference=${faceReferenceImage ? 'yes' : 'no'} kind=${faceReferenceImage ? 'profile-reference-face' : 'profile'}`
+      );
       const profileImageUri = await generateImageDataUri(state, candidate.imagePrompt, undefined, {
         kind: faceReferenceImage ? 'profile-reference-face' : 'profile',
         referenceImage: faceReferenceImage
@@ -519,15 +745,18 @@ export async function createBlindDateSession(state: SNSGodState, mode: BlindDate
   const count = candidateCountForMode(mode, candidateCount);
   const now = Date.now();
   const withImages = await generateBlindDateCandidates(state, mode, count, options);
+  const worldcupSetup = mode === 'worldcup' ? buildInitialWorldcupSetup(withImages.map(candidate => candidate.id), count) : undefined;
   const session: BlindDateSession = {
     id: makeId('blinddate'),
     mode,
     status: 'active',
     candidateCount: count,
+    questionTarget: mode === 'question' ? clampQuestionTarget(options.questionTarget) : mode === 'rotation' ? 3 : undefined,
     candidates: withImages,
     rounds: [],
-    worldcupPairs: mode === 'worldcup' ? buildWorldcupPairs(withImages.map(candidate => candidate.id), `${count}강`) : undefined,
+    worldcupPairs: worldcupSetup?.pairs,
     worldcupIndex: mode === 'worldcup' ? 0 : undefined,
+    worldcupByeCandidateIds: worldcupSetup?.byeCandidateIds,
     rotationTurns: mode === 'rotation' ? [] : undefined,
     createdAt: now
   };
@@ -540,6 +769,218 @@ export async function createBlindDateSession(state: SNSGodState, mode: BlindDate
       sessions: [session, ...progress.sessions].slice(0, 20)
     }
   };
+}
+
+export function createStreetEncounterSession(state: SNSGodState): SNSGodState {
+  const now = Date.now();
+  const session: BlindDateSession = {
+    id: makeId('encounter'),
+    mode: 'encounter',
+    status: 'active',
+    candidateCount: 1,
+    candidates: [],
+    rounds: [],
+    encounterLocations: randomStreetLocations(),
+    encounterPhase: 'locations',
+    encounterTurn: 0,
+    encounterMaxTurns: ENCOUNTER_MAX_TURNS,
+    encounterContactAttempted: false,
+    createdAt: now
+  };
+  const progress = progressOf(state);
+  return {
+    ...state,
+    blindDate: {
+      ...progress,
+      activeSessionId: session.id,
+      sessions: [session, ...progress.sessions].slice(0, 20)
+    }
+  };
+}
+
+export async function startStreetEncounterAtLocation(state: SNSGodState, sessionId: string, location: string): Promise<SNSGodState> {
+  const progress = progressOf(state);
+  const session = progress.sessions.find(item => item.id === sessionId);
+  if (!session || session.mode !== 'encounter') return state;
+  const [candidate] = await generateBlindDateCandidates(state, 'encounter', 1, { encounterLocation: location });
+  if (!candidate) return state;
+  const traits = streetTraits(location);
+  const reason = pickFrom(traits.reasons);
+  const stats = initialEncounterStats(candidate);
+  const narration = [
+    `${location}로 이동했다.`,
+    '',
+    candidate.publicObservation || buildPublicObservation(location, reason, candidate.appearance.outfitStyle, candidate.contactPresetId),
+    candidate.publicVibe || '눈이 마주쳤지만, 상대는 먼저 말을 걸 분위기는 아니다.'
+  ].join('\n');
+  return patchBlindDateSession(state, sessionId, item => ({
+    ...item,
+    candidates: [candidate],
+    encounterLocation: location,
+    encounterPhase: 'intro',
+    encounterNarration: narration,
+    encounterNpcLine: '아직 서로 이름도 모른다. 지금은 말을 걸지, 지나칠지 정해야 한다.',
+    encounterStats: stats,
+    encounterChoices: openingEncounterChoices(location),
+    encounterHistory: [],
+    encounterTurn: 0,
+    encounterMaxTurns: ENCOUNTER_MAX_TURNS,
+    encounterContactAttempted: false,
+    encounterContactChanceLabel: contactChanceLabel(stats, candidate),
+    encounterContactFailureReason: undefined
+  }));
+}
+
+export async function approachStreetEncounter(state: SNSGodState, sessionId: string, actionText: string): Promise<SNSGodState> {
+  const progress = progressOf(state);
+  const session = progress.sessions.find(item => item.id === sessionId);
+  const candidate = session?.candidates[0];
+  if (!session || session.mode !== 'encounter' || !candidate) return state;
+  const stats = session.encounterStats || initialEncounterStats(candidate);
+  const nextStats = applyEncounterChoice(stats, {
+    id: 'open',
+    text: actionText,
+    style: actionText.includes('지나') ? 'exit' : actionText.includes('지켜') ? 'safe' : 'safe',
+    affinityDelta: actionText.includes('지나') ? 0 : 6,
+    cautionDelta: actionText.includes('지나') ? 0 : -4,
+    awkwardnessDelta: actionText.includes('지나') ? 0 : 4,
+    curiosityDelta: actionText.includes('지켜') ? 4 : 8,
+    moodDelta: actionText.includes('지나') ? 0 : 3
+  });
+  if (actionText.includes('지나')) {
+    return patchBlindDateSession(state, sessionId, item => ({
+      ...item,
+      encounterPhase: 'passed',
+      encounterResult: 'passed',
+      encounterNarration: '당신은 더 말을 걸지 않고 지나갔다. 스쳐 지나간 얼굴은 잠깐 기억에 남았지만, 오늘의 인연은 여기서 끝났다.',
+      encounterStats: nextStats
+    }));
+  }
+  const ai = await generateStreetEncounterAiStep(state, session, candidate, actionText, nextStats, 0, true);
+  return patchBlindDateSession(state, sessionId, item => ({
+    ...item,
+    encounterPhase: 'talk',
+    encounterTurn: 0,
+    encounterStats: nextStats,
+    encounterNarration: ai?.narration || `당신은 부담스럽지 않은 거리에서 말을 건넸다.\n\n상대는 잠깐 놀란 듯했지만, 바로 자리를 피하지는 않았다.`,
+    encounterNpcLine: ai?.npcLine || firstNpcLineFor(candidate),
+    encounterChoices: ai?.choices?.length ? ai.choices : nextEncounterChoices(candidate, nextStats, 0, item.encounterHistory || []),
+    encounterContactChanceLabel: contactChanceLabel(nextStats, candidate),
+    encounterHistory: [...(item.encounterHistory || []), `시작: ${actionText}`]
+  }));
+}
+
+export async function chooseStreetEncounterOption(state: SNSGodState, sessionId: string, choiceId: string): Promise<SNSGodState> {
+  const progress = progressOf(state);
+  const session = progress.sessions.find(item => item.id === sessionId);
+  const choice = session?.encounterChoices?.find(item => item.id === choiceId);
+  if (!session || session.mode !== 'encounter' || !choice) return state;
+  return advanceStreetEncounterWithChoice(state, sessionId, choice);
+}
+
+export async function chooseStreetEncounterCustomText(state: SNSGodState, sessionId: string, text: string): Promise<SNSGodState> {
+  const clean = normalizeEncounterChoiceText(text);
+  if (!clean) return state;
+  const progress = progressOf(state);
+  const session = progress.sessions.find(item => item.id === sessionId);
+  if (!session || session.mode !== 'encounter') return state;
+  if ((session.encounterPhase || 'locations') === 'intro') {
+    return approachStreetEncounter(state, sessionId, clean);
+  }
+  const choice: StreetEncounterChoice = {
+    id: makeId('sechoice'),
+    text: clean,
+    style: customEncounterStyle(clean),
+    affinityDelta: customEncounterAffinityDelta(clean),
+    cautionDelta: customEncounterCautionDelta(clean),
+    awkwardnessDelta: customEncounterAwkwardnessDelta(clean),
+    curiosityDelta: customEncounterCuriosityDelta(clean),
+    moodDelta: customEncounterMoodDelta(clean)
+  };
+  return advanceStreetEncounterWithChoice(state, sessionId, choice);
+}
+
+async function advanceStreetEncounterWithChoice(state: SNSGodState, sessionId: string, choice: StreetEncounterChoice): Promise<SNSGodState> {
+  const progress = progressOf(state);
+  const session = progress.sessions.find(item => item.id === sessionId);
+  const candidate = session?.candidates[0];
+  if (!session || session.mode !== 'encounter' || !candidate) return state;
+  const previousStats = session.encounterStats || initialEncounterStats(candidate);
+  const stats = applyEncounterChoice(previousStats, choice);
+  const maxTurns = Number(session.encounterMaxTurns || ENCOUNTER_MAX_TURNS);
+  const turn = Math.min(maxTurns, Number(session.encounterTurn || 0) + 1);
+  const badExit = choice.style === 'exit' || stats.caution >= 88 || stats.awkwardness >= 90 || stats.mood <= -35;
+  if (badExit) {
+    return patchBlindDateSession(state, sessionId, item => ({
+      ...item,
+      encounterPhase: choice.style === 'exit' ? 'passed' : 'failed',
+      encounterResult: choice.style === 'exit' ? 'passed' : 'rejected',
+      encounterTurn: turn,
+      encounterStats: stats,
+      encounterNarration: choice.style === 'exit'
+        ? '당신은 대화를 더 이어가지 않고 자연스럽게 물러났다. 짧은 우연은 여기서 끝났다.'
+        : '상대의 표정이 조금 닫힌다. 더 말을 붙이는 건 실례일 것 같다.',
+      encounterNpcLine: choice.style === 'exit' ? '“네, 조심히 가세요.”' : '“죄송해요. 제가 지금은 조금 부담스러워서요.”',
+      encounterChoices: [],
+      encounterContactChanceLabel: contactChanceLabel(stats, candidate),
+      encounterHistory: [...(item.encounterHistory || []), `Q${turn}: ${choice.text}`]
+    }));
+  }
+  const ai = await generateStreetEncounterAiStep(state, session, candidate, choice.text, stats, turn, false);
+  return patchBlindDateSession(state, sessionId, item => ({
+    ...item,
+    encounterTurn: turn,
+    encounterStats: stats,
+    encounterNarration: ai?.narration || narrationAfterChoice(candidate, choice, stats, turn),
+    encounterNpcLine: ai?.npcLine || npcLineAfterChoice(candidate, choice, stats),
+    encounterChoices: turn >= maxTurns ? [] : ai?.choices?.length ? ai.choices : nextEncounterChoices(candidate, stats, turn, item.encounterHistory || []),
+    encounterContactChanceLabel: contactChanceLabel(stats, candidate),
+    encounterHistory: [...(item.encounterHistory || []), `Q${turn}: ${choice.text}`]
+  }));
+}
+
+export function requestStreetEncounterContact(state: SNSGodState, sessionId: string): { next: SNSGodState; success: boolean; roomId?: string; characterId?: string } {
+  const progress = progressOf(state);
+  const session = progress.sessions.find(item => item.id === sessionId);
+  const candidate = session?.candidates[0];
+  if (!session || session.mode !== 'encounter' || !candidate) return { next: state, success: false };
+  const stats = session.encounterStats || initialEncounterStats(candidate);
+  const chance = contactSuccessChance(stats, candidate);
+  const success = stats.affinity >= 50 && Math.random() * 100 <= chance;
+  const failureReason = contactFailureReason(stats);
+  if (!success) {
+    return {
+      next: patchBlindDateSession(state, sessionId, item => ({
+        ...item,
+        encounterPhase: 'failed',
+        encounterResult: 'rejected',
+        encounterNarration: failureReason,
+        encounterNpcLine: '“대화는 괜찮았는데, 연락처까지는 조금 부담스러워요. 이해해주셨으면 좋겠어요.”',
+        encounterChoices: [],
+        encounterContactAttempted: true,
+        encounterContactChanceLabel: contactChanceLabel(stats, candidate),
+        encounterContactFailureReason: failureReason,
+        finalRanking: [{ candidateId: candidate.id, rank: 1, score: stats.affinity, selectedCount: 0, reason: '연락처 요청 거절' }]
+      })),
+      success: false
+    };
+  }
+  const imported = importBlindDateCandidate(
+    patchBlindDateSession(state, sessionId, item => ({
+      ...item,
+      selectedCandidateId: candidate.id,
+      encounterPhase: 'success',
+      encounterResult: 'contact_exchanged',
+      encounterNarration: '짧은 대화 끝에 분위기가 부드럽게 풀렸다. 상대는 잠깐 고민하더니 휴대폰을 꺼낸다.',
+      encounterNpcLine: contactSuccessLine(candidate),
+      encounterContactAttempted: true,
+      encounterContactChanceLabel: contactChanceLabel(stats, candidate),
+      finalRanking: [{ candidateId: candidate.id, rank: 1, score: stats.affinity, selectedCount: 1, reason: '우연한 만남에서 연락처 교환 성공' }]
+    })),
+    sessionId,
+    candidate.id
+  );
+  return { ...imported, success: true };
 }
 
 export async function appendBlindDateCandidates(state: SNSGodState, sessionId: string, count = 2): Promise<SNSGodState> {
@@ -557,6 +998,433 @@ export async function appendBlindDateCandidates(state: SNSGodState, sessionId: s
   }));
 }
 
+function initialEncounterStats(candidate: BlindDateCandidate): StreetEncounterStats {
+  const preset = candidate.contactPresetId;
+  return {
+    affinity: preset === 'chatty' || preset === 'easygoing' ? 34 : 26,
+    caution: preset === 'careful' || preset === 'busy' ? 66 : preset === 'direct' ? 48 : 56,
+    awkwardness: preset === 'chatty' || preset === 'playful' ? 34 : 45,
+    curiosity: preset === 'chatty' || preset === 'easygoing' ? 46 : 36,
+    mood: preset === 'busy' ? -5 : 4,
+    timePressure: preset === 'busy' ? 72 : candidate.locationBase.includes('회사') || candidate.locationBase.includes('지하철') ? 62 : 35
+  };
+}
+
+function buildPublicObservation(location: string, reason: string, outfit: string, preset: string): string {
+  const outfitText = publicOutfitText(outfit);
+  const placeLead = location.includes('서점')
+    ? '책장 사이의 조용한 공기 속에서'
+    : location.includes('카페') || location.includes('베이커리')
+      ? '주문을 기다리는 사람들 사이에서'
+      : location.includes('한강') || location.includes('산책')
+        ? '잠깐 느려진 걸음들 사이에서'
+        : '사람들이 오가는 흐름 속에서';
+  const posture = preset === 'busy'
+    ? '곧 자리를 옮길 듯 시간을 한 번 확인한다.'
+    : preset === 'careful'
+      ? '주변을 살피는 눈빛이 조심스럽지만 무례하게 날카롭지는 않다.'
+      : preset === 'playful' || preset === 'chatty'
+        ? '표정에는 살짝 장난기와 여유가 섞여 있다.'
+        : '표정은 차분하지만 말을 걸면 짧게는 받아줄 것 같다.';
+  return `${placeLead} ${reason} 상대가 눈에 들어온다.\n${outfitText} ${posture}`;
+}
+
+function buildPublicVibe(preset: string, mood: string): string {
+  if (preset === 'busy') return '바빠 보이지만, 정중하게 말을 걸면 짧게는 응해줄 분위기다.';
+  if (preset === 'careful') return '처음 보는 사람에게 쉽게 마음을 여는 타입은 아니어서 부담 없는 접근이 필요해 보인다.';
+  if (preset === 'direct') return '빙빙 돌려 말하는 것보다 짧고 분명한 말에 반응할 것 같다.';
+  if (preset === 'chatty' || preset === 'playful') return '대화의 리듬만 맞으면 생각보다 금방 분위기가 풀릴 것 같다.';
+  return `${mood.replace(/\s*타입\.?$/, '')} 느낌이지만, 선을 지키면 대화가 이어질 수도 있다.`;
+}
+
+function publicOutfitText(outfit: string): string {
+  const value = String(outfit || '').toLowerCase();
+  if (value.includes('blouse') || value.includes('shirt')) return '단정한 셔츠 차림이 장소 분위기와 잘 어울린다.';
+  if (value.includes('cardigan') || value.includes('knit')) return '부드러운 니트나 가디건 차림이 편안해 보인다.';
+  if (value.includes('jacket') || value.includes('blazer') || value.includes('coat')) return '깔끔한 아우터 차림이라 첫인상이 단정하다.';
+  if (value.includes('hoodie') || value.includes('sweatshirt')) return '편한 캐주얼 차림이라 과하게 꾸민 느낌은 없다.';
+  if (value.includes('dress') || value.includes('skirt')) return '차분한 옷차림이 눈에 띄지만 과하게 화려하지는 않다.';
+  return '일상적인 옷차림이 자연스럽고 부담 없어 보인다.';
+}
+
+function openingEncounterChoices(location: string): StreetEncounterChoice[] {
+  if (location.includes('서점')) {
+    return [
+      { id: makeId('sechoice'), text: '책갈피를 보며 자연스럽게 말을 건다', style: 'safe', affinityDelta: 7, cautionDelta: -6, awkwardnessDelta: 2, curiosityDelta: 9, moodDelta: 4 },
+      { id: makeId('sechoice'), text: '방해될까 봐 조금 더 거리를 둔다', style: 'caring', affinityDelta: 3, cautionDelta: -5, awkwardnessDelta: -2, curiosityDelta: 3, moodDelta: 1 },
+      { id: makeId('sechoice'), text: '그냥 책을 둘러보다가 지나간다', style: 'exit', affinityDelta: 0, cautionDelta: 0, awkwardnessDelta: 0, curiosityDelta: 0 }
+    ];
+  }
+  return [
+    { id: makeId('sechoice'), text: openingSafeText(location), style: 'safe', affinityDelta: 6, cautionDelta: -4, awkwardnessDelta: 3, curiosityDelta: 8, moodDelta: 3 },
+    { id: makeId('sechoice'), text: '방해하지 않게 한 발짝 물러서서 분위기를 본다', style: 'caring', affinityDelta: 2, cautionDelta: -4, awkwardnessDelta: -2, curiosityDelta: 4, moodDelta: 1 },
+    { id: makeId('sechoice'), text: '괜히 붙잡지 않고 지나간다', style: 'exit', affinityDelta: 0, cautionDelta: 0, awkwardnessDelta: 0, curiosityDelta: 0 }
+  ];
+}
+
+function openingSafeText(location: string): string {
+  if (location.includes('카페')) return '줄이 맞는지 물어보며 가볍게 말을 건다';
+  if (location.includes('한강')) return '산책길이 괜찮은지 물어보며 말을 건다';
+  if (location.includes('전시')) return '작품 설명을 핑계로 조심스럽게 말을 건다';
+  if (location.includes('베이커리')) return '빵이 아직 남았는지 물어보며 말을 건다';
+  if (location.includes('지하철')) return '출구 위치를 물어보며 짧게 말을 건다';
+  if (location.includes('편의점')) return '비가 그칠지 얘기하며 짧게 말을 건다';
+  return '상황을 핑계로 정중하게 말을 건다';
+}
+
+function normalizeEncounterChoiceText(text: string): string {
+  const clean = text.trim().replace(/\s+/g, ' ');
+  if (!clean) return '';
+  if (/[.!?。！？…]$/.test(clean)) return clean;
+  if (/(한다|한다요|한다\.|건다|본다|물러난다|보낸다|마무리한다|얘기한다|말한다|묻는다|물어본다|건넨다|지나간다|기다린다|싶어요|돼요|예요|이에요|합니다|할게요|주세요|가세요)$/.test(clean)) return clean;
+  return `${clean}.`;
+}
+
+function customEncounterStyle(text: string): StreetEncounterChoice['style'] {
+  if (/(가세요|갈게|갈게요|마무리|지나갈|지나가|그만|여기까지|실례)/.test(text)) return 'exit';
+  if (/(불편|부담|죄송|괜찮으|괜찮아|방해|천천히|시간|바쁘)/.test(text)) return 'caring';
+  if (/(번호|연락처|다음|또|한 번|한번|커피|밥|만나)/.test(text)) return 'direct';
+  if (/(ㅋㅋ|ㅎㅎ|농담|영화|신기|운명|웃)/.test(text)) return 'playful';
+  return 'safe';
+}
+
+function customEncounterAffinityDelta(text: string): number {
+  const style = customEncounterStyle(text);
+  if (style === 'exit') return 1;
+  if (style === 'caring') return 10;
+  if (style === 'direct') return 6;
+  if (style === 'playful') return 7;
+  return 8;
+}
+
+function customEncounterCautionDelta(text: string): number {
+  const style = customEncounterStyle(text);
+  if (style === 'exit') return -3;
+  if (style === 'caring') return -12;
+  if (style === 'direct') return 10;
+  if (style === 'playful') return -3;
+  return -6;
+}
+
+function customEncounterAwkwardnessDelta(text: string): number {
+  const style = customEncounterStyle(text);
+  if (style === 'exit') return -5;
+  if (style === 'caring') return -8;
+  if (style === 'direct') return 6;
+  if (style === 'playful') return -6;
+  return -4;
+}
+
+function customEncounterCuriosityDelta(text: string): number {
+  const style = customEncounterStyle(text);
+  if (style === 'exit') return 0;
+  if (style === 'direct') return 7;
+  if (style === 'playful') return 10;
+  return 6;
+}
+
+function customEncounterMoodDelta(text: string): number {
+  const style = customEncounterStyle(text);
+  if (style === 'exit') return 1;
+  if (style === 'direct') return -1;
+  return 4;
+}
+
+function firstNpcLineFor(candidate: BlindDateCandidate): string {
+  if (candidate.contactPresetId === 'busy') return '“아, 네. 제가 지금 시간이 많진 않은데... 무슨 일이세요?”';
+  if (candidate.contactPresetId === 'chatty' || candidate.contactPresetId === 'playful') return '“갑자기요? ㅎㅎ 네, 말씀해보세요.”';
+  if (candidate.contactPresetId === 'direct') return '“네. 길게만 아니면 괜찮아요.”';
+  return '“아... 네. 괜찮아요. 무슨 말씀이세요?”';
+}
+
+function nextEncounterChoices(candidate: BlindDateCandidate, stats: StreetEncounterStats, turn: number, history: string[] = []): StreetEncounterChoice[] {
+  const place = candidate.locationBase;
+  const base = encounterChoicePool(place, candidate.contactPresetId, turn);
+  if (turn >= 1 && stats.timePressure > 60) {
+    base.unshift({ id: makeId('sechoice'), text: '바쁘시면 여기까지만 할게요. 시간 뺏고 싶진 않아서요.', style: 'caring', affinityDelta: 12, cautionDelta: -14, awkwardnessDelta: -8, curiosityDelta: 5, moodDelta: 6 });
+  }
+  const used = history.join('\n');
+  const fresh = base.filter(choice => !used.includes(choice.text));
+  return shuffled(fresh.length >= 4 ? fresh : base).slice(0, 4);
+}
+
+function encounterChoicePool(place: string, preset: string, turn: number): StreetEncounterChoice[] {
+  const directAffinity = preset === 'direct' ? 12 : preset === 'careful' ? 3 : 6;
+  const directCaution = preset === 'careful' ? 16 : preset === 'busy' ? 11 : 8;
+  const locationSafe = place.includes('서점')
+    ? ['이 서점은 처음인데, 혹시 볼 만한 코너 있어요?', '책갈피 고르시는 거 보니까 취향이 확실하신 것 같아서요.']
+    : place.includes('카페') || place.includes('베이커리')
+      ? ['여기 줄이 원래 이렇게 긴가요?', '저도 메뉴 고르다 살짝 포기할 뻔했어요.']
+      : place.includes('전시')
+        ? ['이 작품 앞에서 다들 오래 멈추네요. 혹시 인상 깊으셨어요?', '팸플릿 보시는 거 보고 저도 괜히 궁금해졌어요.']
+        : place.includes('한강') || place.includes('산책')
+          ? ['여기 바람이 생각보다 좋네요.', '사진 찍기 좋은 자리 찾고 있었는데, 이쪽 괜찮네요.']
+          : ['혹시 여기 자주 오세요?', '제가 이 근처가 처음이라 잠깐 여쭤봐도 될까요?'];
+  const pools: StreetEncounterChoice[][] = [
+    [
+      { id: makeId('sechoice'), text: locationSafe[0], style: 'safe', affinityDelta: 9, cautionDelta: -8, awkwardnessDelta: -5, curiosityDelta: 7, moodDelta: 4 },
+      { id: makeId('sechoice'), text: '갑자기 말 걸어서 놀라셨죠. 방해하려던 건 아니에요.', style: 'caring', affinityDelta: 11, cautionDelta: -12, awkwardnessDelta: -8, curiosityDelta: 5, moodDelta: 5 },
+      { id: makeId('sechoice'), text: '사실 지금 상황이 좀 영화 첫 장면 같아서요. 말 걸까 말까 고민했어요.', style: 'playful', affinityDelta: 7, cautionDelta: preset === 'careful' ? 2 : -3, awkwardnessDelta: -4, curiosityDelta: 10, moodDelta: 6 },
+      { id: makeId('sechoice'), text: '괜찮으면 딱 1분만 얘기해도 돼요?', style: 'direct', affinityDelta: directAffinity, cautionDelta: directCaution, awkwardnessDelta: 7, curiosityDelta: 7, moodDelta: preset === 'careful' ? -4 : 2 },
+      { id: makeId('sechoice'), text: '괜히 붙잡은 것 같네요. 좋은 하루 보내세요.', style: 'exit', affinityDelta: 1, cautionDelta: -2, awkwardnessDelta: -4, curiosityDelta: 0, moodDelta: 1 }
+    ],
+    [
+      { id: makeId('sechoice'), text: locationSafe[1] || locationSafe[0], style: 'safe', affinityDelta: 9, cautionDelta: -7, awkwardnessDelta: -5, curiosityDelta: 8, moodDelta: 4 },
+      { id: makeId('sechoice'), text: '불편하시면 바로 물러날게요. 선 넘고 싶진 않아서요.', style: 'caring', affinityDelta: 12, cautionDelta: -13, awkwardnessDelta: -8, curiosityDelta: 5, moodDelta: 5 },
+      { id: makeId('sechoice'), text: '제가 방금 너무 진지했나요? 처음 보는 사람한테 말 거는 건 아직 어렵네요.', style: 'playful', affinityDelta: 8, cautionDelta: -4, awkwardnessDelta: -7, curiosityDelta: 9, moodDelta: 6 },
+      { id: makeId('sechoice'), text: '말투가 차분해서 조금 더 얘기해보고 싶었어요.', style: 'direct', affinityDelta: directAffinity, cautionDelta: directCaution, awkwardnessDelta: 6, curiosityDelta: 7, moodDelta: preset === 'careful' ? -3 : 3 },
+      { id: makeId('sechoice'), text: '여기서 더 붙잡으면 실례일 것 같네요. 편한 시간 보내세요.', style: 'exit', affinityDelta: 1, cautionDelta: -3, awkwardnessDelta: -5, curiosityDelta: 0, moodDelta: 1 }
+    ],
+    [
+      { id: makeId('sechoice'), text: '잠깐 얘기해보니까 생각보다 편해서요. 이런 우연도 가끔 괜찮네요.', style: 'safe', affinityDelta: 10, cautionDelta: -7, awkwardnessDelta: -6, curiosityDelta: 7, moodDelta: 5 },
+      { id: makeId('sechoice'), text: '시간 괜찮으세요? 아니면 여기서 짧게 마무리해도 괜찮아요.', style: 'caring', affinityDelta: 11, cautionDelta: -12, awkwardnessDelta: -8, curiosityDelta: 4, moodDelta: 6 },
+      { id: makeId('sechoice'), text: '저 오늘 용기 낸 김에 말했는데, 생각보다 안 망한 것 같아서 다행이에요.', style: 'playful', affinityDelta: 9, cautionDelta: -5, awkwardnessDelta: -7, curiosityDelta: 9, moodDelta: 6 },
+      { id: makeId('sechoice'), text: '괜찮으면 다음에 부담 없이 한 번 더 얘기해보고 싶어요.', style: 'direct', affinityDelta: directAffinity + 2, cautionDelta: directCaution, awkwardnessDelta: 5, curiosityDelta: 8, moodDelta: preset === 'careful' ? -2 : 4 },
+      { id: makeId('sechoice'), text: '오늘은 여기까지 할게요. 짧았지만 반가웠어요.', style: 'exit', affinityDelta: 2, cautionDelta: -4, awkwardnessDelta: -5, curiosityDelta: 0, moodDelta: 2 }
+    ]
+  ];
+  return pools[Math.min(turn, pools.length - 1)];
+}
+
+function applyEncounterChoice(stats: StreetEncounterStats, choice: StreetEncounterChoice): StreetEncounterStats {
+  return {
+    affinity: clampStat(stats.affinity + choice.affinityDelta),
+    caution: clampStat(stats.caution + choice.cautionDelta),
+    awkwardness: clampStat(stats.awkwardness + choice.awkwardnessDelta),
+    curiosity: clampStat(stats.curiosity + choice.curiosityDelta),
+    mood: clampMood(stats.mood + (choice.moodDelta || 0)),
+    timePressure: clampStat(stats.timePressure + (choice.style === 'caring' ? -6 : choice.style === 'direct' ? 5 : 0))
+  };
+}
+
+function narrationAfterChoice(candidate: BlindDateCandidate, choice: StreetEncounterChoice, stats: StreetEncounterStats, turn: number): string {
+  const mood = stats.affinity >= 65 && stats.caution <= 45 ? '처음보다 확실히 분위기가 부드럽다.' : stats.caution >= 70 ? '아직은 조심스러운 공기가 남아 있다.' : '짧은 대화가 어색함을 조금 덜어냈다.';
+  return `${choice.text}\n\n상대는 잠깐 생각하듯 시선을 돌렸다가 다시 당신을 본다. ${mood}${turn >= ENCOUNTER_MAX_TURNS ? '\n\n짧은 첫 대화는 이 정도면 충분하다. 연락처를 물어볼지, 정중히 마무리할지 선택하면 된다.' : ''}`;
+}
+
+function npcLineAfterChoice(candidate: BlindDateCandidate, choice: StreetEncounterChoice, stats: StreetEncounterStats): string {
+  if (choice.style === 'direct' && stats.caution > 70) return '“음... 그렇게 바로 말하시면 조금 당황스럽긴 해요.”';
+  if (choice.style === 'caring') return '“그렇게 말해주시니까 부담은 덜하네요. 고마워요.”';
+  if (choice.style === 'playful') return '“ㅎㅎ 그건 좀 알 것 같아요. 저도 방금 비슷했거든요.”';
+  if (stats.affinity >= 65) return '“생각보다 편하게 말하시네요. 처음 보는 사람인데 조금 신기해요.”';
+  return '“아, 네. 그럴 수 있죠. 저도 잠깐 있었던 거라서요.”';
+}
+
+type EncounterAiStep = {
+  narration?: string;
+  npcLine?: string;
+  choices?: StreetEncounterChoice[];
+};
+
+async function generateStreetEncounterAiStep(
+  state: SNSGodState,
+  session: BlindDateSession,
+  candidate: BlindDateCandidate,
+  userText: string,
+  stats: StreetEncounterStats,
+  turn: number,
+  isOpening: boolean
+): Promise<EncounterAiStep | undefined> {
+  try {
+    const previous = (session.encounterHistory || []).slice(-6).join('\n') || '(없음)';
+    const { text } = await callLLMText(state, [
+      {
+        role: 'system',
+        content: [
+          'You write a Korean street encounter mini-game scene.',
+          'The user just spoke or acted toward a stranger. Generate the woman character reaction based on her fixed profile, personality, current mood stats, place, and previous encounter history.',
+          'All visible text must be natural Korean. No English. No AI/meta/app/system words.',
+          'Keep it realistic: strangers are cautious; if the user is rude, too direct, or intrusive, make the response colder.',
+          'Give 3 next user choices with clearly different styles: gentle/safe, playful/unexpected, direct/spicy or caring. Each choice must be a complete sentence, not cut off.',
+          'Return JSON only: {"narration":"","npcLine":"","choices":[{"text":"","style":"safe|playful|direct|caring|exit","affinityDelta":0,"cautionDelta":0,"awkwardnessDelta":0,"curiosityDelta":0,"moodDelta":0}]}'
+        ].join('\n')
+      },
+      {
+        role: 'user',
+        content: [
+          `장소: ${session.encounterLocation || candidate.locationBase}`,
+          `현재 턴: ${turn}/${session.encounterMaxTurns || ENCOUNTER_MAX_TURNS}`,
+          `상황: ${isOpening ? '처음 말을 건넨 직후' : '짧은 대화 진행 중'}`,
+          `사용자 행동/말: ${userText}`,
+          `상대: ${candidate.name}, ${candidate.age}, ${candidate.job}`,
+          `성격: ${candidate.personalitySummary}`,
+          `말투: ${candidate.speechStyle}`,
+          `연애/대인관계 스타일: ${candidate.relationshipStyle}`,
+          `접근 반응 타입: ${candidate.contactPresetId}`,
+          `관찰된 분위기: ${candidate.publicObservation || ''}\n${candidate.publicVibe || ''}`,
+          `현재 수치: 호감도 ${stats.affinity}, 경계심 ${stats.caution}, 어색함 ${stats.awkwardness}, 호기심 ${stats.curiosity}, 기분 ${stats.mood}, 시간압박 ${stats.timePressure}`,
+          `이전 기록:\n${previous}`
+        ].join('\n\n')
+      }
+    ]);
+    const parsed = parseJsonObject<{
+      narration?: string;
+      npcLine?: string;
+      choices?: ({ text?: string; style?: string; affinityDelta?: number; cautionDelta?: number; awkwardnessDelta?: number; curiosityDelta?: number; moodDelta?: number } | string)[];
+    }>(text);
+    const narration = visibleKoreanLine(parsed?.narration, narrationAfterChoice(candidate, {
+      id: 'ai-fallback',
+      text: userText,
+      style: customEncounterStyle(userText),
+      affinityDelta: 0,
+      cautionDelta: 0,
+      awkwardnessDelta: 0,
+      curiosityDelta: 0
+    }, stats, turn));
+    const npcLine = visibleKoreanLine(parsed?.npcLine, npcLineAfterChoice(candidate, {
+      id: 'ai-fallback',
+      text: userText,
+      style: customEncounterStyle(userText),
+      affinityDelta: 0,
+      cautionDelta: 0,
+      awkwardnessDelta: 0,
+      curiosityDelta: 0
+    }, stats));
+    const choices = normalizeAiEncounterChoices(parsed?.choices, candidate, stats, turn, session.encounterHistory || []);
+    return { narration, npcLine, choices };
+  } catch (error) {
+    await appendDebugLog('blindDate.encounter', `encounter AI response failed session=${session.id}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+    return undefined;
+  }
+}
+
+function normalizeAiEncounterChoices(
+  choices: ({ text?: string; style?: string; affinityDelta?: number; cautionDelta?: number; awkwardnessDelta?: number; curiosityDelta?: number; moodDelta?: number } | string)[] | undefined,
+  candidate: BlindDateCandidate,
+  stats: StreetEncounterStats,
+  turn: number,
+  history: string[]
+): StreetEncounterChoice[] {
+  const used = history.join('\n');
+  const normalized: StreetEncounterChoice[] = [];
+  for (const item of Array.isArray(choices) ? choices : []) {
+    const rawText = typeof item === 'string' ? item : item?.text;
+    const text = normalizeEncounterChoiceText(visibleKoreanLine(rawText, ''));
+    if (!text || used.includes(text)) continue;
+    const style = normalizeEncounterStyle(typeof item === 'string' ? undefined : item?.style, text);
+    normalized.push({
+      id: makeId('sechoice'),
+      text,
+      style,
+      affinityDelta: clampStat(Number(typeof item === 'string' ? NaN : item?.affinityDelta), -18, 18) || defaultAffinityDelta(style),
+      cautionDelta: clampStat(Number(typeof item === 'string' ? NaN : item?.cautionDelta), -20, 20) || defaultCautionDelta(style),
+      awkwardnessDelta: clampStat(Number(typeof item === 'string' ? NaN : item?.awkwardnessDelta), -18, 18) || defaultAwkwardnessDelta(style),
+      curiosityDelta: clampStat(Number(typeof item === 'string' ? NaN : item?.curiosityDelta), -12, 18) || defaultCuriosityDelta(style),
+      moodDelta: clampMood(Number(typeof item === 'string' ? NaN : item?.moodDelta)) || defaultMoodDelta(style)
+    });
+    if (normalized.length >= 4) break;
+  }
+  if (normalized.length >= 3) return normalized;
+  const fallback = nextEncounterChoices(candidate, stats, turn, history);
+  const seen = new Set(normalized.map(choice => choice.text));
+  return [...normalized, ...fallback.filter(choice => !seen.has(choice.text))].slice(0, 4);
+}
+
+function visibleKoreanLine(value: unknown, fallback: string): string {
+  const text = String(value || '').trim();
+  if (/[가-힣]/.test(text)) return text.slice(0, 520);
+  return fallback;
+}
+
+function normalizeEncounterStyle(value: unknown, text: string): StreetEncounterChoice['style'] {
+  const style = String(value || '').toLowerCase();
+  if (style === 'safe' || style === 'playful' || style === 'direct' || style === 'caring' || style === 'exit') return style;
+  return customEncounterStyle(text);
+}
+
+function defaultAffinityDelta(style: StreetEncounterChoice['style']): number {
+  if (style === 'exit') return 0;
+  if (style === 'caring') return 10;
+  if (style === 'direct') return 6;
+  if (style === 'playful') return 7;
+  return 8;
+}
+
+function defaultCautionDelta(style: StreetEncounterChoice['style']): number {
+  if (style === 'exit') return -2;
+  if (style === 'caring') return -12;
+  if (style === 'direct') return 9;
+  if (style === 'playful') return -3;
+  return -7;
+}
+
+function defaultAwkwardnessDelta(style: StreetEncounterChoice['style']): number {
+  if (style === 'exit') return -4;
+  if (style === 'caring') return -8;
+  if (style === 'direct') return 6;
+  if (style === 'playful') return -5;
+  return -4;
+}
+
+function defaultCuriosityDelta(style: StreetEncounterChoice['style']): number {
+  if (style === 'exit') return 0;
+  if (style === 'direct') return 7;
+  if (style === 'playful') return 10;
+  return 6;
+}
+
+function defaultMoodDelta(style: StreetEncounterChoice['style']): number {
+  if (style === 'exit') return 1;
+  if (style === 'direct') return -1;
+  return 4;
+}
+
+function contactSuccessChance(stats: StreetEncounterStats, candidate: BlindDateCandidate): number {
+  let chance = 10;
+  chance += stats.affinity * 0.75;
+  chance += stats.curiosity * 0.25;
+  chance -= stats.caution * 0.45;
+  chance -= stats.awkwardness * 0.35;
+  chance -= stats.timePressure * 0.25;
+  if (candidate.contactPresetId === 'careful') chance -= 10;
+  if (candidate.contactPresetId === 'easygoing' || candidate.contactPresetId === 'chatty') chance += 10;
+  if (candidate.contactPresetId === 'busy') chance -= 8;
+  return clampStat(chance, 5, 95);
+}
+
+function contactChanceLabel(stats: StreetEncounterStats, candidate: BlindDateCandidate): string {
+  if (stats.affinity < 50) return '아직 요청 불가';
+  const chance = contactSuccessChance(stats, candidate);
+  if (chance >= 70) return '성공 가능성 높음';
+  if (chance >= 45) return '성공 가능성 보통';
+  return '성공 가능성 낮음';
+}
+
+function contactFailureReason(stats: StreetEncounterStats): string {
+  if (stats.caution >= 70) return '대화는 나쁘지 않았지만, 아직 경계심이 남아 있어 연락처까지는 부담스러워했습니다.';
+  if (stats.timePressure >= 65) return '분위기는 나쁘지 않았지만, 상대가 지금은 시간이 없어 연락처 교환까지 이어지지 않았습니다.';
+  if (stats.awkwardness >= 65) return '짧은 대화가 이어지긴 했지만 어색함이 남아 있어, 상대는 연락처 교환을 조심스러워했습니다.';
+  return '호감은 조금 생겼지만, 오늘 처음 만난 사람에게 연락처를 주기에는 아직 확신이 부족했습니다.';
+}
+
+function contactSuccessLine(candidate: BlindDateCandidate): string {
+  if (candidate.contactPresetId === 'busy') return '“제가 지금 가봐야 해서요. 그래도... 연락은 나중에 짧게 해도 괜찮아요.”';
+  if (candidate.contactPresetId === 'careful') return '“조금 갑작스럽긴 한데, 그래도 불편하진 않았어요. 천천히 연락하는 정도면 괜찮아요.”';
+  if (candidate.contactPresetId === 'chatty' || candidate.contactPresetId === 'playful') return '“좋아요 ㅎㅎ 오늘 좀 웃겼어요. 나중에 또 얘기해요.”';
+  return '“네, 괜찮아요. 길게 붙잡지 않은 게 오히려 좋았어요.”';
+}
+
+function fallbackBlindAnswer(candidate: BlindDateCandidate, question: string, roundIndex: number): string {
+  const subject = question.replace(/[?？]\s*$/, '');
+  const like = candidate.likes[roundIndex % Math.max(1, candidate.likes.length)] || '작은 약속';
+  const hobby = candidate.hobbies[(roundIndex + 1) % Math.max(1, candidate.hobbies.length)] || '산책';
+  const dislike = candidate.dislikes[roundIndex % Math.max(1, candidate.dislikes.length)] || '애매한 태도';
+  const preset = String(candidate.contactPresetId || '');
+  if (preset.includes('chatty') || preset.includes('playful')) {
+    return `${candidate.anonymousLabel}번: 나는 ${subject}라면 일단 분위기를 너무 무겁게 만들진 않을 것 같아. 대신 ${like} 얘기하듯 가볍게 떠보다가, 진짜 중요한 선은 장난 없이 말해.`;
+  }
+  if (preset.includes('busy')) {
+    return `${candidate.anonymousLabel}번: ${subject}는 현실적으로 가능한지 먼저 볼 것 같아. 마음이 있어도 생활 리듬이 무너지면 오래 못 가니까, 말보다 시간을 어떻게 쓰는지 봐.`;
+  }
+  if (preset.includes('careful') || preset.includes('slow')) {
+    return `${candidate.anonymousLabel}번: 바로 답을 정하진 않을 것 같아. ${subject}에 대해서는 상대가 왜 그렇게 느끼는지 먼저 듣고, 내가 불편한 부분은 천천히 말하는 편이야.`;
+  }
+  if (preset.includes('direct') || preset.includes('dry')) {
+    return `${candidate.anonymousLabel}번: 솔직히 ${subject}에서 ${dislike}가 보이면 바로 신경 쓰여. 돌려 말하기보다 그 자리에서 짧게 확인하고 넘어가는 게 나아.`;
+  }
+  return `${candidate.anonymousLabel}번: 나는 ${subject}를 볼 때 말투보다 행동을 더 믿는 편이야. ${hobby}처럼 편한 순간에도 같은 태도인지 보면 조금 알 수 있을 것 같아.`;
+}
+
 export async function createBlindDateQuestionRound(state: SNSGodState, sessionId: string, question: string): Promise<SNSGodState> {
   const progress = progressOf(state);
   const session = progress.sessions.find(item => item.id === sessionId);
@@ -566,7 +1434,7 @@ export async function createBlindDateQuestionRound(state: SNSGodState, sessionId
     id: makeId('bda'),
     candidateId: candidate.id,
     anonymousLabel: candidate.anonymousLabel,
-    text: `${candidate.anonymousLabel}번답게 말하면... ${candidate.personalitySummary}라서 ${question.replace(/[?？]\s*$/, '')}에 대해 조심스럽게 생각해볼 것 같아.`,
+    text: fallbackBlindAnswer(candidate, question, roundIndex),
     toneTags: [candidate.contactPresetId],
     scoreDelta: 0
   }));
@@ -580,7 +1448,9 @@ export async function createBlindDateQuestionRound(state: SNSGodState, sessionId
           'Treat anonymous labels A-E as stable real people. A must remain the same A across every round, B the same B, and so on.',
           'Keep identities hidden by anonymous labels. Do not reveal names, jobs, profile images, or direct identity clues unless the profile itself would naturally hint at it very indirectly.',
           'Each answer must be a natural consequence of that candidate profile: personality, speech style, relationship style, likes, dislikes, hobbies, contact pattern, SNS style, first DM, and previous answers.',
-          'It is okay if two candidates give somewhat similar opinions when their profiles would realistically overlap. Do not force artificial contrast.',
+          'It is okay if two candidates give somewhat similar opinions when their profiles would realistically overlap, but their reason, emotional temperature, boundary, wording, and concrete example must not be copied.',
+          'Avoid same-template answers. If candidates share a value, make one answer practical, one evasive, one playful, one careful, or one direct according to the fixed profile.',
+          'Across the same round, no two answers may start with the same sentence shape or end with the same conclusion phrase.',
           'Do not make all candidates equally kind, equally flirty, or equally dramatic.',
           'Natural Korean, 1 concise messenger-style paragraph per candidate.',
           'Return JSON only: {"answers":[{"candidateId":"","anonymousLabel":"","text":"","toneTags":[""]}]}'
@@ -674,6 +1544,7 @@ export function selectBlindDateWorldcupCandidate(state: SNSGodState, sessionId: 
     let status = session.status;
     let selectedCandidateId = session.selectedCandidateId;
     let finalRanking = session.finalRanking;
+    let worldcupByeCandidateIds = session.worldcupByeCandidateIds || [];
     if (currentRoundDone) {
       const winners = currentRoundPairs.map(pair => String(pair.selectedCandidateId || '')).filter(Boolean);
       if (winners.length === 1) {
@@ -681,10 +1552,14 @@ export function selectBlindDateWorldcupCandidate(state: SNSGodState, sessionId: 
         status = 'revealing';
         finalRanking = buildRanking(session.candidates.map(candidate => candidate.id === selectedCandidateId ? { ...candidate, score: candidate.score + 10, selectedCount: candidate.selectedCount + 1 } : candidate));
       } else {
-        const nextLabel = worldcupRoundLabel(winners.length);
-        const newPairs = buildWorldcupPairs(winners, nextLabel);
+        const nextEntrants = currentPair?.roundLabel === '24강' && worldcupByeCandidateIds.length
+          ? shuffled([...winners, ...worldcupByeCandidateIds])
+          : winners;
+        const nextLabel = worldcupRoundLabel(nextEntrants.length);
+        const newPairs = buildWorldcupPairs(nextEntrants, nextLabel);
         nextPairs = [...pairs, ...newPairs];
         worldcupIndex = pairs.length;
+        worldcupByeCandidateIds = currentPair?.roundLabel === '24강' ? [] : worldcupByeCandidateIds;
       }
     }
     return {
@@ -694,6 +1569,7 @@ export function selectBlindDateWorldcupCandidate(state: SNSGodState, sessionId: 
       finalRanking,
       worldcupPairs: nextPairs,
       worldcupIndex,
+      worldcupByeCandidateIds,
       candidates: session.candidates.map(candidate => candidate.id === candidateId ? { ...candidate, score: candidate.score + 3, selectedCount: candidate.selectedCount + 1 } : candidate)
     };
   });
@@ -927,18 +1803,32 @@ export function importBlindDateCandidate(state: SNSGodState, sessionId: string, 
     .filter(turn => turn.candidateId === candidate.id)
     .map(turn => `나: ${turn.userText} / ${candidate.name}: ${turn.answerText}`)
     .slice(-5);
+  const encounterHistory = (session.encounterHistory || []).slice(-5);
+  const encounterSummary = session.mode === 'encounter'
+    ? [
+      `우연한 만남 장소: ${session.encounterLocation || candidate.locationBase}`,
+      `첫 만남 흐름: ${encounterHistory.join(' / ') || session.encounterNarration || ''}`,
+      `최종 분위기: 호감도 ${session.encounterStats?.affinity ?? candidate.score}%, 경계심 ${session.encounterStats?.caution ?? 0}%`,
+      `연락처 교환 결과: ${session.encounterResult === 'contact_exchanged' ? '성공' : '진행 중'}`
+    ].join('\n')
+    : '';
   const memory = [
-    `사용자는 블라인드 데이트 ${session.mode === 'question' ? '질문 소개팅' : session.mode === 'rotation' ? '로테이션 데이트' : '프로필 소개팅'}에서 ${candidate.name}을 최종 선택하고 연락처를 얻었다.`,
+    session.mode === 'encounter'
+      ? `사용자는 ${session.encounterLocation || candidate.locationBase}에서 ${candidate.name}과 우연히 만나 짧은 대화를 나눈 뒤 연락처를 얻었다.`
+      : `사용자는 블라인드 데이트 ${session.mode === 'question' ? '질문 소개팅' : session.mode === 'rotation' ? '로테이션 데이트' : '프로필 소개팅'}에서 ${candidate.name}을 최종 선택하고 연락처를 얻었다.`,
+    encounterSummary,
     winningAnswers.length ? `선택된 답변: ${winningAnswers.join(' / ')}` : '',
     rotationAnswers.length ? `로테이션 대화 기록: ${rotationAnswers.join(' / ')}` : '',
-    !winningAnswers.length && !rotationAnswers.length ? `${candidate.name}의 첫인상, 말투, 프로필이 마음에 들어 선택했다.` : '',
+    !winningAnswers.length && !rotationAnswers.length && !encounterHistory.length ? `${candidate.name}의 첫인상, 말투, 프로필이 마음에 들어 선택했다.` : '',
     candidate.snsPreview ? `소개팅 당시 SNS 미리보기 문구: ${candidate.snsPreview}` : '',
     candidate.callPreview ? `소개팅 당시 첫 통화 느낌: ${candidate.callPreview}` : '',
     `${candidate.name}은 ${candidate.personalitySummary}. 말투는 ${candidate.speechStyle}.`,
-    '블라인드 데이트를 사용자와의 첫 의미 있는 만남으로 기억한다.'
+    session.mode === 'encounter' ? '우연한 만남을 사용자와의 첫 실제 만남처럼 기억한다.' : '블라인드 데이트를 사용자와의 첫 의미 있는 만남으로 기억한다.'
   ].filter(Boolean).join('\n');
   const prompt = [
-    `이 캐릭터는 블라인드 데이트 기능에서 사용자가 최종 선택한 인물이다.`,
+    session.mode === 'encounter'
+      ? `이 캐릭터는 우연한 만남 미니게임에서 사용자가 ${session.encounterLocation || candidate.locationBase}에서 처음 만나 연락처를 교환한 인물이다.`
+      : `이 캐릭터는 블라인드 데이트 기능에서 사용자가 최종 선택한 인물이다.`,
     `이름: ${candidate.name}, 나이: ${candidate.age}, 직업: ${candidate.job}, 활동지: ${candidate.locationBase}.`,
     `외모/분위기: ${appearanceSummary(candidate.appearance)}`,
     `성격: ${candidate.personalitySummary}`,
@@ -950,9 +1840,9 @@ export function importBlindDateCandidate(state: SNSGodState, sessionId: string, 
     `SNS 스타일: ${candidate.snsStyle}`,
     `SNS 예시 문구: ${candidate.snsPreview || '(없음)'}`,
     `첫 통화 예시: ${candidate.callPreview || '(없음)'}`,
-    '첫 소개팅에서 사용자가 어떤 답변과 첫인상을 좋아했는지 기억한다.',
+    session.mode === 'encounter' ? `첫 만남 기억: ${encounterSummary}` : '첫 소개팅에서 사용자가 어떤 답변과 첫인상을 좋아했는지 기억한다.',
     'AI가 랜덤으로 생성되었다는 메타 발언은 하지 않는다.',
-    '블라인드 데이트를 사용자와의 첫 의미 있는 만남으로 취급한다.'
+    session.mode === 'encounter' ? '우연한 만남을 사용자와의 첫 의미 있는 접점으로 취급한다.' : '블라인드 데이트를 사용자와의 첫 의미 있는 만남으로 취급한다.'
   ].join('\n');
   const replySettings = replySettingsForCandidate(candidate);
   const profileMessage = profileMessageForCandidate(candidate);
@@ -1038,10 +1928,11 @@ export function importBlindDateCandidate(state: SNSGodState, sessionId: string, 
     blindDateMemory: {
       mode: session.mode,
       selectedAt: now,
-      selectedReason: session.mode === 'question' ? '블라인드 질문 답변 선택 결과' : session.mode === 'rotation' ? '로테이션 데이트 대화 선택 결과' : '프로필 소개팅 최종 선택',
-      winningAnswers: [...winningAnswers, ...rotationAnswers].slice(-8),
+      selectedReason: session.mode === 'encounter' ? '우연한 만남 연락처 교환 성공' : session.mode === 'question' ? '블라인드 질문 답변 선택 결과' : session.mode === 'rotation' ? '로테이션 데이트 대화 선택 결과' : '프로필 소개팅 최종 선택',
+      winningAnswers: [...winningAnswers, ...rotationAnswers, ...encounterHistory].slice(-8),
       userPreferenceTags: candidate.answers.flatMap(answer => answer.toneTags || []).slice(-8),
-      compatibilityScore: Math.max(candidate.score, candidate.selectedCount * 20)
+      compatibilityScore: Math.max(candidate.score, candidate.selectedCount * 20, session.encounterStats?.affinity || 0),
+      firstDateSummary: session.mode === 'encounter' ? encounterSummary : undefined
     }
   };
   const completedSession = {
@@ -1055,7 +1946,7 @@ export function importBlindDateCandidate(state: SNSGodState, sessionId: string, 
     characters: [...state.characters, character],
     chatRooms: {
       ...state.chatRooms,
-      [characterId]: [{ id: roomId, characterId, name: '기본 채팅', createdAt: now, lastActivity: now, relationshipNote: '블라인드 데이트에서 이어진 첫 채팅' }]
+      [characterId]: [{ id: roomId, characterId, name: '기본 채팅', createdAt: now, lastActivity: now, relationshipNote: session.mode === 'encounter' ? `${session.encounterLocation || candidate.locationBase}에서 우연히 만나 연락처를 교환한 첫 채팅` : '블라인드 데이트에서 이어진 첫 채팅' }]
     },
     messages: {
       ...state.messages,
@@ -1199,6 +2090,10 @@ export async function createMixedBlindDateSession(state: SNSGodState, firstArchi
   }
   try {
     const faceReferenceImage = randomGlobalFaceReference(state);
+    void appendDebugLog(
+      'blindDate.reference',
+      `mode=mix candidate=${mixed.name || '-'} slots=${Math.min(50, (state.referenceFaceSlots || []).filter(slot => String(slot.image || '').trim()).length)} reference=${faceReferenceImage ? 'yes' : 'no'} kind=${faceReferenceImage ? 'profile-reference-face' : 'profile'}`
+    );
     mixed = {
       ...mixed,
       faceReferenceImage,
@@ -1262,6 +2157,22 @@ function topValues(values: string[]): string {
     .slice(0, 3)
     .map(([value]) => value)
     .join(', ');
+}
+
+function buildInitialWorldcupSetup(candidateIds: string[], count: number): { pairs: BlindDateWorldcupPair[]; byeCandidateIds: string[] } {
+  const entrants = shuffled(candidateIds);
+  if (count === 24 && entrants.length >= 24) {
+    const byeCandidateIds = entrants.slice(0, 8);
+    const matchCandidateIds = entrants.slice(8, 24);
+    return {
+      pairs: buildWorldcupPairs(matchCandidateIds, '24강'),
+      byeCandidateIds
+    };
+  }
+  return {
+    pairs: buildWorldcupPairs(entrants, worldcupRoundLabel(count)),
+    byeCandidateIds: []
+  };
 }
 
 function buildWorldcupPairs(candidateIds: string[], roundLabel: string): BlindDateWorldcupPair[] {

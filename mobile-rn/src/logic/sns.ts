@@ -1,6 +1,6 @@
 import { callLLMText, generateImageDataUri, imagePromptWithoutCharacterName, parseJsonObject } from './api';
 import { appendDebugLog } from './debugLog';
-import { characterReferenceImageForPrompt } from './imageReference';
+import { characterReferenceImageForSns } from './imageReference';
 import { makeId } from './ids';
 import { MAX_SNS_CONTEXT_MESSAGES, MAX_SNS_DM_CONTEXT_MESSAGES } from './limits';
 import { lorePromptBlock, resolveActiveLore } from './loreEngine';
@@ -10,6 +10,7 @@ import { SNSDmThread, SNSGodCharacter, SNSGodState, SNSPost } from '../types';
 
 type GeneratedPlatform = {
   platform?: string;
+  title?: string;
   displayName?: string;
   handle?: string;
   text?: string;
@@ -28,9 +29,10 @@ type GeneratedPlatform = {
 
 type GeneratedSns = {
   platforms?: GeneratedPlatform[];
-  messages?: { content?: string; body?: string; text?: string; caption?: string }[];
-  replies?: { content?: string; body?: string; text?: string; caption?: string }[];
-  posts?: { content?: string; body?: string; text?: string; caption?: string }[];
+  messages?: { title?: string; content?: string; body?: string; text?: string; caption?: string }[];
+  replies?: { title?: string; content?: string; body?: string; text?: string; caption?: string }[];
+  posts?: { title?: string; content?: string; body?: string; text?: string; caption?: string }[];
+  title?: string;
   text?: string;
   tweet?: string;
   caption?: string;
@@ -91,7 +93,7 @@ function cleanSnsText(value: unknown): string {
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/```$/i, '')
     .replace(/\\n/g, '\n')
-    .replace(/["']?\s*(reactionDelay|messages|platforms|content|body|text|caption|tweet|post|imagePrompt|imageCaption)\s*["']?\s*[:;]?\s*/gi, '')
+    .replace(/["']?\s*(reactionDelay|messages|platforms|title|content|body|text|caption|tweet|post|imagePrompt|imageCaption)\s*["']?\s*[:;]?\s*/gi, '')
     .replace(/\bPHONE_CALL\b|phone_call|call invite|missed call|call log/gi, '')
     .replace(/^[{}\[\],:"'\s]+/, '')
     .replace(/[{}\[\]]+$/g, '')
@@ -116,7 +118,13 @@ function fallbackSnsText(character: SNSGodCharacter, platform: SNSPost['platform
 }
 
 function fallbackSnsImagePrompt(character: SNSGodCharacter, text: string): string {
-  return `Natural phone photo matching this social post mood: ${cleanSnsText(text).slice(0, 160) || 'quiet daily moment'}, no text overlay, no watermark`;
+  return `Natural phone photo of the same fictional character, matching this social post mood: ${cleanSnsText(text).slice(0, 160) || 'quiet daily moment'}, no text overlay, no watermark`;
+}
+
+function titleFromMessageArray(value: unknown): string {
+  if (!Array.isArray(value)) return '';
+  const first = value.find(item => item && typeof item === 'object') as { title?: unknown } | undefined;
+  return cleanSnsText(first?.title || '');
 }
 
 function ensureNsfwTag(prompt: string): string {
@@ -144,6 +152,7 @@ function parsePostText(raw: string, platform: SNSPost['platform'], character: SN
     return {
       platforms: [{
         platform,
+        title: cleanSnsText(parsed.title || titleFromMessageArray(parsed.messages || parsed.replies || parsed.posts)),
         text: text || fallbackSnsText(character, platform),
         hashtags: parsed.hashtags || extractLooseHashtags(raw, text),
         comments: parsed.comments,
@@ -174,6 +183,7 @@ function normalizeGeneratedPlatforms(generated: GeneratedSns, platform: SNSPost[
   return picked.slice(0, 1).map(item => ({
     ...item,
     platform,
+    title: cleanSnsText(item.title),
     text: cleanSnsText(item.text || item.content || item.post || item.tweet || item.caption || item.body) || fallbackSnsText(character, platform),
     hashtags: Array.isArray(item.hashtags) ? item.hashtags : extractLooseHashtags(String(item.text || ''), String(item.text || '')),
     comments: item.comments || item.replies || []
@@ -211,6 +221,7 @@ function toPost(item: GeneratedPlatform, character: SNSGodCharacter, platform: S
     id: makeId('sns'),
     characterId: character.id,
     platform,
+    title: item.title ? cleanSnsText(item.title) : undefined,
     displayName: item.displayName || character.name,
     handle: String(item.handle || character.handle || character.id).replace(/^@/, ''),
     content: cleanSnsText(item.text || item.content || item.caption || item.body) || fallbackSnsText(character, platform),
@@ -429,6 +440,25 @@ function snsSubjectInstruction(state: SNSGodState, subject: unknown): string {
   return value ? `${guide}\nGuide: ${value}` : '';
 }
 
+function snsFactualGroundingInstruction(transcript: string, phoneSummary: string): string {
+  const context = `${transcript}\n${phoneSummary}`;
+  const mentionsFoodOrBread = /빵|성심당|베이커리|케이크|디저트|bread|bakery|pastry|cake|dessert/i.test(context);
+  const mentionsPurchase = /샀|사서|샀어|구매|들러서|bought|buying|picked up/i.test(context);
+  const confirmsTransfer = /줬|줘서|전해|전달|건네|받았|받음|챙겨준|선물|가져다|같이\s*먹|함께\s*먹|만났|만나서|delivered|gave|given|received|gift|met|together/i.test(context);
+  return [
+    'Factual grounding guard:',
+    '- Treat private chat and phone summaries as evidence, not as permission to invent events.',
+    '- Never claim an in-person meeting, being together, delivery, receiving a gift/food, being treated to something, shared meal, date, promise fulfilled, or physical handoff unless the clean recent context explicitly says that exact event happened.',
+    '- Do not turn a user purchase, travel plan, joke, wish, question, or character request into a completed event. If it is only mentioned, write it as a thought, craving, teasing reaction, or mood inspired by the topic.',
+    '- Korean examples: if chat only says "빵 샀어" or "성심당 들러서 빵사서 집가는 중", do NOT write "챙겨준", "선물받았다", "받았다", "덕분에", "같이 먹었다", or "만났다". Safer wording: "성심당 얘기 들으니까 빵 생각남", "비 오는 날 빵 얘기하니 달달한 게 땡김".',
+    '- imagePrompt must obey the same facts. If the character did not explicitly receive or physically have the item, do not show the character holding/eating/posing with it as if it was received. Use a neutral mood image, bakery/cafe atmosphere, or leave imagePrompt empty.',
+    mentionsFoodOrBread && mentionsPurchase && !confirmsTransfer
+      ? '- Current context appears to mention food/bread being bought, but not delivered or received. The SNS post must not say the character received it, was gifted it, met the user, or is eating it because of the user.'
+      : '',
+    '- Before final JSON, silently audit every sentence and imagePrompt: remove any unsupported real-world event.'
+  ].filter(Boolean).join('\n');
+}
+
 async function applySnsImagePolicy(state: SNSGodState, posts: SNSPost[], character: SNSGodCharacter, options: { image?: string }, sns: ReturnType<typeof snsOptionsFor>, rawText: string) {
   const result: SNSPost[] = [];
   for (const [index, post] of posts.entries()) {
@@ -445,7 +475,7 @@ async function applySnsImagePolicy(state: SNSGodState, posts: SNSPost[], charact
     if (!next.image && next.imagePrompt && state.config.imageGeneration?.enabled) {
       try {
         next.image = await generateImageDataUri(state, next.imagePrompt, character, {
-          referenceImage: characterReferenceImageForPrompt(character, next.imagePrompt),
+          referenceImage: characterReferenceImageForSns(character),
           kind: 'general'
         });
       } catch (error) {
@@ -479,8 +509,10 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
     'This is SNS composition, not a private chat reply. Do not answer the latest DM directly. Write an indirect social update authored by the character.',
     'Make the post feel like an actual private/back-account SNS update: specific, indirect, character-authored, and socially readable.',
     'Do not write a generic fallback diary line. Use clean timeline, phone summary, character profile, mood, image, place/time, relationship beat, or inside joke.',
+    snsFactualGroundingInstruction(transcript, phoneSummary),
     'Never include phone-call UI artifacts, JSON keys, call markers, or direct messenger reply wording in the visible SNS text.',
-    'Return only JSON: {"platforms":[{"platform":"twitter|instagram","displayName":"","handle":"","text":"","hashtags":[""],"stats":{"views":0,"likes":0,"replies":0,"reposts":0,"bookmarks":0},"comments":[{"name":"","handle":"","body":"","likes":0}],"imagePrompt":"","imageCaption":""}],"dms":[{"title":"A ↔ B","participants":[{"name":"","role":"thirdParty|character"}],"messages":[{"from":"","body":""}]}]}.',
+    'Return only JSON: {"platforms":[{"platform":"twitter|instagram","title":"","displayName":"","handle":"","text":"","hashtags":[""],"stats":{"views":0,"likes":0,"replies":0,"reposts":0,"bookmarks":0},"comments":[{"name":"","handle":"","body":"","likes":0}],"imagePrompt":"","imageCaption":""}],"dms":[{"title":"A ↔ B","participants":[{"name":"","role":"thirdParty|character"}],"messages":[{"from":"","body":""}]}]}.',
+    'If you write a short post title, put it in title. Do not hide title text inside imageCaption.',
     'For every DM message, from must be one of the participant display names. Do not make every message from the character. Create a plausible back-and-forth conversation.',
     `Target platform: ${targetPlatform}.`,
     `Current time context: ${timeContextForSns(state)}.`,
@@ -490,7 +522,7 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
     sns.anonymous ? 'Use a private/anonymous account vibe.' : 'Use the character account openly.',
     sns.nsfw ? snsNsfwInstruction(state) : 'Keep it SFW unless the current conversation explicitly requires otherwise.',
     platform === 'instagram' ? 'Write for an Instagram-style public visual feed. Keep the tone polished and feed-friendly.' : 'Write for a Twitter/X-style timeline. Shorter, sharper, more conversational posts are allowed.',
-    sns.textOnly ? 'Do not include imagePrompt.' : 'If an image fits, include imagePrompt as English visual prompt.',
+    sns.textOnly ? 'Do not include imagePrompt.' : 'If an image fits, include imagePrompt as English visual prompt. When a person appears, it must be this character, not a new random person.',
     sns.noDM ? 'Do not create dms.' : 'Create one short SNS DM thread when natural.',
     includeUserInDm
       ? (sns.thirdPartyDM ? 'Third-party commenters may initiate DMs if useful.' : 'DMs may be centered on the character and user when the generated post naturally invites it.')

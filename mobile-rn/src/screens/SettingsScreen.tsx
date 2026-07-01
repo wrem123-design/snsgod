@@ -121,22 +121,24 @@ const TERMUX_GROK_LOGIN_COMMAND = 'cd ~/grok && hermes auth add xai-oauth';
 const CLOUD_GROK_LOGIN_COMMAND = 'cd /opt/snsgod-grok && hermes auth add xai-oauth';
 
 function grokLoginUrlFromPayload(payload: unknown): string {
-  if (!payload || typeof payload !== 'object') return '';
-  const record = payload as Record<string, unknown>;
-  const nested = typeof record.result === 'object' && record.result ? record.result as Record<string, unknown> : {};
-  const candidates = [
-    record.url,
-    record.loginUrl,
-    record.login_url,
-    record.authUrl,
-    record.auth_url,
-    nested.url,
-    nested.loginUrl,
-    nested.login_url,
-    nested.authUrl,
-    nested.auth_url
-  ];
-  return candidates.map(value => String(value || '').trim()).find(value => /^https?:\/\//i.test(value)) || '';
+  const seen = new Set<unknown>();
+  const candidates: string[] = [];
+  const collect = (value: unknown) => {
+    if (!value || seen.has(value)) return;
+    if (typeof value === 'string') {
+      candidates.push(value);
+      const embedded = value.match(/https?:\/\/[^\s"'<>]+/gi) || [];
+      candidates.push(...embedded);
+      return;
+    }
+    if (typeof value !== 'object') return;
+    seen.add(value);
+    Object.values(value as Record<string, unknown>).forEach(collect);
+  };
+  collect(payload);
+  return candidates
+    .map(value => String(value || '').trim().replace(/[),.;]+$/g, ''))
+    .find(value => /^https?:\/\//i.test(value)) || '';
 }
 
 function grokLoginMessageFromPayload(payload: unknown): string {
@@ -144,6 +146,15 @@ function grokLoginMessageFromPayload(payload: unknown): string {
   const record = payload as Record<string, unknown>;
   const nested = typeof record.result === 'object' && record.result ? record.result as Record<string, unknown> : {};
   return String(record.message || nested.message || record.detail || nested.detail || '').trim();
+}
+
+async function openExternalUrl(url: string): Promise<boolean> {
+  const target = String(url || '').trim();
+  if (!/^https?:\/\//i.test(target)) return false;
+  const canOpen = await Linking.canOpenURL(target).catch(() => true);
+  if (!canOpen) return false;
+  await Linking.openURL(target);
+  return true;
 }
 
 const TermuxBridge = NativeModules.TermuxBridge as undefined | {
@@ -626,25 +637,22 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
       const payload = await startGrokLogin(baseUrl);
       const loginUrl = grokLoginUrlFromPayload(payload);
       await refreshGrokLocal();
-      if (loginUrl) {
-        const canOpen = await Linking.canOpenURL(loginUrl).catch(() => true);
-        if (canOpen) {
-          await Linking.openURL(loginUrl);
-          setStatus('Grok OAuth 로그인 페이지를 열었습니다. 로그인 후 다시 상태 확인을 눌러 주세요.');
-          Alert.alert('Grok 계정 추가', '브라우저에서 X 로그인을 완료한 뒤 앱으로 돌아와 상태 확인을 눌러 주세요.');
-          return;
-        }
+      const opened = await openExternalUrl(loginUrl);
+      if (opened) {
+        setStatus('Grok OAuth 로그인 페이지를 브라우저로 열었습니다. 로그인 후 다시 상태 확인을 눌러 주세요.');
+        Alert.alert('Grok 계정 추가', '브라우저에서 X/Grok 로그인을 완료한 뒤 앱으로 돌아와 상태 확인을 눌러 주세요.');
+        return;
       }
       const serverMessage = grokLoginMessageFromPayload(payload);
       const message = serverMessage
-        ? `${serverMessage}\n\n이 클라우드 서버는 폰으로 열 로그인 URL을 반환하지 않습니다. 서버 SSH에서 아래 명령을 실행해야 합니다:\n${CLOUD_GROK_LOGIN_COMMAND}`
-        : `이 클라우드 서버는 폰으로 열 로그인 URL을 반환하지 않습니다. 서버 SSH에서 아래 명령을 실행해야 합니다:\n${CLOUD_GROK_LOGIN_COMMAND}`;
+        ? `${serverMessage}\n\n서버가 폰에서 열 수 있는 OAuth 로그인 URL을 반환하지 않았습니다. 클라우드 서버의 /api/hermes/login POST 응답에 auth_url 또는 login_url이 포함되어야 합니다.`
+        : '서버가 폰에서 열 수 있는 OAuth 로그인 URL을 반환하지 않았습니다. 클라우드 서버의 /api/hermes/login POST 응답에 auth_url 또는 login_url이 포함되어야 합니다.';
       setStatus(message);
       Alert.alert('Grok 계정 추가', message);
     } catch (error) {
       const message = `Grok 계정 추가 실패: ${error instanceof Error ? error.message : String(error)}`;
       setStatus(message);
-      Alert.alert('Grok 계정 추가 실패', `${message}\n서버 주소가 맞는지, 서버가 /api/hermes/login을 지원하는지 확인해 주세요.`);
+      Alert.alert('Grok 계정 추가 실패', `${message}\n서버 주소가 맞는지, 서버가 /api/hermes/login POST에서 auth_url 또는 login_url을 반환하는지 확인해 주세요.`);
     }
   }
 
@@ -1205,19 +1213,8 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
                 <View style={styles.creditTrack}><View style={[styles.creditFill, { width: `${Math.max(0, Math.min(100, Number(grokBilling?.remaining_percent || 0)))}%` }]} /></View>
               </View>
               <View style={styles.termuxPanel}>
-                <View style={styles.sectionHeaderRow}>
-                  <Text style={styles.label}>클라우드 OAuth 복구</Text>
-                  <Pressable onPress={copyCloudGrokLoginCommand} style={styles.smallInline}><Text style={styles.secondaryText}>복사</Text></Pressable>
-                </View>
-                <Text style={styles.listSub}>현재 서버는 폰으로 열 로그인 URL을 반환하지 않습니다. "열린 창"은 클라우드 서버 쪽 창이라 폰에는 보이지 않습니다. Oracle 서버 SSH에서 아래 명령을 실행한 뒤 상태 확인을 누르세요.</Text>
-                <TextInput
-                  value={CLOUD_GROK_LOGIN_COMMAND}
-                  editable={false}
-                  selectTextOnFocus
-                  multiline
-                  style={[styles.input, styles.commandBox]}
-                  textAlignVertical="top"
-                />
+                <Text style={styles.label}>클라우드 OAuth 로그인</Text>
+                <Text style={styles.listSub}>계정 추가/재인증을 누르면 클라우드 서버에 로그인 URL 생성을 요청하고, 받은 Grok/X 로그인 페이지를 폰 기본 브라우저로 엽니다. 로그인 완료 후 앱으로 돌아와 상태 확인을 누르세요.</Text>
               </View>
               {grokAccounts.length ? grokAccounts.map((account, index) => (
                 <View key={`${account.id || account.provider || 'cloud-account'}-${index}`} style={styles.eventRow}>

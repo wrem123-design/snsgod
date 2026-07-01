@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, BackHandler, DevSettings, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, BackHandler, DevSettings, Keyboard, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { ChatListScreen } from './screens/ChatListScreen';
 import { ChatRoomScreen } from './screens/ChatRoomScreen';
 import { CharacterSettingsScreen } from './screens/CharacterSettingsScreen';
@@ -67,6 +67,7 @@ export default function App() {
   const [state, setState] = useState<SNSGodState | null>(null);
   const [incomingCall, setIncomingCall] = useState<IncomingPhoneCall | null>(null);
   const [runtimeReloadNonce, setRuntimeReloadNonce] = useState(0);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
   const stateRef = useRef<SNSGodState | null>(null);
   const routeRef = useRef<Route>(route);
   const routeHistoryRef = useRef<Route[]>([]);
@@ -131,6 +132,15 @@ export default function App() {
       if (current) void flushSaveState(current);
     });
     return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
   }, []);
 
   useEffect(() => {
@@ -606,7 +616,7 @@ export default function App() {
         />
       )}
       </View>
-      {showBottomNav ? <BottomNav active={activeBottomTab()} onSelect={openBottomTab} /> : null}
+      {showBottomNav && !keyboardVisible ? <BottomNav active={activeBottomTab()} onSelect={openBottomTab} /> : null}
       {incomingCall ? (
         <IncomingCallOverlay
           state={state}

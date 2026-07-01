@@ -276,6 +276,7 @@ export type SNSPost = {
   id: string;
   characterId: string;
   platform: 'instagram' | 'twitter';
+  title?: string;
   displayName?: string;
   handle?: string;
   content: string;

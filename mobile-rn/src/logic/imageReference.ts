@@ -17,6 +17,10 @@ export function characterReferenceImageForPrompt(character: SNSGodCharacter | un
   return looksLikeCharacterPhoto ? randomReferenceImage(referenceImages) : undefined;
 }
 
+export function characterReferenceImageForSns(character: SNSGodCharacter | undefined): string | undefined {
+  return randomReferenceImage(characterReferenceImages(character));
+}
+
 export function characterReferenceImages(character: SNSGodCharacter | undefined): string[] {
   const values = [
     ...(Array.isArray(character?.profileReferenceImages) ? character?.profileReferenceImages || [] : []),

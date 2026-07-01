@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, BackHandler, Easing, ImageBackground, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Animated, BackHandler, Easing, ImageBackground, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
 import { callLLMText, parseJsonObject } from '../logic/api';
@@ -51,6 +51,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
   const [uiMode, setUiMode] = useState<CallTurnUiMode>('choices');
   const [allowDirectReply, setAllowDirectReply] = useState(true);
   const [draftText, setDraftText] = useState('');
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
   const startedAtRef = useRef(Date.now());
   const connectedAtRef = useRef<number | undefined>(undefined);
@@ -92,6 +93,15 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
     });
     return () => subscription.remove();
   }, [character?.id, roomId, sourceMessageId]);
+
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
 
   useEffect(() => {
     if (!character || bootedRef.current) return;
@@ -427,33 +437,35 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
 
   const status = statusText(phase, character.name);
   const canAct = phase === 'awaiting_choice' || phase === 'awaiting_next' || phase === 'awaiting_text';
+  const keyboardTyping = keyboardVisible && phase === 'awaiting_text';
+  const avatarSize = keyboardTyping ? 72 : 116;
   const ringScale = ring.interpolate({ inputRange: [0, 0.5, 1], outputRange: [1, phase === 'dialing' || phase === 'ringing' ? 1.1 : 1.055, 1] });
   const ringOpacity = ring.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.14, phase === 'character_typing' ? 0.38 : 0.26, 0.14] });
   return (
     <ImageBackground source={backgroundUri ? { uri: backgroundUri } : undefined} blurRadius={24} style={styles.screen}>
       <View style={styles.overlay} />
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.stage}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0} style={[styles.stage, keyboardTyping && styles.stageKeyboard]}>
         <View style={styles.header}>
           <Pressable onPress={() => cancelCall()} style={styles.headerButton}><Text style={styles.headerButtonText}>‹</Text></Pressable>
           <View style={styles.headerButton} />
           <View style={styles.headerButton} />
         </View>
-        <View style={styles.hero}>
-          <View style={styles.avatarStage}>
-            <Animated.View style={[styles.ringOuter, { opacity: ringOpacity, transform: [{ scale: ringScale }] }]} />
-            <Animated.View style={[styles.ringMiddle, { opacity: ringOpacity, transform: [{ scale: ringScale }] }]} />
-            <View style={[styles.avatarRing, phase === 'character_typing' && styles.avatarRingSpeaking]}>
-              <Avatar character={character} size={116} />
+        <View style={[styles.hero, keyboardTyping && styles.heroKeyboard]}>
+          <View style={[styles.avatarStage, keyboardTyping && styles.avatarStageKeyboard]}>
+            <Animated.View style={[styles.ringOuter, keyboardTyping && styles.ringOuterKeyboard, { opacity: ringOpacity, transform: [{ scale: ringScale }] }]} />
+            <Animated.View style={[styles.ringMiddle, keyboardTyping && styles.ringMiddleKeyboard, { opacity: ringOpacity, transform: [{ scale: ringScale }] }]} />
+            <View style={[styles.avatarRing, keyboardTyping && styles.avatarRingKeyboard, phase === 'character_typing' && styles.avatarRingSpeaking]}>
+              <Avatar character={character} size={avatarSize} />
             </View>
           </View>
-          <Text style={styles.name}>{character.name}</Text>
-          <Text style={styles.status}>{status}</Text>
-          <Text style={styles.duration}>통화 연결됨 · {formatElapsed(elapsedSec)}</Text>
+          <Text style={[styles.name, keyboardTyping && styles.nameKeyboard]}>{character.name}</Text>
+          <Text style={[styles.status, keyboardTyping && styles.statusKeyboard]}>{status}</Text>
+          <Text style={[styles.duration, keyboardTyping && styles.durationKeyboard]}>통화 연결됨 · {formatElapsed(elapsedSec)}</Text>
         </View>
-        <Animated.View style={[styles.turnCard, { opacity: cardFade }]}>
-          <Text style={styles.turnText}>{displayText || currentFullText}</Text>
+        <Animated.View style={[styles.turnCard, keyboardTyping && styles.turnCardKeyboard, { opacity: cardFade }]}>
+          <Text style={[styles.turnText, keyboardTyping && styles.turnTextKeyboard]} numberOfLines={keyboardTyping ? 3 : undefined}>{displayText || currentFullText}</Text>
         </Animated.View>
-        <View style={styles.actionArea}>
+        <View style={[styles.actionArea, keyboardTyping && styles.actionAreaKeyboard]}>
           {phase === 'listening' || phase === 'user_sending' ? (
             <View style={styles.loadingRow}><ActivityIndicator color="#edf2f6" /><Text style={styles.loadingText}>{status}</Text></View>
           ) : null}
@@ -473,14 +485,16 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
             </Pressable>
           ) : null}
           {phase === 'awaiting_text' ? (
-            <View style={styles.directBox}>
+            <View style={[styles.directBox, keyboardTyping && styles.directBoxKeyboard]}>
               <TextInput
                 value={draftText}
                 onChangeText={setDraftText}
-                style={styles.input}
+                style={[styles.input, keyboardTyping && styles.inputKeyboard]}
                 placeholder="직접 답하기"
                 placeholderTextColor="#a8b2bd"
                 multiline
+                scrollEnabled
+                textAlignVertical="top"
               />
               <Pressable onPress={() => submitUserText(draftText)} style={[styles.sendButton, !draftText.trim() && styles.disabled]} disabled={!draftText.trim()}>
                 <Text style={styles.sendText}>전송</Text>
@@ -491,7 +505,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
             </View>
           ) : null}
         </View>
-        <Pressable onPress={() => endCall()} style={styles.endButton}><Text style={styles.endText}>끊기</Text></Pressable>
+        {!keyboardTyping ? <Pressable onPress={() => endCall()} style={styles.endButton}><Text style={styles.endText}>끊기</Text></Pressable> : null}
       </KeyboardAvoidingView>
     </ImageBackground>
   );
@@ -521,21 +535,33 @@ const styles = StyleSheet.create({
   fallbackScreen: { flex: 1, backgroundColor: '#27313b', padding: 20, justifyContent: 'center' },
   overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(13,18,24,0.68)' },
   stage: { flex: 1, paddingHorizontal: 20, paddingBottom: 14 },
+  stageKeyboard: { paddingBottom: 6 },
   header: { minHeight: 54, paddingTop: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerButton: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
   headerButtonText: { color: '#edf2f6', fontSize: 34, lineHeight: 36, fontWeight: '700' },
   hero: { alignItems: 'center', paddingTop: 8, paddingBottom: 18 },
+  heroKeyboard: { paddingTop: 0, paddingBottom: 6 },
   avatarStage: { width: 164, height: 164, alignItems: 'center', justifyContent: 'center' },
+  avatarStageKeyboard: { width: 92, height: 92 },
   ringOuter: { position: 'absolute', width: 160, height: 160, borderRadius: 80, borderWidth: 1, borderColor: 'rgba(237,242,246,0.68)' },
+  ringOuterKeyboard: { width: 90, height: 90, borderRadius: 45 },
   ringMiddle: { position: 'absolute', width: 142, height: 142, borderRadius: 71, borderWidth: 1, borderColor: 'rgba(243,221,114,0.72)' },
+  ringMiddleKeyboard: { width: 80, height: 80, borderRadius: 40 },
   avatarRing: { width: 128, height: 128, borderRadius: 64, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: 'rgba(237,242,246,0.24)', backgroundColor: 'rgba(255,255,255,0.04)' },
+  avatarRingKeyboard: { width: 78, height: 78, borderRadius: 39 },
   avatarRingSpeaking: { borderColor: 'rgba(243,221,114,0.7)', backgroundColor: 'rgba(243,221,114,0.08)' },
   name: { marginTop: 8, fontSize: 30, color: '#fff', fontWeight: '900', textAlign: 'center' },
+  nameKeyboard: { marginTop: 2, fontSize: 20 },
   status: { marginTop: 6, color: '#d8e1e9', fontSize: 15, lineHeight: 21, textAlign: 'center', fontWeight: '800' },
+  statusKeyboard: { marginTop: 1, fontSize: 12, lineHeight: 16 },
   duration: { marginTop: 8, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999, overflow: 'hidden', color: 'rgba(255,255,255,0.78)', backgroundColor: 'rgba(255,255,255,0.1)', fontSize: 12, fontWeight: '800' },
+  durationKeyboard: { marginTop: 4, paddingVertical: 4, fontSize: 11 },
   turnCard: { alignSelf: 'center', width: '88%', minHeight: 132, borderRadius: 20, paddingHorizontal: 22, paddingVertical: 20, backgroundColor: 'rgba(0,0,0,0.52)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.09)', justifyContent: 'center' },
+  turnCardKeyboard: { width: '100%', minHeight: 76, borderRadius: 16, paddingHorizontal: 16, paddingVertical: 12 },
   turnText: { color: '#ffffff', fontSize: 19, lineHeight: 29, fontWeight: '800' },
+  turnTextKeyboard: { fontSize: 15, lineHeight: 22 },
   actionArea: { flex: 1, justifyContent: 'flex-end', gap: 8, paddingTop: 14, paddingBottom: 10 },
+  actionAreaKeyboard: { flex: 0, paddingTop: 8, paddingBottom: 4 },
   choiceButton: { minHeight: 48, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#edf2f6' },
   choiceText: { color: '#26313c', fontWeight: '900', fontSize: 15, textAlign: 'center', lineHeight: 20 },
   loadingRow: { minHeight: 54, borderRadius: 16, flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.08)' },
@@ -543,7 +569,9 @@ const styles = StyleSheet.create({
   textModeButton: { minHeight: 38, alignItems: 'center', justifyContent: 'center' },
   textModeText: { color: 'rgba(255,255,255,0.78)', fontWeight: '900' },
   directBox: { gap: 8 },
+  directBoxKeyboard: { marginBottom: 0 },
   input: { minHeight: 48, maxHeight: 98, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 10, color: '#fff', backgroundColor: 'rgba(58,70,82,0.95)', fontSize: 15 },
+  inputKeyboard: { minHeight: 86, maxHeight: 128, fontSize: 16, lineHeight: 22 },
   sendButton: { height: 46, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f3dd72' },
   sendText: { color: colors.text, fontWeight: '900', fontSize: 15 },
   backToChoices: { minHeight: 32, alignItems: 'center', justifyContent: 'center' },

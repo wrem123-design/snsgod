@@ -738,6 +738,10 @@ export default function App() {
           onOpenProfile={characterId => navigate({ name: 'profile', characterId })}
           onOpenNotifications={() => navigate({ name: 'notifications' })}
           onOpenGroupRoom={roomId => navigate({ name: 'groupChatRoom', roomId })}
+          onOpenGroupSettings={roomId => navigate({ name: 'groupRoomSettings', roomId, returnRoomId: roomId })}
+          onOpenCall={(characterId, roomId) => navigate({ name: 'call', characterId, roomId, returnRoute: { name: 'chatRoom', roomId } })}
+          onOpenCharacterSettings={characterId => navigate({ name: 'characterSettings', characterId })}
+          onChange={commit}
         />
       )}
       </View>

@@ -116,6 +116,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
       return { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
     });
     setSending(false);
+    if (room.disabled === true) return;
     if (!isRandomRoom && onMaybeStartMeeting && await onMaybeStartMeeting(room.id, content)) return;
     onRequestReply(room.id, character.id, content, { randomMode: isRandomRoom, userMessageCreatedAt: userMessage.createdAt });
   }
@@ -133,6 +134,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
         return { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
       });
       const promptText = `${content}\n[사용자가 사진을 보냈습니다.]`;
+      if (room.disabled === true) return;
       if (!isRandomRoom && onMaybeStartMeeting && await onMaybeStartMeeting(room.id, promptText)) return;
       onRequestReply(room.id, character.id, promptText, { randomMode: isRandomRoom, userMessageCreatedAt: userMessage.createdAt, latestUserImageData: image });
     } catch (error) {
@@ -152,6 +154,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
       return { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
     });
     setSending(false);
+    if (room.disabled === true) return;
     if (!isRandomRoom && onMaybeStartMeeting && await onMaybeStartMeeting(room.id, `[스티커: ${sticker.name || sticker.id}]`)) return;
     onRequestReply(room.id, character.id, `[스티커: ${sticker.name || sticker.id}]`, { randomMode: isRandomRoom, userMessageCreatedAt: userMessage.createdAt });
   }

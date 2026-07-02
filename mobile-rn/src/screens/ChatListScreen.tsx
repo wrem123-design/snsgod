@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
@@ -22,7 +22,10 @@ type GroupRow = {
   lastActivity: number;
 };
 
-function rowsFromState(state: SNSGodState): Array<Row | GroupRow> {
+type DisabledToggleRow = { kind: 'disabledToggle'; count: number; expanded: boolean };
+type ListRow = Row | GroupRow | DisabledToggleRow;
+
+function rowsFromState(state: SNSGodState): { activeRows: Array<Row | GroupRow>; inactiveRows: Array<Row | GroupRow> } {
   const randomRoomIds = new Set((state.randomChats || []).map(room => room.id));
   const directRows = state.characters.filter(character => character.randomTemporary !== true).flatMap(character => {
     const rooms = state.chatRooms[character.id] || [];
@@ -45,10 +48,14 @@ function rowsFromState(state: SNSGodState): Array<Row | GroupRow> {
       lastActivity: room.lastActivity || room.createdAt || 0
     };
   });
-  return [...directRows, ...groupRows].sort((a, b) => {
+  const sorted = [...directRows, ...groupRows].sort((a, b) => {
     if (a.kind !== b.kind) return a.kind === 'group' ? -1 : 1;
     return b.lastActivity - a.lastActivity;
   });
+  return {
+    activeRows: sorted.filter(item => item.room.disabled !== true),
+    inactiveRows: sorted.filter(item => item.room.disabled === true)
+  };
 }
 
 export function ChatListScreen({ state, onOpenSettings, onOpenRoom, onNewRoom, onNewGroupRoom, onNewCharacter, onOpenProfile, onOpenNotifications, onOpenGroupRoom }: {
@@ -62,10 +69,14 @@ export function ChatListScreen({ state, onOpenSettings, onOpenRoom, onNewRoom, o
   onOpenNotifications: () => void;
   onOpenGroupRoom: (roomId: string) => void;
 }) {
-  const rows = useMemo(
+  const { activeRows, inactiveRows } = useMemo(
     () => rowsFromState(state),
     [state.characters, state.chatRooms, state.groupRooms, state.messages, state.randomChats, state.unreadCounts]
   );
+  const [inactiveExpanded, setInactiveExpanded] = useState(false);
+  const rows: ListRow[] = inactiveRows.length
+    ? [...activeRows, { kind: 'disabledToggle', count: inactiveRows.length, expanded: inactiveExpanded }, ...(inactiveExpanded ? inactiveRows : [])]
+    : activeRows;
   const kakaoTheme = state.config.snsTheme === 'kakao';
   const headerActions = [
     { label: '새 개인채팅', icon: '1:1', onPress: onNewRoom },
@@ -89,10 +100,15 @@ export function ChatListScreen({ state, onOpenSettings, onOpenRoom, onNewRoom, o
       </View>
       <FlatList
         data={rows}
-        keyExtractor={item => item.room.id}
+        keyExtractor={item => item.kind === 'disabledToggle' ? 'disabled-chat-rooms-toggle' : item.room.id}
         contentContainerStyle={styles.list}
-        renderItem={({ item }) => (
-          <Pressable style={[styles.row, !kakaoTheme && styles.rowDefault]} onPress={() => item.kind === 'group' ? onOpenGroupRoom(item.room.id) : onOpenRoom(item.room.id)}>
+        renderItem={({ item }) => item.kind === 'disabledToggle' ? (
+          <Pressable style={[styles.disabledSectionRow, !kakaoTheme && styles.rowDefault]} onPress={() => setInactiveExpanded(value => !value)}>
+            <Text style={styles.disabledSectionTitle}>{item.expanded ? '⌄' : '›'} 비활성화 채팅방 목록</Text>
+            <Text style={styles.disabledSectionCount}>{item.count}</Text>
+          </Pressable>
+        ) : (
+          <Pressable style={[styles.row, item.room.disabled === true && styles.rowDisabled, !kakaoTheme && styles.rowDefault]} onPress={() => item.kind === 'group' ? onOpenGroupRoom(item.room.id) : onOpenRoom(item.room.id)}>
             {item.kind === 'group' ? (
               <GroupAvatar participants={item.participants} />
             ) : (
@@ -103,7 +119,7 @@ export function ChatListScreen({ state, onOpenSettings, onOpenRoom, onNewRoom, o
                 <Text style={styles.name}>{item.kind === 'group' ? `${item.room.name} ${item.participants.length}` : item.character.name}</Text>
                 {item.unread > 0 ? <Text style={styles.badge}>{item.unread}</Text> : null}
               </View>
-              <Text style={styles.preview} numberOfLines={1}>{item.lastText}</Text>
+              <Text style={styles.preview} numberOfLines={1}>{item.room.disabled === true ? `비활성화됨 · ${item.lastText}` : item.lastText}</Text>
             </View>
           </Pressable>
         )}
@@ -140,6 +156,7 @@ const styles = StyleSheet.create({
   alertBadge: { position: 'absolute', top: -3, right: -4, minWidth: 19, height: 19, borderRadius: 10, overflow: 'hidden', lineHeight: 19, textAlign: 'center', backgroundColor: colors.danger, color: '#fff', fontWeight: '900', fontSize: 11 },
   list: { paddingBottom: 24 },
   row: { minHeight: 86, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', gap: 14 },
+  rowDisabled: { opacity: 0.72 },
   rowDefault: { marginHorizontal: 10, marginVertical: 4, borderRadius: 8, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border },
   rowBody: { flex: 1, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#e8e8e8', paddingVertical: 16 },
   rowBodyDefault: { borderBottomWidth: 0 },
@@ -148,6 +165,9 @@ const styles = StyleSheet.create({
   preview: { marginTop: 5, fontSize: 15, color: '#6a6f77' },
   badge: { minWidth: 22, height: 22, borderRadius: 11, backgroundColor: colors.danger, color: '#fff', textAlign: 'center', overflow: 'hidden', fontWeight: '900', lineHeight: 22 }
   ,
+  disabledSectionRow: { minHeight: 52, marginTop: 10, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#e0e0e0' },
+  disabledSectionTitle: { color: '#4d5560', fontSize: 15, fontWeight: '900' },
+  disabledSectionCount: { minWidth: 24, height: 24, borderRadius: 12, overflow: 'hidden', lineHeight: 24, textAlign: 'center', backgroundColor: '#eee8dc', color: colors.text, fontWeight: '900' },
   groupAvatar: { width: 54, height: 54, borderRadius: 18, backgroundColor: '#edf1f5', position: 'relative', overflow: 'hidden' },
   groupAvatarItem: { position: 'absolute', left: 3, top: 3, width: 26, height: 26, borderRadius: 13, overflow: 'hidden' },
   groupAvatarItemRight: { left: 25 },

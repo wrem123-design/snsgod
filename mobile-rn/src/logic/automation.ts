@@ -3,7 +3,7 @@ import { appendDebugLog } from './debugLog';
 import { makeId } from './ids';
 import { DEFAULT_COVER_BACKGROUND_DIRECTION, DEFAULT_PROMPTS, LEGACY_COVER_BACKGROUND_DIRECTION, proactiveInstruction, userNameFor, userProfileFor } from './prompts';
 import { buildTimeRealityInstruction, chatNowContext, isImplausibleCompletedActivity, repairTimeRealityInstruction, softenImplausibleCompletedActivity } from './timeReality';
-import { appendMessage, findCharacter } from './stateHelpers';
+import { appendMessage, findCharacter, isRoomDisabled } from './stateHelpers';
 import { MAX_GROUP_ROOM_MESSAGES, MAX_SNS_DM_CONTEXT_MESSAGES } from './limits';
 import { GroupRoom, SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
 import { isRoomBusy } from './chatJobs';
@@ -64,6 +64,7 @@ function eligiblePrivateRooms(state: SNSGodState, firstMessageOnly: boolean): { 
     if (character.randomTemporary === true || character.enabled === false || character.proactiveEnabled === false) continue;
     const rooms = state.chatRooms[character.id] || [];
     for (const room of rooms) {
+      if (room.disabled === true) continue;
       if (isRoomBusy(room.id)) continue;
       const messages = state.messages[room.id] || [];
       if (firstMessageOnly) {
@@ -85,6 +86,7 @@ function eligibleGroupRooms(state: SNSGodState): { room: GroupRoom; speaker: SNS
   if (state.config.autoEnabled === false || state.config.groupFirst !== true) return [];
   const pairs: { room: GroupRoom; speaker: SNSGodCharacter; participants: SNSGodCharacter[] }[] = [];
   for (const room of state.groupRooms || []) {
+    if (room.disabled === true) continue;
     if (isRoomBusy(room.id)) continue;
     const participants = state.characters.filter(character => character.randomTemporary !== true && room.participantIds.includes(character.id) && character.enabled !== false && character.proactiveEnabled !== false);
     if (!participants.length) continue;
@@ -133,6 +135,7 @@ async function runCalendarEvent(state: SNSGodState): Promise<SNSGodState | undef
     if (character.randomTemporary === true || character.enabled === false) continue;
     const room = (state.chatRooms[character.id] || [])[0];
     if (!room) continue;
+    if (isRoomDisabled(state, room.id)) continue;
     if (isRoomBusy(room.id)) continue;
     const event = calendarEventsFor(state, character).find(item => eventMatchesToday(item.date));
     if (!event) continue;
@@ -194,6 +197,7 @@ function runPhoneInvite(state: SNSGodState): SNSGodState | undefined {
   if (!candidates.length) return undefined;
   const character = candidates[Math.floor(Math.random() * candidates.length)];
   const roomId = (state.chatRooms[character.id] || [])[0]?.id;
+  if (isRoomDisabled(state, roomId)) return undefined;
   if (roomId && isRoomBusy(roomId)) return undefined;
   let next: SNSGodState = {
     ...state,
@@ -354,6 +358,7 @@ function recentCharacterActivityContext(state: SNSGodState, character: SNSGodCha
   const rooms = state.chatRooms[character.id] || [];
   const lines: string[] = [];
   for (const room of rooms) {
+    if (room.disabled === true) continue;
     const messages = (state.messages[room.id] || []).slice(-18);
     for (const message of messages) {
       if (message.callInvite) continue;

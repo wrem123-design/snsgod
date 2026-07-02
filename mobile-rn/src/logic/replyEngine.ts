@@ -9,7 +9,7 @@ import { phoneCardFromReply } from './phone';
 import { buildChatPrompt, normalizeReplyMessagesForStyle } from './prompts';
 import { createMeetingEventSession, shouldStartMeetingEvent } from './meetingEvent';
 import { maybeCreateAutoSNSPost } from './sns';
-import { appendMessage, findCharacter, findRoom, roomMessages, updateCharacter } from './stateHelpers';
+import { appendMessage, findCharacter, findRoom, isRoomDisabled, roomMessages, updateCharacter } from './stateHelpers';
 import { chatNowContext, isImplausibleCompletedActivity, repairTimeRealityInstruction, softenImplausibleCompletedActivity } from './timeReality';
 import { SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
 import { appendDebugLog } from './debugLog';
@@ -150,6 +150,7 @@ function roomStillValid(state: SNSGodState | null, roomId: string, characterId: 
   const room = findRoom(state, roomId);
   const character = findCharacter(state, characterId || room?.characterId);
   if (!room || !character) return undefined;
+  if (isRoomDisabled(state, roomId)) return undefined;
   return { room, character };
 }
 

@@ -35,7 +35,7 @@ import { SNSGodCharacter, SNSGodState, SNSPost } from './types';
 import { isAutomationQueueBusy, runAutomationQueueTick } from './logic/automationQueue';
 import { appendDebugLog } from './logic/debugLog';
 import { findRandomChat, promoteRandomChatRoom, removeRandomChatRoom } from './logic/randomChat';
-import { allRooms, deleteCharacter, findCharacter } from './logic/stateHelpers';
+import { allRooms, deleteCharacter, findCharacter, isRoomDisabled } from './logic/stateHelpers';
 import { roomRouteKind } from './logic/roomStore';
 import { IncomingPhoneCall, markPhoneCardStatus, missIncomingPhoneCall, newestPendingPhoneCandidate, rejectIncomingPhoneCall } from './logic/phone';
 import { markRoomRead, pushNotification } from './logic/notifications';
@@ -413,6 +413,8 @@ export default function App() {
   }
 
   function requestReply(roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean; userMessageCreatedAt?: number; latestUserImageData?: string }) {
+    const current = stateRef.current || state;
+    if (!current || isRoomDisabled(current, roomId)) return;
     void startReplyJob({
       roomId,
       characterId,
@@ -455,6 +457,7 @@ export default function App() {
     const now = Date.now();
     for (const room of allRooms(snapshot)) {
       if (snapshot.pendingReplies?.[room.id]) continue;
+      if (isRoomDisabled(snapshot, room.id)) continue;
       const messages = snapshot.messages[room.id] || [];
       const userIndex = [...messages].map((message, index) => ({ message, index })).reverse().find(item => item.message.role === 'user')?.index ?? -1;
       if (userIndex < 0) continue;

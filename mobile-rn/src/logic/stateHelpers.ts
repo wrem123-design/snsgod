@@ -25,6 +25,14 @@ export function findRoom(state: SNSGodState, roomId?: string): SNSGodRoom | unde
   return allRooms(state).find(room => room.id === roomId);
 }
 
+export function isRoomDisabled(state: SNSGodState, roomId?: string): boolean {
+  if (!roomId) return false;
+  const direct = Object.values(state.chatRooms || {}).flat().find(room => room.id === roomId);
+  if (direct) return direct.disabled === true;
+  const group = (state.groupRooms || []).find(room => room.id === roomId);
+  return group?.disabled === true;
+}
+
 export function findCharacter(state: SNSGodState, characterId?: string): SNSGodCharacter | undefined {
   if (!characterId) return undefined;
   return state.characters.find(character => character.id === characterId)

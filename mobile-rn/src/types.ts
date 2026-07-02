@@ -223,6 +223,8 @@ export type SNSGodRoom = {
   userAlias?: string;
   roomPrompt?: string;
   pinned?: boolean;
+  disabled?: boolean;
+  disabledAt?: number;
   [key: string]: unknown;
 };
 
@@ -599,6 +601,8 @@ export type GroupRoom = {
   createdAt: number;
   lastActivity?: number;
   relationshipNote?: string;
+  disabled?: boolean;
+  disabledAt?: number;
 };
 
 export type NotificationItem = {

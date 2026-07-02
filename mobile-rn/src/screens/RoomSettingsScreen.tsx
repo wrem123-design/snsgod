@@ -158,10 +158,6 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>{character?.name || '캐릭터'} · {room.name}</Text>
           <Text style={styles.help}>이 설정은 이 채팅방 안에서만 적용됩니다. 캐릭터 설정의 이름/프로필보다 방 설정의 관계/호칭 메모가 대화 프롬프트에서 더 구체적인 지시로 들어갑니다.</Text>
-          <Pressable onPress={() => setDraft(prev => prev ? { ...prev, disabled: prev.disabled !== true, disabledAt: prev.disabled === true ? undefined : Date.now() } : prev)} style={[styles.disableToggle, draft.disabled === true && styles.disableToggleActive]}>
-            <Text style={[styles.disableToggleText, draft.disabled === true && styles.disableToggleTextActive]}>{draft.disabled === true ? '방 비활성화됨' : '방 활성화됨'}</Text>
-            <Text style={styles.disableToggleHelp}>{draft.disabled === true ? 'API 답장, 자동 먼저 말하기, 만남 이벤트를 멈춥니다.' : '누르면 이 방을 접어두고 자동 반응을 멈춥니다.'}</Text>
-          </Pressable>
           <Field label="방 이름" value={draft.name} onChangeText={value => set('name', value)} />
           <Field label="이 방에서 나를 부를 이름" value={String(draft.userAlias || '')} onChangeText={value => set('userAlias', value)} help="예: 오빠, 선배, 찐따. 빈칸이면 캐릭터 설정의 내 이름, 그것도 빈칸이면 기본 내 프로필 이름을 씁니다." />
           <Field label="이 채팅방에서만 적용할 관계/호칭 메모" value={String(draft.relationshipNote || '')} onChangeText={value => set('relationshipNote', value)} multiline help="단어만 써도 되지만, 보통 “나를 찐따라고 부름”, “서로 오래 알고 지낸 전 연인처럼 말함”처럼 문장으로 쓰는 게 확실합니다." />
@@ -353,11 +349,6 @@ const styles = StyleSheet.create({
   help: { color: colors.sub, fontSize: 12, lineHeight: 18 },
   primary: { minHeight: 48, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
   primaryText: { color: '#241a00', fontWeight: '900', fontSize: 16 },
-  disableToggle: { marginTop: 12, borderRadius: 10, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', paddingHorizontal: 12, paddingVertical: 11 },
-  disableToggleActive: { borderColor: '#c6b48f', backgroundColor: '#eee8dc' },
-  disableToggleText: { color: colors.text, fontWeight: '900', fontSize: 15 },
-  disableToggleTextActive: { color: '#5f4c20' },
-  disableToggleHelp: { marginTop: 4, color: colors.sub, fontSize: 12, fontWeight: '700', lineHeight: 17 },
   dangerRow: { flexDirection: 'row', gap: 8 },
   cleanButton: { flex: 1, minHeight: 48, borderRadius: 8, borderWidth: 1, borderColor: '#d8c6a8', backgroundColor: '#fffaf0', alignItems: 'center', justifyContent: 'center' },
   cleanText: { color: colors.text, fontWeight: '900', fontSize: 16 },

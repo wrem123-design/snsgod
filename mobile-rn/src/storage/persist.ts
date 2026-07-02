@@ -63,6 +63,21 @@ type PersistedPayload = {
   fullSnapshot?: SNSGodState;
   fullPayload?: string;
 };
+export type PersistPerfEntry = {
+  id: string;
+  createdAt: number;
+  reason: string;
+  backup: BackupMode;
+  verify: VerifyMode;
+  revision: number;
+  writeSeq: number;
+  payloadBytes: number;
+  fullPayloadBytes: number;
+  backupWritten: boolean;
+  slow: boolean;
+  totalMs: number;
+  stages: Record<string, number>;
+};
 type BackupMode = 'auto' | 'force' | 'skip';
 type VerifyMode = 'none' | 'sqlite' | 'full';
 
@@ -98,6 +113,7 @@ let saveMaxTimer: ReturnType<typeof setTimeout> | undefined;
 let dbPromise: Promise<SQLite.SQLiteDatabase | undefined> | undefined;
 let messageRoomSignatures = new Map<string, string>();
 let messageRoomSignaturesReady = false;
+let persistPerfEntries: PersistPerfEntry[] = [];
 
 export async function loadState(): Promise<SNSGodState> {
   const [raw, sqliteRaw, sqliteUnverifiedRaw, fileRaw, previousRaw, sqliteMessages] = await Promise.all([
@@ -173,35 +189,108 @@ function runAfterInteractions(task: () => void): void {
   InteractionManager.runAfterInteractions(task);
 }
 
+function perfNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+}
+
+function createPersistPerfCollector() {
+  const stages: Record<string, number> = {};
+  return {
+    stages,
+    async measure<T>(name: string, task: () => Promise<T>): Promise<T> {
+      const start = perfNow();
+      try {
+        return await task();
+      } finally {
+        stages[name] = Math.round((stages[name] || 0) + perfNow() - start);
+      }
+    },
+    measureSync<T>(name: string, task: () => T): T {
+      const start = perfNow();
+      try {
+        return task();
+      } finally {
+        stages[name] = Math.round((stages[name] || 0) + perfNow() - start);
+      }
+    }
+  };
+}
+
+function recordPersistPerf(entry: PersistPerfEntry): void {
+  persistPerfEntries = [entry, ...persistPerfEntries].slice(0, 20);
+}
+
+export function getRecentPersistPerfEntries(): PersistPerfEntry[] {
+  return persistPerfEntries.slice();
+}
+
 async function writeStateNow(state: SNSGodState, options: SaveStateOptions = {}): Promise<void> {
   saveInFlight = saveInFlight
     .catch(() => undefined)
     .then(async () => {
-      const backupHintStats = lightweightStorageStats(state);
+      const perf = createPersistPerfCollector();
+      const totalStart = perfNow();
+      const backupHintStats = perf.measureSync('lightweightStats', () => lightweightStorageStats(state));
       const writeBackup = shouldWriteBackup(backupHintStats, options);
-      const prepared = await preparePersistedPayload(state, { includeFullBackupPayload: writeBackup || options.verify === 'full' });
+      let prepared: PersistedPayload | undefined;
+      try {
+        prepared = await preparePersistedPayload(state, { includeFullBackupPayload: writeBackup || options.verify === 'full', perf });
+      } catch (error) {
+        recordPersistPerf({
+          id: `${Date.now()}-${nextWriteSeq}`,
+          createdAt: Date.now(),
+          reason: options.reason || 'save',
+          backup: options.backup || 'auto',
+          verify: options.verify || 'none',
+          revision: backupHintStats.revision,
+          writeSeq: backupHintStats.writeSeq,
+          payloadBytes: 0,
+          fullPayloadBytes: 0,
+          backupWritten: false,
+          slow: true,
+          totalMs: Math.round(perfNow() - totalStart),
+          stages: perf.stages
+        });
+        throw error;
+      }
       if (prepared.stats.revision < persistedRevision || (prepared.stats.revision === persistedRevision && prepared.stats.writeSeq < persistedWriteSeq)) {
         lastSkippedOldRevisionSave = `skip old payload rev=${prepared.stats.revision}, writeSeq=${prepared.stats.writeSeq}; persisted rev=${persistedRevision}, writeSeq=${persistedWriteSeq}`;
         return;
       }
-      await writeSqliteState(prepared.payload, prepared.snapshot);
-      await writeMessagesState(prepared.fullSnapshot?.messages || state.messages || {});
+      await perf.measure('SQLite write', () => writeSqliteState(prepared.payload, prepared.snapshot));
+      await perf.measure('messages write', () => writeMessagesState(prepared.fullSnapshot?.messages || state.messages || {}));
       lastSQLiteSaveTime = Date.now();
       if (writeBackup) {
-        await writeBackupFile(prepared.fullPayload || prepared.payload, prepared.fullSnapshot || prepared.snapshot, options.reason || (options.important ? 'important save' : 'scheduled snapshot'));
+        await perf.measure('backup write', () => writeBackupFile(prepared.fullPayload || prepared.payload, prepared.fullSnapshot || prepared.snapshot, options.reason || (options.important ? 'important save' : 'scheduled snapshot')));
       }
-      await writeAsyncStoragePointer(prepared).catch(error => {
+      await perf.measure('AsyncStorage pointer', () => writeAsyncStoragePointer(prepared)).catch(error => {
         lastAsyncStorageWarning = `AsyncStorage pointer warning: ${error instanceof Error ? error.message : String(error)}`;
       });
       if (options.verify === 'full') {
-        await verifyStateWrite(prepared.payload, prepared.fullPayload || prepared.payload, prepared.fullSnapshot || prepared.snapshot, writeBackup);
+        await perf.measure('verify read', () => verifyStateWrite(prepared.payload, prepared.fullPayload || prepared.payload, prepared.fullSnapshot || prepared.snapshot, writeBackup));
       } else if (options.verify === 'sqlite') {
-        await verifySQLiteWrite(prepared.payload);
+        await perf.measure('verify read', () => verifySQLiteWrite(prepared.payload));
       }
       persistedRevision = prepared.stats.revision;
       persistedWriteSeq = prepared.stats.writeSeq;
       lastSuccessfulSaveTime = Date.now();
       lastSaveError = '';
+      const totalMs = Math.round(perfNow() - totalStart);
+      recordPersistPerf({
+        id: `${lastSuccessfulSaveTime}-${prepared.stats.writeSeq}`,
+        createdAt: lastSuccessfulSaveTime,
+        reason: options.reason || 'save',
+        backup: options.backup || 'auto',
+        verify: options.verify || 'none',
+        revision: prepared.stats.revision,
+        writeSeq: prepared.stats.writeSeq,
+        payloadBytes: prepared.payload.length,
+        fullPayloadBytes: prepared.fullPayload?.length || 0,
+        backupWritten: writeBackup,
+        slow: totalMs > 200,
+        totalMs,
+        stages: perf.stages
+      });
     }).catch(error => {
       lastSaveError = error instanceof Error ? error.message : String(error);
       throw error;
@@ -320,15 +409,27 @@ async function protectCriticalBackups(state: SNSGodState): Promise<SNSGodState> 
   };
 }
 
-async function preparePersistedPayload(state: SNSGodState, options: { includeFullBackupPayload?: boolean } = {}): Promise<PersistedPayload> {
-  const externalized = await externalizeStateMedia(state);
-  const protectedState = await protectCriticalBackups(externalized);
-  const fullSnapshot = prepareStateForSave(protectedState, { includeMessages: true });
-  const snapshot = prepareStateForSave(protectedState, { includeMessages: false });
-  const payload = JSON.stringify(snapshot);
-  const asyncPayload = asyncStoragePayloadFor(fullSnapshot, payload);
-  const fullPayload = options.includeFullBackupPayload ? JSON.stringify(fullSnapshot) : undefined;
-  return { snapshot, payload, asyncPayload, stats: getStorageStats(fullSnapshot), fullSnapshot, fullPayload };
+async function preparePersistedPayload(state: SNSGodState, options: { includeFullBackupPayload?: boolean; perf?: ReturnType<typeof createPersistPerfCollector> } = {}): Promise<PersistedPayload> {
+  const perf = options.perf;
+  const externalized = perf
+    ? await perf.measure('externalizeStateMedia', () => externalizeStateMedia(state))
+    : await externalizeStateMedia(state);
+  const protectedState = perf
+    ? await perf.measure('protectCriticalBackups', () => protectCriticalBackups(externalized))
+    : await protectCriticalBackups(externalized);
+  const fullSnapshot = perf
+    ? perf.measureSync('prepareStateForSave full', () => prepareStateForSave(protectedState, { includeMessages: true }))
+    : prepareStateForSave(protectedState, { includeMessages: true });
+  const snapshot = perf
+    ? perf.measureSync('prepareStateForSave slim', () => prepareStateForSave(protectedState, { includeMessages: false }))
+    : prepareStateForSave(protectedState, { includeMessages: false });
+  const payload = perf ? perf.measureSync('JSON.stringify slim', () => JSON.stringify(snapshot)) : JSON.stringify(snapshot);
+  const asyncPayload = perf ? perf.measureSync('AsyncStorage payload', () => asyncStoragePayloadFor(fullSnapshot, payload)) : asyncStoragePayloadFor(fullSnapshot, payload);
+  const fullPayload = options.includeFullBackupPayload
+    ? (perf ? perf.measureSync('JSON.stringify full', () => JSON.stringify(fullSnapshot)) : JSON.stringify(fullSnapshot))
+    : undefined;
+  const stats = perf ? perf.measureSync('contentHash', () => getStorageStats(fullSnapshot)) : getStorageStats(fullSnapshot);
+  return { snapshot, payload, asyncPayload, stats, fullSnapshot, fullPayload };
 }
 
 async function cleanupLegacyAsyncStorageState(authoritativeState: SNSGodState): Promise<void> {
@@ -944,7 +1045,8 @@ export async function getStorageDiagnostics(currentState?: SNSGodState | null) {
       skippedSaveBeforeHydrationCount,
       pending: Boolean(pendingState)
     },
-    media
+    media,
+    perf: getRecentPersistPerfEntries()
   };
 }
 

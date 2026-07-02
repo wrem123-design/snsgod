@@ -35,6 +35,11 @@ export function DebugScreen({ state, onBack, onReloadState, onReloadBundle, onSa
     setDiagnostics(await getStorageDiagnostics(state));
   }
 
+  async function refreshLogsOnly() {
+    setLogs(await readDebugLogs());
+    setStatus('Storage diagnostics are idle. Tap refresh only when you want a full SQLite/backup/media check.');
+  }
+
   async function clear() {
     await clearDebugLogs();
     setLogs([]);
@@ -202,7 +207,7 @@ export function DebugScreen({ state, onBack, onReloadState, onReloadBundle, onSa
   }
 
   useEffect(() => {
-    void refresh();
+    void refreshLogsOnly();
   }, []);
 
   return (
@@ -292,7 +297,7 @@ function LogRow({ entry, onLongPress }: { entry: DebugLogEntry; onLongPress: () 
 
 function StorageDiagnostics({ diagnostics, advanced }: { diagnostics: Awaited<ReturnType<typeof getStorageDiagnostics>> | null; advanced: boolean }) {
   if (!diagnostics) {
-    return <Text style={styles.empty}>저장소 진단을 불러오는 중입니다.</Text>;
+    return <Text style={styles.empty}>저장소 진단은 멈춰 있습니다. 새로고침을 누르면 SQLite, 백업, 미디어 상태를 읽습니다.</Text>;
   }
   const appRows = [
     ['applicationId', Application.applicationId || 'unknown'],
@@ -323,6 +328,10 @@ function StorageDiagnostics({ diagnostics, advanced }: { diagnostics: Awaited<Re
         <HealthPill label="sqlite-pointer" ok={sqlitePointerOk} />
         <HealthPill label="backup not ahead" ok={backupNotAhead} />
         <HealthPill label="backup fresh" ok={backupFresh} />
+      </View>
+      <View style={styles.diagBlock}>
+        <Text style={styles.diagBlockTitle}>Recent save performance</Text>
+        {diagnostics.perf.length ? diagnostics.perf.map(entry => <PerfRow key={entry.id} entry={entry} />) : <Text style={styles.diagSub}>No save performance entries yet.</Text>}
       </View>
       {diagnostics.legacyAsyncStorageFullStateExists ? <Text style={styles.diagError}>legacy AsyncStorage full state remains</Text> : null}
       {diagnostics.save.lastSaveError ? <Text style={styles.diagError}>last save error: {diagnostics.save.lastSaveError}</Text> : null}
@@ -368,6 +377,24 @@ function StorageDiagnostics({ diagnostics, advanced }: { diagnostics: Awaited<Re
           ))}
         </>
       ) : null}
+    </View>
+  );
+}
+
+function PerfRow({ entry }: { entry: Awaited<ReturnType<typeof getStorageDiagnostics>>['perf'][number] }) {
+  const topStages = Object.entries(entry.stages)
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 4)
+    .map(([name, ms]) => `${name} ${ms}ms`)
+    .join(' / ');
+  return (
+    <View style={[styles.perfRow, entry.slow && styles.perfSlow]}>
+      <View style={styles.perfHead}>
+        <Text style={[styles.perfTotal, entry.slow && styles.perfSlowText]}>{entry.totalMs}ms</Text>
+        <Text style={styles.perfMeta}>rev {entry.revision} · {entry.reason}</Text>
+      </View>
+      <Text style={styles.perfDetail}>backup {entry.backupWritten ? 'yes' : 'no'} · verify {entry.verify} · payload {Math.round(entry.payloadBytes / 1024)}KB</Text>
+      <Text style={styles.perfStages}>{topStages || 'no stage data'}</Text>
     </View>
   );
 }
@@ -488,6 +515,14 @@ const styles = StyleSheet.create({
   diagRow: { flexDirection: 'row', gap: 8 },
   diagLabel: { width: 104, color: colors.sub, fontSize: 10, fontWeight: '900' },
   diagValue: { flex: 1, color: colors.text, fontSize: 10, lineHeight: 15, fontWeight: '800' },
+  perfRow: { gap: 3, paddingVertical: 6, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  perfSlow: { backgroundColor: '#fff1f1' },
+  perfHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  perfTotal: { width: 58, color: '#245a35', fontSize: 12, fontWeight: '900' },
+  perfSlowText: { color: colors.danger },
+  perfMeta: { flex: 1, color: colors.text, fontSize: 11, fontWeight: '900' },
+  perfDetail: { color: colors.sub, fontSize: 10, fontWeight: '800' },
+  perfStages: { color: colors.text, fontSize: 10, lineHeight: 14, fontWeight: '700' },
   healthRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   healthPill: { paddingHorizontal: 9, paddingVertical: 6, borderRadius: 999, borderWidth: 1 },
   healthOk: { backgroundColor: '#e9f8ed', borderColor: '#9bd2aa' },

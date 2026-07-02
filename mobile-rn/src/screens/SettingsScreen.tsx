@@ -390,6 +390,59 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     setStatus('새 프로필 초안입니다. 내용을 입력한 뒤 프로필 저장을 누르세요.');
   }
 
+  function deleteCurrentUserProfilePreset() {
+    if (saving) return;
+    if (userProfilePresets.length <= 1) {
+      setStatus('프로필은 최소 1개 이상 필요합니다.');
+      return;
+    }
+    const currentIndex = Math.max(0, userProfilePresets.findIndex(item => item.id === userProfilePresetId));
+    const currentPreset = userProfilePresets[currentIndex] || userProfilePresets[0];
+    if (!currentPreset) return;
+    Alert.alert(
+      '프로필 삭제',
+      `"${currentPreset.label}" 프로필을 삭제할까요? 삭제한 프로필은 되돌릴 수 없습니다.`,
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '삭제',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setSaving(true);
+              try {
+                const nextPresets = userProfilePresets.filter(item => item.id !== currentPreset.id);
+                const nextPreset = nextPresets[Math.max(0, currentIndex - 1)] || nextPresets[0];
+                if (!nextPreset) return;
+                await onChange({
+                  ...state,
+                  config: {
+                    ...state.config,
+                    activeUserProfilePresetId: nextPreset.id,
+                    userProfilePresets: nextPresets,
+                    userName: nextPreset.userName || '나',
+                    userDescription: nextPreset.userDescription || '',
+                    userAppearancePrompt: nextPreset.userAppearancePrompt || DEFAULT_USER_APPEARANCE_PROMPT
+                  }
+                });
+                setUserProfilePresetId(nextPreset.id);
+                setUserProfileLabel(nextPreset.label);
+                setUserName(nextPreset.userName || '나');
+                setUserDescription(nextPreset.userDescription || '');
+                setUserAppearancePrompt(String(nextPreset.userAppearancePrompt || DEFAULT_USER_APPEARANCE_PROMPT));
+                setStatus(`프로필 삭제 완료: ${currentPreset.label}`);
+              } catch (error) {
+                setStatus(`프로필 삭제 실패: ${error instanceof Error ? error.message : String(error)}`);
+              } finally {
+                setSaving(false);
+              }
+            })();
+          }
+        }
+      ]
+    );
+  }
+
   function selectProvider(nextProvider: ApiProvider) {
     const nextProfile = state.config.apiProfiles[nextProvider] || {};
     const keys = apiKeySlotsFromProfile(nextProfile);
@@ -1075,16 +1128,23 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
               <Text style={styles.profileArrowText}>‹</Text>
             </Pressable>
             <View style={styles.profilePresetCenter}>
-              <TextInput value={userProfileLabel} onChangeText={setUserProfileLabel} style={[styles.input, styles.profilePresetInput]} placeholder="프로필 이름" />
+              <View style={styles.profilePresetNameBox}>
+                <TextInput value={userProfileLabel} onChangeText={setUserProfileLabel} style={[styles.input, styles.profilePresetInput]} placeholder="프로필 이름" />
+                <View style={styles.profilePresetActions}>
+                  <Pressable onPress={newUserProfilePreset} disabled={saving} style={[styles.profilePresetAction, saving && styles.disabled]}>
+                    <Text style={styles.profilePresetActionText}>+</Text>
+                  </Pressable>
+                  <Pressable onPress={deleteCurrentUserProfilePreset} disabled={saving || userProfilePresets.length <= 1} style={[styles.profilePresetAction, styles.profilePresetDeleteAction, (saving || userProfilePresets.length <= 1) && styles.profilePresetActionDisabled]}>
+                    <Text style={[styles.profilePresetActionText, styles.profilePresetDeleteText]}>-</Text>
+                  </Pressable>
+                </View>
+              </View>
               <Text style={styles.profilePresetMeta}>{userProfilePresets.findIndex(item => item.id === userProfilePresetId) >= 0 ? `${Math.max(1, userProfilePresets.findIndex(item => item.id === userProfilePresetId) + 1)} / ${userProfilePresets.length}` : '신규 프로필'}</Text>
             </View>
             <Pressable onPress={() => void selectUserProfilePreset(1)} disabled={saving || userProfilePresets.length < 2} style={[styles.profileArrow, (saving || userProfilePresets.length < 2) && styles.disabled]}>
               <Text style={styles.profileArrowText}>›</Text>
             </Pressable>
           </View>
-          <Pressable onPress={newUserProfilePreset} disabled={saving} style={[styles.secondary, saving && styles.disabled]}><Text style={styles.secondaryText}>새 프로필 만들기</Text></Pressable>
-          <Text style={styles.label}>서비스 이름</Text>
-          <TextInput value={roomName} onChangeText={setRoomName} style={styles.input} />
           <Text style={styles.label}>내 이름</Text>
           <TextInput value={userName} onChangeText={setUserName} style={styles.input} />
           <Text style={styles.label}>출력 언어</Text>
@@ -1570,11 +1630,18 @@ const styles = StyleSheet.create({
   presetRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
   presetButton: { minHeight: 34, paddingHorizontal: 10, borderRadius: 17, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', justifyContent: 'center' },
   presetText: { color: colors.text, fontWeight: '800', fontSize: 12 },
-  profilePresetSwitcher: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  profileArrow: { width: 44, height: 44, borderRadius: 22, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
+  profilePresetSwitcher: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  profileArrow: { width: 48, height: 48, marginTop: 4, borderRadius: 24, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
   profileArrowText: { color: colors.text, fontSize: 30, lineHeight: 32, fontWeight: '900' },
   profilePresetCenter: { flex: 1 },
-  profilePresetInput: { marginTop: 0 },
+  profilePresetNameBox: { position: 'relative', justifyContent: 'center' },
+  profilePresetInput: { marginTop: 0, paddingRight: 88 },
+  profilePresetActions: { position: 'absolute', right: 8, top: 8, flexDirection: 'row', gap: 6 },
+  profilePresetAction: { width: 30, height: 30, borderRadius: 15, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
+  profilePresetDeleteAction: { borderColor: '#f0b7b7', backgroundColor: '#fff1f1' },
+  profilePresetActionDisabled: { opacity: 0.35 },
+  profilePresetActionText: { color: colors.text, fontSize: 20, lineHeight: 22, fontWeight: '900' },
+  profilePresetDeleteText: { color: colors.danger },
   profilePresetMeta: { marginTop: 4, color: colors.sub, fontSize: 12, fontWeight: '800', textAlign: 'center' },
   keyToggle: { alignSelf: 'flex-start', marginTop: 10, minHeight: 34, paddingHorizontal: 12, borderRadius: 17, backgroundColor: '#eee8dc', justifyContent: 'center' },
   keyToggleText: { color: colors.text, fontWeight: '900' },

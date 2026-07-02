@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
@@ -33,18 +33,20 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
   onOpenNotifications: () => void;
   onChange: (next: SNSGodState) => Promise<void> | void;
 }) {
-  const availableCharacters = state.characters.filter(character => character.randomTemporary !== true);
-  const recentPostAtByCharacter = new Map<string, number>();
-  (state.snsPosts || [])
-    .filter(post => post.platform === platform)
-    .forEach(post => {
-      const previous = recentPostAtByCharacter.get(post.characterId) || 0;
-      recentPostAtByCharacter.set(post.characterId, Math.max(previous, Number(post.createdAt || 0)));
-    });
-  const sortedCharacters = availableCharacters
-    .map((character, index) => ({ character, index, recentAt: recentPostAtByCharacter.get(character.id) || 0, enabled: snsOptionsFor(state, platform, character).enabled !== false }))
-    .sort((a, b) => Number(b.enabled) - Number(a.enabled) || (b.recentAt - a.recentAt) || (a.index - b.index))
-    .map(item => item.character);
+  const availableCharacters = useMemo(() => state.characters.filter(character => character.randomTemporary !== true), [state.characters]);
+  const sortedCharacters = useMemo(() => {
+    const recentPostAtByCharacter = new Map<string, number>();
+    (state.snsPosts || [])
+      .filter(post => post.platform === platform)
+      .forEach(post => {
+        const previous = recentPostAtByCharacter.get(post.characterId) || 0;
+        recentPostAtByCharacter.set(post.characterId, Math.max(previous, Number(post.createdAt || 0)));
+      });
+    return availableCharacters
+      .map((character, index) => ({ character, index, recentAt: recentPostAtByCharacter.get(character.id) || 0, enabled: snsOptionsFor(state, platform, character).enabled !== false }))
+      .sort((a, b) => Number(b.enabled) - Number(a.enabled) || (b.recentAt - a.recentAt) || (a.index - b.index))
+      .map(item => item.character);
+  }, [availableCharacters, platform, state.config.sns, state.snsPosts]);
   const [selectedCharacterId, setSelectedCharacterId] = useState('');
   const [loading, setLoading] = useState(false);
   const [imageData, setImageData] = useState('');
@@ -69,14 +71,14 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
   const [draftCommentQty, setDraftCommentQty] = useState(String(activeSnsOptions.commentQty || '2-4'));
   const [draftSubject, setDraftSubject] = useState(String(activeSnsOptions.subject || ''));
   const [draftMood, setDraftMood] = useState(String(activeSnsOptions.mood || ''));
-  const posts = (state.snsPosts || [])
+  const posts = useMemo(() => (state.snsPosts || [])
     .filter(post => post.platform === platform && (!selectedCharacterId || post.characterId === selectedCharacterId))
     .slice()
-    .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
-  const dmThreads = (state.snsDmThreads || []).filter(thread => {
+    .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0)), [platform, selectedCharacterId, state.snsPosts]);
+  const dmThreads = useMemo(() => (state.snsDmThreads || []).filter(thread => {
     if (selectedCharacterId && thread.characterId !== selectedCharacterId) return false;
     return dmThreadPlatform(thread, state.snsPosts || []) === platform;
-  });
+  }), [platform, selectedCharacterId, state.snsDmThreads, state.snsPosts]);
 
   useEffect(() => {
     const existingIds = new Set((state.snsDmThreads || []).map(thread => thread.id));

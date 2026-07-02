@@ -138,7 +138,12 @@ export default function App() {
   }
 
   function sameRoute(a: Route, b: Route): boolean {
-    return JSON.stringify(a) === JSON.stringify(b);
+    if (a.name !== b.name) return false;
+    if ('roomId' in a || 'roomId' in b) return ('roomId' in a ? a.roomId : undefined) === ('roomId' in b ? b.roomId : undefined);
+    if ('platform' in a || 'platform' in b) return ('platform' in a ? a.platform : undefined) === ('platform' in b ? b.platform : undefined);
+    if ('characterId' in a || 'characterId' in b) return ('characterId' in a ? a.characterId : undefined) === ('characterId' in b ? b.characterId : undefined);
+    if ('sessionId' in a || 'sessionId' in b) return ('sessionId' in a ? a.sessionId : undefined) === ('sessionId' in b ? b.sessionId : undefined);
+    return true;
   }
 
   function navigate(next: Route, options?: { replace?: boolean }) {
@@ -146,7 +151,6 @@ export default function App() {
       if (!options?.replace && !sameRoute(current, next)) {
         routeHistoryRef.current = [...routeHistoryRef.current, current].slice(-60);
       }
-      void appendDebugLog('navigation', `${current.name} -> ${next.name}${options?.replace ? ' (replace)' : ''}`);
       return next;
     });
   }

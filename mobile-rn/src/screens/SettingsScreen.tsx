@@ -291,12 +291,6 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
       return;
     }
     setActiveSection(section);
-    if (state.config.lastSettingsSection === section) return;
-    try {
-      await onChange({ ...state, config: { ...state.config, lastSettingsSection: section } }, { persist: false });
-    } catch (error) {
-      setStatus(`설정 위치 저장 실패: ${error instanceof Error ? error.message : String(error)}`);
-    }
   }
 
   function applyEventPreset(preset: typeof EVENT_PRESETS[number]) {
@@ -886,7 +880,12 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     }
   }
 
-  const visibleCharacters = state.characters.filter(character => character.randomTemporary !== true);
+  const visibleCharacters = useMemo(
+    () => activeSection === 'characters' || activeSection === 'stickers'
+      ? state.characters.filter(character => character.randomTemporary !== true)
+      : [],
+    [activeSection, state.characters]
+  );
 
   return (
     <View style={styles.screen}>
@@ -927,7 +926,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
             </View>
             <Pressable onPress={addUserSticker} style={styles.primarySmall}><Text style={styles.primarySmallText}>파일 추가</Text></Pressable>
           </View>
-          {(state.userStickers || []).length ? (state.userStickers || []).map(sticker => {
+          {activeSection === 'stickers' && (state.userStickers || []).length ? (state.userStickers || []).map(sticker => {
             const draft = stickerDraft(sticker);
             return (
               <View key={sticker.id} style={styles.stickerCard}>
@@ -944,7 +943,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
                 </View>
               </View>
             );
-          }) : <Text style={styles.emptyText}>스티커를 추가하세요.</Text>}
+          }) : activeSection === 'stickers' ? <Text style={styles.emptyText}>스티커를 추가하세요.</Text> : null}
           <Text style={styles.cardTitle}>캐릭터 스티커</Text>
           <Text style={styles.help}>캐릭터 스티커는 캐릭터 답장에 사용할 수 있는 스티커입니다. 캐릭터별 설정에서 관리합니다.</Text>
           {visibleCharacters.map(character => (

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
@@ -62,7 +62,10 @@ export function ChatListScreen({ state, onOpenSettings, onOpenRoom, onNewRoom, o
   onOpenNotifications: () => void;
   onOpenGroupRoom: (roomId: string) => void;
 }) {
-  const rows = rowsFromState(state);
+  const rows = useMemo(
+    () => rowsFromState(state),
+    [state.characters, state.chatRooms, state.groupRooms, state.messages, state.randomChats, state.unreadCounts]
+  );
   const kakaoTheme = state.config.snsTheme === 'kakao';
   const headerActions = [
     { label: '새 개인채팅', icon: '1:1', onPress: onNewRoom },

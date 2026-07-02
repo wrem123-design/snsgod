@@ -15,7 +15,7 @@ import { SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../type
 import { appendDebugLog } from './debugLog';
 import { characterWithConversationRhythm } from './conversationRhythm';
 
-type CommitPatch = (patch: (current: SNSGodState) => SNSGodState) => Promise<void> | void;
+type CommitPatch = (patch: (current: SNSGodState) => SNSGodState, options?: { persist?: boolean }) => Promise<void> | void;
 
 type StartReplyJobInput = {
   roomId: string;
@@ -160,7 +160,7 @@ export function isReplyPending(state: SNSGodState, roomId: string): boolean {
 export async function startReplyJob(input: StartReplyJobInput) {
   cancelChatJob(input.roomId);
   const jobId = beginChatJob(input.roomId);
-  await input.commitCurrent(current => setPending(current, input.roomId, jobId, 'delay'));
+  await input.commitCurrent(current => setPending(current, input.roomId, jobId, 'delay'), { persist: false });
   try {
     const initial = roomStillValid(input.getState(), input.roomId, input.characterId);
     if (!initial) return;
@@ -169,14 +169,14 @@ export async function startReplyJob(input: StartReplyJobInput) {
     await sleep(Math.max(0, replyDelayMs - elapsedSinceUserMessageMs));
     if (!isCurrentChatJob(input.roomId, jobId)) return;
 
-    await input.commitCurrent(current => markUserMessagesRead(setPending(current, input.roomId, jobId, 'typing'), input.roomId));
+    await input.commitCurrent(current => markUserMessagesRead(setPending(current, input.roomId, jobId, 'typing'), input.roomId), { persist: false });
     const promptState = input.getState();
     const promptTarget = roomStillValid(promptState, input.roomId, input.characterId);
     if (!promptState || !promptTarget || !isCurrentChatJob(input.roomId, jobId)) return;
     const promptMessages = buildChatPrompt(promptState, promptTarget.character, promptTarget.room, input.latestUserInput, { mode: 'reply', replyDelaySeconds: replyDelayMs / 1000, latestUserImageData: input.latestUserImageData });
 
     if (!tryLockGeneratingRoom(input.roomId, jobId)) return;
-    await input.commitCurrent(current => setPending(current, input.roomId, jobId, 'generating'));
+    await input.commitCurrent(current => setPending(current, input.roomId, jobId, 'generating'), { persist: false });
     let { reply, keyIndex } = await runQueuedReplyLlm(input.roomId, jobId, () => callLLM(promptState, promptMessages));
     if (!isCurrentChatJob(input.roomId, jobId)) return;
     const nowContext = chatNowContext(promptState, promptTarget.character);
@@ -351,7 +351,7 @@ export async function startReplyJob(input: StartReplyJobInput) {
     }
   } finally {
     endChatJob(input.roomId, jobId);
-    await input.commitCurrent(current => clearPending(current, input.roomId, jobId));
+    await input.commitCurrent(current => clearPending(current, input.roomId, jobId), { persist: false });
   }
 }
 

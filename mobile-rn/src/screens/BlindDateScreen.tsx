@@ -27,21 +27,6 @@ import {
   startStreetEncounterAtLocation
 } from '../logic/blindDate';
 import { createBlindDateFirstDatePrompt } from '../logic/meetingEvent';
-
-const locationThumbnails: Record<string, ReturnType<typeof require>> = {
-  '성수 카페거리': require('../../assets/encounter-locations/seongsu-cafe-street.png'),
-  '한강 산책로': require('../../assets/encounter-locations/han-river-walk.png'),
-  '전시회/갤러리': require('../../assets/encounter-locations/art-gallery.png'),
-  '독립서점': require('../../assets/encounter-locations/indie-bookstore.png'),
-  '편집샵 거리': require('../../assets/encounter-locations/boutique-street.png'),
-  '베이커리 앞': require('../../assets/encounter-locations/bakery-front.png'),
-  '지하철역 근처': require('../../assets/encounter-locations/subway-entrance.png'),
-  '회사 밀집 거리': require('../../assets/encounter-locations/office-district.png'),
-  '대학가 카페': require('../../assets/encounter-locations/college-cafe.png'),
-  '야간 편의점 앞': require('../../assets/encounter-locations/night-convenience-store.png'),
-  '주말 플리마켓': require('../../assets/encounter-locations/weekend-flea-market.png'),
-  '반려동물 산책로': require('../../assets/encounter-locations/pet-walking-path.png')
-};
 const fallbackEncounterLocations = ['성수 카페거리', '한강 산책로', '베이커리 앞', '지하철역 근처'];
 
 export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode = 'blindDate' }: {
@@ -545,7 +530,7 @@ function StreetEncounterMode({ session, busy, onChooseLocation, onApproach, onCh
   const canAskContact = Boolean(stats && stats.affinity >= 50 && phase === 'talk');
   const talkedOut = turn >= maxTurns && phase === 'talk';
   const canSendCustom = Boolean(customText.trim()) && (phase === 'intro' || (phase === 'talk' && !talkedOut));
-  const encounterLocations = (session.encounterLocations || []).filter(location => locationThumbnails[location]).slice(0, 4);
+  const encounterLocations = (session.encounterLocations || []).slice(0, 4);
   const visibleLocations = encounterLocations.length ? encounterLocations : fallbackEncounterLocations;
   if (phase === 'locations') {
     return (
@@ -561,9 +546,6 @@ function StreetEncounterMode({ session, busy, onChooseLocation, onApproach, onCh
         <View style={styles.locationGrid}>
           {visibleLocations.map(location => (
             <Pressable key={location} disabled={busy} onPress={() => onChooseLocation(location)} style={[styles.locationCard, busy && styles.disabled]}>
-              <View style={styles.locationImageFrame}>
-                <Image source={locationThumbnails[location]} resizeMode="cover" style={styles.locationImage} />
-              </View>
               <Text style={styles.locationTitle}>{location}</Text>
             </Pressable>
           ))}
@@ -1257,10 +1239,8 @@ const styles = StyleSheet.create({
   encounterNarration: { marginTop: 8, color: '#fffefa', fontSize: 15, lineHeight: 23, fontWeight: '800' },
   encounterLine: { marginTop: 12, padding: 12, borderRadius: 8, color: colors.text, backgroundColor: '#fffefa', fontSize: 15, lineHeight: 22, fontWeight: '900' },
   locationGrid: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 12 },
-  locationCard: { flexBasis: '48%', padding: 9, borderRadius: 12, backgroundColor: '#151515', borderWidth: 1, borderColor: '#2f2f2f', shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
-  locationImageFrame: { width: '100%', aspectRatio: 1.444, borderRadius: 8, overflow: 'hidden', backgroundColor: '#222' },
-  locationImage: { width: '100%', height: '100%' },
-  locationTitle: { minHeight: 44, marginTop: 8, color: '#fffefa', fontSize: 18, lineHeight: 22, fontWeight: '900' },
+  locationCard: { flexBasis: '48%', minHeight: 92, paddingHorizontal: 12, paddingVertical: 14, borderRadius: 12, justifyContent: 'center', backgroundColor: '#151515', borderWidth: 1, borderColor: '#2f2f2f', shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
+  locationTitle: { color: '#fffefa', fontSize: 20, lineHeight: 25, fontWeight: '900' },
   encounterStats: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   statPill: { flexGrow: 1, flexBasis: '47%', minHeight: 48, borderRadius: 8, paddingHorizontal: 10, justifyContent: 'center', backgroundColor: '#f2eee6', borderWidth: 1, borderColor: colors.border },
   statPillStrong: { backgroundColor: '#fff6cf', borderColor: colors.accent },

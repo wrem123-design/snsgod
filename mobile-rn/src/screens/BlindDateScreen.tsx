@@ -561,8 +561,9 @@ function StreetEncounterMode({ session, busy, onChooseLocation, onApproach, onCh
         <View style={styles.locationGrid}>
           {visibleLocations.map(location => (
             <Pressable key={location} disabled={busy} onPress={() => onChooseLocation(location)} style={[styles.locationCard, busy && styles.disabled]}>
-              <Image source={locationThumbnails[location]} resizeMode="contain" style={styles.locationImage} />
-              <View style={styles.locationShade} />
+              <View style={styles.locationImageFrame}>
+                <Image source={locationThumbnails[location]} resizeMode="cover" style={styles.locationImage} />
+              </View>
               <Text style={styles.locationTitle}>{location}</Text>
             </Pressable>
           ))}
@@ -1256,10 +1257,10 @@ const styles = StyleSheet.create({
   encounterNarration: { marginTop: 8, color: '#fffefa', fontSize: 15, lineHeight: 23, fontWeight: '800' },
   encounterLine: { marginTop: 12, padding: 12, borderRadius: 8, color: colors.text, backgroundColor: '#fffefa', fontSize: 15, lineHeight: 22, fontWeight: '900' },
   locationGrid: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 12 },
-  locationCard: { flexBasis: '48%', minHeight: 148, borderRadius: 12, overflow: 'hidden', backgroundColor: '#151515', borderWidth: 1, borderColor: '#2f2f2f', shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
-  locationImage: { position: 'absolute', left: 8, right: 8, top: 8, bottom: 30, width: undefined, height: undefined },
-  locationShade: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.08)' },
-  locationTitle: { position: 'absolute', left: 10, right: 10, bottom: 10, color: '#fffefa', fontSize: 18, lineHeight: 22, fontWeight: '900', textShadowColor: 'rgba(0,0,0,0.55)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
+  locationCard: { flexBasis: '48%', padding: 9, borderRadius: 12, backgroundColor: '#151515', borderWidth: 1, borderColor: '#2f2f2f', shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
+  locationImageFrame: { width: '100%', aspectRatio: 1.444, borderRadius: 8, overflow: 'hidden', backgroundColor: '#222' },
+  locationImage: { width: '100%', height: '100%' },
+  locationTitle: { minHeight: 44, marginTop: 8, color: '#fffefa', fontSize: 18, lineHeight: 22, fontWeight: '900' },
   encounterStats: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   statPill: { flexGrow: 1, flexBasis: '47%', minHeight: 48, borderRadius: 8, paddingHorizontal: 10, justifyContent: 'center', backgroundColor: '#f2eee6', borderWidth: 1, borderColor: colors.border },
   statPillStrong: { backgroundColor: '#fff6cf', borderColor: colors.accent },

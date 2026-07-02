@@ -730,8 +730,7 @@ function withStorageMetadata(state: SNSGodState, revision: number, statsSource: 
 }
 
 function contentHash(state: SNSGodState): string {
-  const clean = jsonStableValue(stripStorageMetadata(state));
-  const raw = stableStringify(clean);
+  const raw = JSON.stringify(stripStorageMetadata(state));
   let hash = 2166136261;
   for (let index = 0; index < raw.length; index += 1) {
     hash ^= raw.charCodeAt(index);
@@ -746,11 +745,6 @@ function stripStorageMetadata(value: unknown): unknown {
   return Object.fromEntries(Object.entries(value as Record<string, unknown>)
     .filter(([key]) => !key.startsWith('__'))
     .map(([key, item]) => [key, stripStorageMetadata(item)]));
-}
-
-function jsonStableValue(value: unknown): unknown {
-  if (value === undefined) return undefined;
-  return JSON.parse(JSON.stringify(value));
 }
 
 function stableStringify(value: unknown): string {

@@ -40,6 +40,59 @@ export const DEFAULT_PROMPTS: PromptSet = {
   profileCreation: 'Create a Korean fictional chat character who would naturally start a conversation with this user. Return JSON: {"name":"...","prompt":"...","firstMessage":"..."}'
 };
 
+const DATE_WEEKDAYS_EN = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const DATE_WEEKDAYS_KO = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
+
+function localDateParts(timeZone: string, now = new Date()): { year: number; month: number; day: number } {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(now);
+    const value = (type: string) => Number(parts.find(part => part.type === type)?.value || 0);
+    const year = value('year');
+    const month = value('month');
+    const day = value('day');
+    if (year && month && day) return { year, month, day };
+  } catch {
+    // Fall through to local device date.
+  }
+  return { year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate() };
+}
+
+function dateFromLocalParts(parts: { year: number; month: number; day: number }, offsetDays: number) {
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day + offsetDays));
+}
+
+function ymd(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+}
+
+function mdKo(date: Date): string {
+  return `${date.getUTCMonth() + 1}월 ${date.getUTCDate()}일`;
+}
+
+export function dateGroundingInstruction(state: SNSGodState, character?: SNSGodCharacter): string {
+  const timeZone = String(character?.timeZone || state.config.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Seoul');
+  const local = localDateParts(timeZone);
+  const rows = Array.from({ length: 15 }, (_, offset) => {
+    const date = dateFromLocalParts(local, offset);
+    const weekday = date.getUTCDay();
+    const label = offset === 0 ? 'today/오늘' : offset === 1 ? 'tomorrow/내일' : offset === 2 ? 'day after tomorrow/모레' : `+${offset} days`;
+    return `- ${label}: ${ymd(date)} (${DATE_WEEKDAYS_EN[weekday]}, ${DATE_WEEKDAYS_KO[weekday]}, ${mdKo(date)})`;
+  });
+  return [
+    '## Date Arithmetic / 날짜 계산 기준',
+    `Use this as the authoritative calendar in timezone ${timeZone}. Do not guess weekday-to-date conversions.`,
+    ...rows,
+    'If the user asks “토요일 몇 일이더라?”, “이번 토요일”, “다가오는 토요일”, or similar, answer using the closest listed Saturday unless the chat explicitly established another date.',
+    'If the user says “다음 토요일” and the intended week is ambiguous, answer cautiously or ask a short clarification instead of inventing a date.',
+    'When correcting or confirming a promised date, prefer the exact YYYY-MM-DD and Korean date such as “7월 4일 토요일”.'
+  ].join('\n');
+}
+
 export function userNameFor(state: SNSGodState, character: SNSGodCharacter, room?: SNSGodRoom): string {
   if (room?.userAlias?.trim()) return room.userAlias.trim();
   if (character.userName?.trim()) return character.userName.trim();
@@ -261,6 +314,7 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
     'This is a private chat reply. Do not write an SNS post, feed caption, public comment, DM thread JSON, or social-media update.',
     'Reply only to the current chat room as chat bubbles in the messages array.',
     'The recent DM timeline includes exact local date, weekday, and time for each visible message. Treat those timestamps as authoritative when deciding whether something happened today, yesterday, or on a previous day. Use date changes naturally when relevant, but do not mention timestamps in every reply.',
+    dateGroundingInstruction(state, character),
     state.config.characterPhoneCallEnabled === false
       ? 'Character-initiated phone call cards are disabled. Do not output callInvite, phoneCall, callTitle, callLine, or [[PHONE_CALL]].'
       : 'If the character is actually calling the user now, append exactly [[PHONE_CALL]] to the end of the same visible chat bubble, or set callInvite:true with callTitle/callLine. The app hides the marker and shows a phone-call card. Keep this rare and only inside the current chat room.',

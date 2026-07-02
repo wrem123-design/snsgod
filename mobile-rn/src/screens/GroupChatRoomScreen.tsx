@@ -15,6 +15,7 @@ import { isRenderableMediaUri } from '../logic/media';
 import { characterReferenceImageForPrompt } from '../logic/imageReference';
 import { characterWithConversationRhythm } from '../logic/conversationRhythm';
 import { forceUpdateRoomMemory, groupMemoryPromptBlock, updateRoomMemoryAfterAppend } from '../logic/memoryBridge';
+import { dateGroundingInstruction } from '../logic/prompts';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -109,6 +110,7 @@ function buildGroupPrompt(state: SNSGodState, roomId: string, participants: SNSG
     'Write 1 to 4 messages. Usually only 1 to 3 members reply. Not everyone needs to answer.',
     'Every message must include characterId from the allowed member list. Do not use outside speakers.',
     'Do not expose JSON keys as visible chat text. Do not echo, rewrite, summarize, or delete the latest user message.',
+    dateGroundingInstruction(state, participants[0]),
     `Allowed members:\n${participants.map(character => `- ${character.id} (@${character.handle || character.id}) ${character.name}: ${character.prompt || '(empty)'}`).join('\n')}`,
     `User profile: ${state.config.userDescription || '(empty)'}`,
     `Room-only relationship/context note: ${findGroup(state, roomId)?.relationshipNote || '(empty)'}`,

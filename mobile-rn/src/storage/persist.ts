@@ -42,6 +42,7 @@ type StorageStats = {
   mediaCount: number;
   lastMessageAt: number;
 };
+type StorageCounts = Pick<StorageStats, 'messageCount' | 'characterCount' | 'referenceImageCount' | 'mediaCount' | 'lastMessageAt'>;
 type AsyncStoragePointer = {
   __storagePointer: 'sqlite-and-file-backup';
   __revision: number;
@@ -60,6 +61,7 @@ type PersistedPayload = {
   payload: string;
   asyncPayload: string;
   stats: StorageStats;
+  backupStats?: StorageStats;
   fullSnapshot?: SNSGodState;
   fullPayload?: string;
 };
@@ -257,11 +259,11 @@ async function writeStateNow(state: SNSGodState, options: SaveStateOptions = {})
         lastSkippedOldRevisionSave = `skip old payload rev=${prepared.stats.revision}, writeSeq=${prepared.stats.writeSeq}; persisted rev=${persistedRevision}, writeSeq=${persistedWriteSeq}`;
         return;
       }
-      await perf.measure('SQLite write', () => writeSqliteState(prepared.payload, prepared.snapshot));
+      await perf.measure('SQLite write', () => writeSqliteState(prepared.payload, prepared.snapshot, prepared.stats));
       await perf.measure('messages write', () => writeMessagesState(prepared.fullSnapshot?.messages || state.messages || {}));
       lastSQLiteSaveTime = Date.now();
       if (writeBackup) {
-        await perf.measure('backup write', () => writeBackupFile(prepared.fullPayload || prepared.payload, prepared.fullSnapshot || prepared.snapshot, options.reason || (options.important ? 'important save' : 'scheduled snapshot')));
+        await perf.measure('backup write', () => writeBackupFile(prepared.fullPayload || prepared.payload, prepared.fullSnapshot || prepared.snapshot, options.reason || (options.important ? 'important save' : 'scheduled snapshot'), prepared.backupStats || prepared.stats));
       }
       await perf.measure('AsyncStorage pointer', () => writeAsyncStoragePointer(prepared)).catch(error => {
         lastAsyncStorageWarning = `AsyncStorage pointer warning: ${error instanceof Error ? error.message : String(error)}`;
@@ -417,19 +419,26 @@ async function preparePersistedPayload(state: SNSGodState, options: { includeFul
   const protectedState = perf
     ? await perf.measure('protectCriticalBackups', () => protectCriticalBackups(externalized))
     : await protectCriticalBackups(externalized);
-  const fullSnapshot = perf
-    ? perf.measureSync('prepareStateForSave full', () => prepareStateForSave(protectedState, { includeMessages: true }))
-    : prepareStateForSave(protectedState, { includeMessages: true });
+  const normalized = perf
+    ? perf.measureSync('normalizeState', () => normalizeState(protectedState))
+    : normalizeState(protectedState);
+  const counts = perf
+    ? perf.measureSync('storage counts', () => getStorageCounts(normalized))
+    : getStorageCounts(normalized);
   const snapshot = perf
-    ? perf.measureSync('prepareStateForSave slim', () => prepareStateForSave(protectedState, { includeMessages: false }))
-    : prepareStateForSave(protectedState, { includeMessages: false });
+    ? perf.measureSync('prepareStateForSave slim', () => createStorageSnapshot(normalized, counts, false))
+    : createStorageSnapshot(normalized, counts, false);
   const payload = perf ? perf.measureSync('JSON.stringify slim', () => JSON.stringify(snapshot)) : JSON.stringify(snapshot);
-  const asyncPayload = perf ? perf.measureSync('AsyncStorage payload', () => asyncStoragePayloadFor(fullSnapshot, payload)) : asyncStoragePayloadFor(fullSnapshot, payload);
-  const fullPayload = options.includeFullBackupPayload
+  const fullSnapshot = options.includeFullBackupPayload
+    ? (perf ? perf.measureSync('prepareStateForSave full', () => createStorageSnapshot(normalized, counts, true, snapshot)) : createStorageSnapshot(normalized, counts, true, snapshot))
+    : undefined;
+  const asyncPayload = perf ? perf.measureSync('AsyncStorage payload', () => asyncStoragePayloadFor(snapshot, payload)) : asyncStoragePayloadFor(snapshot, payload);
+  const fullPayload = fullSnapshot
     ? (perf ? perf.measureSync('JSON.stringify full', () => JSON.stringify(fullSnapshot)) : JSON.stringify(fullSnapshot))
     : undefined;
-  const stats = perf ? perf.measureSync('contentHash', () => getStorageStats(fullSnapshot)) : getStorageStats(fullSnapshot);
-  return { snapshot, payload, asyncPayload, stats, fullSnapshot, fullPayload };
+  const stats = statsFromSnapshot(snapshot);
+  const backupStats = fullSnapshot ? statsFromSnapshot(fullSnapshot) : undefined;
+  return { snapshot, payload, asyncPayload, stats, backupStats, fullSnapshot, fullPayload };
 }
 
 async function cleanupLegacyAsyncStorageState(authoritativeState: SNSGodState): Promise<void> {
@@ -585,11 +594,7 @@ function summarizeState(state: SNSGodState, source: string) {
 }
 
 function getStorageStats(state: SNSGodState): StorageStats {
-  const messageLists = Object.values(state.messages || {}).filter(Array.isArray) as { createdAt?: number; mediaData?: string }[][];
-  const messages = messageLists.flat();
-  const actualReferenceImageCount = (state.referenceFaceSlots || []).filter(slot => String(slot.image || '').trim()).length;
-  const mediaValues = collectMediaValues(state);
-  const actualLastMessageAt = messages.reduce((max, message) => Math.max(max, Number(message.createdAt || 0)), 0);
+  const counts = getStorageCounts(state);
   const hash = contentHash(state);
   return {
     revision: Number(state.__revision || 0),
@@ -597,6 +602,17 @@ function getStorageStats(state: SNSGodState): StorageStats {
     savedAt: Number(state.__savedAt || 0),
     importedAt: Number(state.__importedAt || 0),
     hash,
+    ...counts
+  };
+}
+
+function getStorageCounts(state: SNSGodState): StorageCounts {
+  const messageLists = Object.values(state.messages || {}).filter(Array.isArray) as { createdAt?: number; mediaData?: string }[][];
+  const messages = messageLists.flat();
+  const actualReferenceImageCount = (state.referenceFaceSlots || []).filter(slot => String(slot.image || '').trim()).length;
+  const mediaValues = collectMediaValues(state);
+  const actualLastMessageAt = messages.reduce((max, message) => Math.max(max, Number(message.createdAt || 0)), 0);
+  return {
     messageCount: messages.length || Number(state.__messageCount || 0),
     characterCount: (state.characters || []).length,
     referenceImageCount: actualReferenceImageCount || Number(state.__referenceImageCount || 0),
@@ -605,11 +621,33 @@ function getStorageStats(state: SNSGodState): StorageStats {
   };
 }
 
+function statsFromSnapshot(snapshot: SNSGodState): StorageStats {
+  const counts = getStorageCounts(snapshot);
+  return {
+    revision: Number(snapshot.__revision || 0),
+    writeSeq: Number(snapshot.__writeSeq || 0),
+    savedAt: Number(snapshot.__savedAt || 0),
+    importedAt: Number(snapshot.__importedAt || 0),
+    hash: String(snapshot.__contentHash || ''),
+    ...counts
+  };
+}
+
 function statsFromRaw(raw: string): StorageStats | undefined {
   try {
     const parsed = JSON.parse(raw) as SNSGodState;
     if (!parsed || typeof parsed !== 'object') return undefined;
     return getStorageStats(parsed);
+  } catch {
+    return undefined;
+  }
+}
+
+function metadataStatsFromRaw(raw: string): StorageStats | undefined {
+  try {
+    const parsed = JSON.parse(raw) as SNSGodState;
+    if (!parsed || typeof parsed !== 'object') return undefined;
+    return statsFromSnapshot(parsed);
   } catch {
     return undefined;
   }
@@ -808,10 +846,10 @@ async function readSqliteStateWithoutMetaValidation(): Promise<string | undefine
   }
 }
 
-async function writeSqliteState(payload: string, snapshot: SNSGodState): Promise<void> {
+async function writeSqliteState(payload: string, snapshot: SNSGodState, preparedStats?: StorageStats): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  const stats = getStorageStats(snapshot);
+  const stats = preparedStats || getStorageStats(snapshot);
   const savedAt = snapshot.__savedAt || Date.now();
   await db.execAsync('BEGIN IMMEDIATE TRANSACTION');
   try {
@@ -961,15 +999,15 @@ async function readBackupFile(fileUri: string = BACKUP_FILE): Promise<string | u
   }
 }
 
-async function writeBackupFile(payload: string, snapshot: SNSGodState, reason = 'backup snapshot'): Promise<void> {
+async function writeBackupFile(payload: string, snapshot: SNSGodState, reason = 'backup snapshot', preparedStats?: StorageStats): Promise<void> {
   const canWrite = await ensureBackupDir();
   if (!canWrite) return;
-  const expectedStats = getStorageStats(snapshot);
+  const expectedStats = preparedStats || getStorageStats(snapshot);
   try {
     await FileSystem.writeAsStringAsync(TMP_BACKUP_FILE, payload, { encoding: FileSystem.EncodingType.UTF8 });
     const tmpInfo = await FileSystem.getInfoAsync(TMP_BACKUP_FILE);
     const tmpRaw = await FileSystem.readAsStringAsync(TMP_BACKUP_FILE, { encoding: FileSystem.EncodingType.UTF8 });
-    const tmpStats = statsFromRaw(tmpRaw);
+    const tmpStats = metadataStatsFromRaw(tmpRaw);
     if (!tmpInfo.exists || tmpRaw.length !== payload.length || !tmpStats || tmpStats.hash !== expectedStats.hash || tmpStats.revision !== expectedStats.revision) {
       throw new Error('atomic backup tmp verification failed');
     }
@@ -983,7 +1021,7 @@ async function writeBackupFile(payload: string, snapshot: SNSGodState, reason = 
     }
     await FileSystem.moveAsync({ from: TMP_BACKUP_FILE, to: BACKUP_FILE });
     const latestRaw = await readBackupFile(BACKUP_FILE);
-    const latestStats = latestRaw ? statsFromRaw(latestRaw) : undefined;
+    const latestStats = latestRaw ? metadataStatsFromRaw(latestRaw) : undefined;
     if (!latestRaw || !latestStats || latestStats.hash !== expectedStats.hash || latestStats.revision !== expectedStats.revision) {
       throw new Error('atomic backup latest verification failed');
     }
@@ -1047,6 +1085,29 @@ export async function getStorageDiagnostics(currentState?: SNSGodState | null) {
     },
     media,
     perf: getRecentPersistPerfEntries()
+  };
+}
+
+function createStorageSnapshot(normalized: SNSGodState, counts: StorageCounts, includeMessages: boolean, metadataSource?: SNSGodState): SNSGodState {
+  const savedAt = metadataSource?.__savedAt || Date.now();
+  const writeSeq = metadataSource?.__writeSeq || Math.max(nextWriteSeq + 1, Number(normalized.__writeSeq || 0) + 1);
+  if (!metadataSource) nextWriteSeq = writeSeq;
+  const storageState = includeMessages ? normalized : { ...normalized, messages: {} };
+  const withCounts = {
+    ...storageState,
+    schemaVersion: STATE_SCHEMA_VERSION,
+    __revision: Math.max(0, Math.floor(Number(normalized.__revision || 0))),
+    __writeSeq: writeSeq,
+    __savedAt: savedAt,
+    __messageCount: counts.messageCount,
+    __characterCount: counts.characterCount,
+    __referenceImageCount: counts.referenceImageCount,
+    __mediaCount: counts.mediaCount,
+    __lastMessageAt: counts.lastMessageAt
+  };
+  return {
+    ...withCounts,
+    __contentHash: metadataSource && !includeMessages ? metadataSource.__contentHash || contentHash(withCounts) : contentHash(withCounts)
   };
 }
 

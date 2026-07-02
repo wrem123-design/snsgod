@@ -176,6 +176,38 @@ const PHOTO_BACKGROUNDS = [
   'restaurant table background',
   'city street crosswalk background'
 ];
+const WORLDCUP_POSES = [
+  'standing three-quarter pose with one shoulder angled toward camera',
+  'seated cafe pose with both hands around a cup',
+  'walking candid pose looking back over one shoulder',
+  'mirror selfie pose with phone low near chest',
+  'leaning lightly on a railing with relaxed arms',
+  'side-profile pose fixing hair near one ear',
+  'arms loosely crossed in an office lounge',
+  'one hand holding tote strap, direct eye contact',
+  'sitting on a bench with legs angled to the side',
+  'close portrait with chin slightly lifted'
+];
+const WORLDCUP_OUTFITS = [
+  'navy blazer with white blouse and silver necklace',
+  'cream knit cardigan with denim skirt and canvas tote',
+  'black leather jacket with muted red scarf',
+  'sage green linen shirt with wide beige trousers',
+  'sporty white windbreaker with black leggings',
+  'lavender blouse with charcoal slacks',
+  'striped oversized shirt with brown pleated skirt',
+  'minimal black turtleneck with camel coat',
+  'soft pink sweater with light gray jeans',
+  'vintage denim jacket with floral dress'
+];
+const WORLDCUP_CAMERA_LENSES = [
+  '35mm phone camera look',
+  '50mm portrait lens look',
+  'slight wide-angle candid phone photo',
+  'soft telephoto street portrait',
+  'front-camera selfie perspective',
+  'low handheld camera perspective'
+];
 const DISTINCT_STYLE_CUES = [
   'soft introvert aura, neat and understated',
   'sporty confident aura, lively expression',
@@ -473,9 +505,22 @@ function visualDiversityCueFor(index: number): string {
   ].join(', ');
 }
 
-function applyImageVariationTriggers(prompt: string, index: number): string {
+function worldcupVisualDiversityCueFor(index: number): string {
+  return [
+    `worldcup candidate visual slot ${index + 1}`,
+    `pose: ${WORLDCUP_POSES[index % WORLDCUP_POSES.length]}`,
+    `outfit: ${WORLDCUP_OUTFITS[(index * 2) % WORLDCUP_OUTFITS.length]}`,
+    `camera: ${WORLDCUP_CAMERA_LENSES[(index * 3) % WORLDCUP_CAMERA_LENSES.length]}`,
+    `background: ${PHOTO_BACKGROUNDS[(index * 7) % PHOTO_BACKGROUNDS.length]}`,
+    `composition: ${PHOTO_COMPOSITIONS[(index * 5) % PHOTO_COMPOSITIONS.length]}`,
+    'must not share the same pose, outfit color, hairstyle, makeup palette, camera angle, or background with the opponent candidate',
+    'make the two visible match-up candidates immediately distinguishable at thumbnail size'
+  ].join(', ');
+}
+
+function applyImageVariationTriggers(prompt: string, index: number, mode?: BlindDateMode): string {
   const source = String(prompt || '').trim();
-  const additions = ['low quality', imageVariationTriggerFor(index), visualDiversityCueFor(index)]
+  const additions = ['low quality', imageVariationTriggerFor(index), visualDiversityCueFor(index), mode === 'worldcup' ? worldcupVisualDiversityCueFor(index) : '']
     .filter(Boolean)
     .filter(item => !source.toLowerCase().includes(item.toLowerCase()));
   return [source, ...additions].filter(Boolean).join(', ');
@@ -512,7 +557,7 @@ function buildQuestionHistory(session: BlindDateSession): string {
   ].join('\n')).join('\n\n');
 }
 
-function normalizeCandidate(raw: Partial<BlindDateCandidate>, index: number): BlindDateCandidate {
+function normalizeCandidate(raw: Partial<BlindDateCandidate>, index: number, mode?: BlindDateMode): BlindDateCandidate {
   const now = Date.now();
   const archetype = ARCHETYPES[(index + Math.floor(Math.random() * ARCHETYPES.length)) % ARCHETYPES.length];
   const appearance = { ...appearanceFor(index), ...(raw.appearance || {}) };
@@ -544,7 +589,7 @@ function normalizeCandidate(raw: Partial<BlindDateCandidate>, index: number): Bl
     snsPreview: String(raw.snsPreview || `오늘은 ${pickFrom(LIKE_POOL)} 덕분에 기분이 조금 풀렸다. #일상 #${job.replace(/\s+/g, '')}`),
     callPreview: String(raw.callPreview || '처음엔 조금 어색해도 목소리 들으면 금방 편해질 것 같아. 너무 부담스럽게 말고, 천천히 얘기하자.'),
     appearance,
-    imagePrompt: applyImageVariationTriggers(String(raw.imagePrompt || buildImagePrompt({ ...raw, age }, appearance)), index),
+    imagePrompt: applyImageVariationTriggers(String(raw.imagePrompt || buildImagePrompt({ ...raw, age }, appearance)), index, mode),
     profileImageUri: String(raw.profileImageUri || ''),
     answers: Array.isArray(raw.answers) ? raw.answers : [],
     score: Number(raw.score || 0),
@@ -554,13 +599,13 @@ function normalizeCandidate(raw: Partial<BlindDateCandidate>, index: number): Bl
   return { ...candidate, imagePrompt: candidate.imagePrompt || buildImagePrompt(candidate, appearance) };
 }
 
-function fallbackCandidates(count: number): BlindDateCandidate[] {
+function fallbackCandidates(count: number, mode?: BlindDateMode): BlindDateCandidate[] {
   const names = shuffled(NAME_POOL);
   const jobs = shuffled(JOB_POOL);
   return Array.from({ length: clampCandidateCount(count) }, (_, index) => normalizeCandidate({
     name: names[index % names.length],
     job: jobs[index % jobs.length]
-  }, index + Math.floor(Math.random() * 1000)));
+  }, index + Math.floor(Math.random() * 1000), mode));
 }
 
 function withEncounterFlavor(candidate: BlindDateCandidate, location: string, index = 0): BlindDateCandidate {
@@ -632,7 +677,7 @@ function candidateFromCharacter(character: SNSGodCharacter, index: number): Blin
     appearance,
     imagePrompt: character.profileAvatarPrompt || buildImagePrompt({ name }, appearance),
     profileImageUri: character.profileImage || character.profileReferenceImage || ''
-  }, index);
+  }, index, 'worldcup');
 }
 
 function compactCandidateText(value: string, max: number): string {
@@ -660,7 +705,14 @@ function diversifyCandidates(candidates: BlindDateCandidate[]): BlindDateCandida
   });
 }
 
-function randomGlobalFaceReference(state: SNSGodState): string | undefined {
+function globalFaceReferenceSlots(state: SNSGodState): string[] {
+  return (state.referenceFaceSlots || [])
+    .map(slot => String(slot.image || '').trim())
+    .filter(value => /^(data:|file:|content:|asset:|https?:\/\/)/i.test(value))
+    .slice(0, 50);
+}
+
+function randomGlobalFaceReference(state: SNSGodState, referencePool?: string[], usedReferences?: Set<string>): string | undefined {
   const slots = (state.referenceFaceSlots || [])
     .map(slot => String(slot.image || '').trim())
     .filter(value => /^(data:|file:|content:|asset:|https?:\/\/)/i.test(value))
@@ -673,7 +725,12 @@ function randomGlobalFaceReference(state: SNSGodState): string | undefined {
   }
   const chancePercent = referenceFaceChancePercent(state);
   if (Math.random() * 100 >= chancePercent) return undefined;
-  return slots[Math.floor(Math.random() * slots.length)];
+  const pool = referencePool?.length ? referencePool : slots;
+  const unused = usedReferences ? pool.filter(value => !usedReferences.has(value)) : pool;
+  const selectable = unused.length ? unused : pool;
+  const selected = selectable[Math.floor(Math.random() * selectable.length)];
+  if (selected && usedReferences) usedReferences.add(selected);
+  return selected;
 }
 
 function referenceFaceChancePercent(state: SNSGodState): number {
@@ -697,7 +754,7 @@ async function generateBlindDateCandidates(state: SNSGodState, mode: BlindDateMo
     : [];
   const generatedCount = Math.max(0, count - existingCandidates.length);
   const traits = streetTraits(options.encounterLocation);
-  let candidates = [...existingCandidates, ...fallbackCandidates(generatedCount).map((candidate, index) => mode === 'encounter' ? withEncounterFlavor(candidate, options.encounterLocation || '성수 카페거리', index) : candidate)];
+  let candidates = [...existingCandidates, ...fallbackCandidates(generatedCount, mode).map((candidate, index) => mode === 'encounter' ? withEncounterFlavor(candidate, options.encounterLocation || '성수 카페거리', index) : candidate)];
   try {
     const { text } = generatedCount > 0 ? await callLLMText(state, [
       {
@@ -735,30 +792,34 @@ async function generateBlindDateCandidates(state: SNSGodState, mode: BlindDateMo
     const parsed = parseJsonObject<{ candidates?: Partial<BlindDateCandidate>[] }>(text);
     if (Array.isArray(parsed?.candidates) && parsed.candidates.length) {
       const generated = parsed.candidates.slice(0, generatedCount).map((item, index) => {
-        const normalized = normalizeCandidate(item, index + Math.floor(Math.random() * 1000));
+        const normalized = normalizeCandidate(item, index + Math.floor(Math.random() * 1000), mode);
         return mode === 'encounter' ? withEncounterFlavor(normalized, options.encounterLocation || '성수 카페거리', index) : normalized;
       });
-      candidates = diversifyCandidates([...existingCandidates, ...generated, ...fallbackCandidates(generatedCount)].slice(0, count));
+      candidates = diversifyCandidates([...existingCandidates, ...generated, ...fallbackCandidates(generatedCount, mode)].slice(0, count));
     }
   } catch (error) {
     await appendDebugLog('blindDate.generate', `candidate generation failed: ${error instanceof Error ? error.message : String(error)}`, 'warn');
   }
   const withImages: BlindDateCandidate[] = [];
+  const referencePool = shuffled(globalFaceReferenceSlots(state));
+  const usedReferences = new Set<string>();
   for (let index = 0; index < candidates.length; index += 4) {
     const batch = candidates.slice(index, index + 4);
-    const generatedBatch = await Promise.all(batch.map(async candidate => {
+    const generatedBatch = await Promise.all(batch.map(async (candidate, batchIndex) => {
     try {
       if (candidate.profileImageUri) return candidate;
-      const faceReferenceImage = randomGlobalFaceReference(state);
+      const candidateIndex = index + batchIndex;
+      const faceReferenceImage = randomGlobalFaceReference(state, referencePool, usedReferences);
+      const imagePrompt = applyImageVariationTriggers(candidate.imagePrompt, candidateIndex, mode);
       void appendDebugLog(
         'blindDate.reference',
-        `mode=${mode} candidate=${candidate.name || candidate.anonymousLabel || '-'} slots=${Math.min(50, (state.referenceFaceSlots || []).filter(slot => String(slot.image || '').trim()).length)} reference=${faceReferenceImage ? 'yes' : 'no'} kind=${faceReferenceImage ? 'profile-reference-face' : 'profile'}`
+        `mode=${mode} candidate=${candidate.name || candidate.anonymousLabel || '-'} slots=${referencePool.length} reference=${faceReferenceImage ? 'yes' : 'no'} kind=${faceReferenceImage ? 'profile-reference-face' : 'profile'}`
       );
-      const profileImageUri = await generateImageDataUri(state, candidate.imagePrompt, undefined, {
+      const profileImageUri = await generateImageDataUri(state, imagePrompt, undefined, {
         kind: faceReferenceImage ? 'profile-reference-face' : 'profile',
         referenceImage: faceReferenceImage
       });
-      return { ...candidate, profileImageUri, faceReferenceImage };
+      return { ...candidate, imagePrompt, profileImageUri, faceReferenceImage };
     } catch (error) {
       void appendDebugLog('blindDate.image', `profile image failed candidate=${candidate.name}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
       return candidate;

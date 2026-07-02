@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors } from '../theme';
 import { makeId } from '../logic/ids';
 import { isRenderableMediaUri, pickPersistentReferenceImageUris } from '../logic/media';
@@ -13,9 +13,32 @@ export function ReferenceFaceScreen({ state, onBack, onChange }: {
   onChange: (next: SNSGodState) => Promise<void> | void;
 }) {
   const slots = (state.referenceFaceSlots || []).slice(0, MAX_REFERENCE_SLOTS);
+  const savedReferenceChance = referenceChancePercent(state);
   const [viewerSlotId, setViewerSlotId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [chanceText, setChanceText] = useState(String(savedReferenceChance));
   const viewerSlot = viewerSlotId ? slots.find(slot => slot.id === viewerSlotId) : undefined;
+  const draftReferenceChance = clampPercent(Number(chanceText));
+
+  async function saveChance() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await onChange({
+        ...state,
+        config: {
+          ...state.config,
+          imageGeneration: {
+            ...(state.config.imageGeneration || {}),
+            referenceFaceChancePercent: draftReferenceChance
+          }
+        }
+      });
+      setChanceText(String(draftReferenceChance));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function addSlot() {
     if (saving) return;
@@ -92,7 +115,25 @@ export function ReferenceFaceScreen({ state, onBack, onChange }: {
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.infoCard}>
           <Text style={styles.infoTitle}>{slots.length}/{MAX_REFERENCE_SLOTS} 슬롯 사용 중</Text>
-          <Text style={styles.infoText}>블라인드 데이트와 이상형 후보 생성 시 약 48% 확률로 등록된 사진 중 1장을 골라 얼굴만 참조합니다. 성격, 직업, 말투, 취향은 계속 AI가 새로 만듭니다.</Text>
+          <Text style={styles.infoText}>블라인드 데이트와 이상형 후보 생성 시 약 {draftReferenceChance}% 확률로 등록된 사진 중 1장을 골라 얼굴만 참조합니다. 나머지 {100 - draftReferenceChance}%는 텍스트 프롬프트만으로 새 얼굴을 만듭니다.</Text>
+          <View style={styles.chanceRow}>
+            <View style={styles.chanceInputWrap}>
+              <Text style={styles.chanceLabel}>레퍼런스 사용 확률</Text>
+              <TextInput
+                value={chanceText}
+                onChangeText={setChanceText}
+                keyboardType="number-pad"
+                maxLength={3}
+                style={styles.chanceInput}
+                placeholder="70"
+                placeholderTextColor="rgba(255,255,255,0.38)"
+              />
+            </View>
+            <Text style={styles.percentText}>%</Text>
+            <Pressable onPress={saveChance} disabled={saving} style={[styles.chanceSaveButton, saving && styles.disabled]}>
+              <Text style={styles.chanceSaveText}>저장</Text>
+            </Pressable>
+          </View>
           <Pressable onPress={addSlot} style={[styles.addButton, (slots.length >= MAX_REFERENCE_SLOTS || saving) && styles.disabled]} disabled={slots.length >= MAX_REFERENCE_SLOTS || saving}>
             <Text style={styles.addButtonText}>{saving ? '저장 중...' : '사진 추가'}</Text>
           </Pressable>
@@ -137,6 +178,14 @@ export function ReferenceFaceScreen({ state, onBack, onChange }: {
   );
 }
 
+function referenceChancePercent(state: SNSGodState): number {
+  return clampPercent(Number(state.config.imageGeneration?.referenceFaceChancePercent));
+}
+
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, Number.isFinite(value) ? Math.round(value) : 70));
+}
+
 function ReferenceViewer({ slot, index, onClose, onReplace, onDelete }: {
   slot: ReferenceFaceSlot;
   index: number;
@@ -175,6 +224,13 @@ const styles = StyleSheet.create({
   infoCard: { padding: 14, borderRadius: 8, backgroundColor: '#111', borderWidth: 1, borderColor: '#111', gap: 10 },
   infoTitle: { color: '#fffefa', fontSize: 18, fontWeight: '900' },
   infoText: { color: '#d8d8d8', fontSize: 13, lineHeight: 19, fontWeight: '700' },
+  chanceRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
+  chanceInputWrap: { flex: 1, minWidth: 0 },
+  chanceLabel: { marginBottom: 6, color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '900' },
+  chanceInput: { minHeight: 44, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.24)', backgroundColor: 'rgba(255,255,255,0.08)', paddingHorizontal: 12, color: '#fffefa', fontSize: 18, fontWeight: '900' },
+  percentText: { minHeight: 44, color: '#fffefa', fontSize: 18, fontWeight: '900', textAlignVertical: 'center' },
+  chanceSaveButton: { minHeight: 44, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fffefa' },
+  chanceSaveText: { color: '#111', fontSize: 14, fontWeight: '900' },
   addButton: { minHeight: 46, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
   addButtonText: { color: '#241a00', fontSize: 15, fontWeight: '900' },
   disabled: { opacity: 0.5 },

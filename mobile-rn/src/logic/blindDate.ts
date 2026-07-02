@@ -671,8 +671,14 @@ function randomGlobalFaceReference(state: SNSGodState): string | undefined {
     void appendDebugLog('blindDate.reference', `reference slots=${slots.length}, provider=${provider}, skipped because this provider does not support image reference generation`, 'warn');
     return undefined;
   }
-  if (Math.random() >= 0.48) return undefined;
+  const chancePercent = referenceFaceChancePercent(state);
+  if (Math.random() * 100 >= chancePercent) return undefined;
   return slots[Math.floor(Math.random() * slots.length)];
+}
+
+function referenceFaceChancePercent(state: SNSGodState): number {
+  const value = Number(state.config.imageGeneration?.referenceFaceChancePercent);
+  return Math.max(0, Math.min(100, Number.isFinite(value) ? value : 70));
 }
 
 export function getBlindDateProgress(state: SNSGodState): BlindDateProgress {

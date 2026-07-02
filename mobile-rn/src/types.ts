@@ -38,6 +38,7 @@ export type ImageGenerationConfig = {
   quality?: string;
   promptPrefix?: string;
   negativePrompt?: string;
+  referenceFaceChancePercent?: number;
   nsfw?: boolean;
   illustrationMode?: boolean;
 };

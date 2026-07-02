@@ -79,6 +79,7 @@ export function createDefaultState(): SNSGodState {
         quality: 'auto',
         promptPrefix: 'Create a realistic in-character phone photo. Natural lighting, casual composition, no text overlay, no watermark.',
         negativePrompt: 'lowres, worst quality, watermark, text, logo, bad anatomy',
+        referenceFaceChancePercent: 70,
         nsfw: false,
         illustrationMode: false
       },

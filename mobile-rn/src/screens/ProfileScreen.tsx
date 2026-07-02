@@ -3,7 +3,7 @@ import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
 import { SNSGodCharacter, SNSGodMessage, SNSGodState } from '../types';
-import { findCharacter, roomMessages } from '../logic/stateHelpers';
+import { findCharacter } from '../logic/stateHelpers';
 import { isRenderableMediaUri } from '../logic/media';
 
 function imageUri(value?: string) {
@@ -24,7 +24,11 @@ export function ProfileScreen({ state, characterId, roomId, onBack, onOpenChat, 
   const [selectedChatImageId, setSelectedChatImageId] = useState('');
   const [chatPromptOpen, setChatPromptOpen] = useState(false);
   const character = findCharacter(state, characterId);
-  const chatImages = useMemo(() => collectChatRoomImages(roomId ? roomMessages(state, roomId) : [], character?.name || '채팅'), [state, roomId, character?.name]);
+  const roomImageMessages = roomId ? state.messages[roomId] || [] : [];
+  const chatImages = useMemo(
+    () => collectChatRoomImages(roomImageMessages, character?.name || '채팅'),
+    [roomImageMessages, character?.name]
+  );
   const selectedChatImage = chatImages.find(item => item.id === selectedChatImageId) || chatImages[0];
   if (!character) {
     return (

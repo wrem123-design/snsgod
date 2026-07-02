@@ -45,46 +45,6 @@ import { forceUpdateRoomMemory } from './logic/memoryBridge';
 
 const INTERRUPTED_REPLY_RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
-function criticalStateFingerprint(state: SNSGodState | null | undefined): string {
-  const messages = Object.fromEntries(Object.entries(state?.messages || {}).map(([roomId, list]) => {
-    const latest = Array.isArray(list) ? list[list.length - 1] : undefined;
-    return [roomId, {
-      count: Array.isArray(list) ? list.length : 0,
-      latestId: latest?.id || '',
-      latestAt: latest?.createdAt || 0
-    }];
-  }));
-  return JSON.stringify({
-    messages,
-    snsPosts: (state?.snsPosts || []).slice(0, 12).map(post => ({
-      id: post.id,
-      characterId: post.characterId,
-      createdAt: post.createdAt,
-      contentLength: String(post.content || '').length
-    })),
-    snsDmThreads: (state?.snsDmThreads || []).slice(0, 20).map(thread => ({
-      id: thread.id,
-      postId: thread.postId || '',
-      messageCount: (thread.messages || []).length,
-      unread: thread.unread || 0
-    })),
-    referenceFaceSlots: (state?.referenceFaceSlots || []).map(slot => ({
-      id: slot.id,
-      createdAt: slot.createdAt,
-      imageLength: String(slot.image || '').length
-    })),
-    meetingEventSessions: (state?.meetingEventSessions || []).map(session => ({
-      id: session.id,
-      status: session.status,
-      startedAt: session.startedAt,
-      endedAt: session.endedAt,
-      summary: session.summary || '',
-      lineCount: (session.lines || []).length
-    })),
-    activeMeetingEventId: state?.activeMeetingEventId || ''
-  });
-}
-
 type Route =
   | { name: 'chatList' }
   | { name: 'settings' }

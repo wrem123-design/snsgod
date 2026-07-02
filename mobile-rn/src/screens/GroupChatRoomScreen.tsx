@@ -146,11 +146,12 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
   onOpenSettings: (roomId: string) => void;
 }) {
   const room = findGroup(state, roomId);
+  const participantKey = Array.isArray(room?.participantIds) ? room.participantIds.join('|') : '';
   const participants = useMemo(() => {
-    const participantIds = Array.isArray(room?.participantIds) ? room.participantIds : [];
+    const participantIds = participantKey ? participantKey.split('|') : [];
     return state.characters.filter(character => participantIds.includes(character.id));
-  }, [state.characters, room]);
-  const messages = state.messages[roomId] || [];
+  }, [state.characters, participantKey]);
+  const messages = useMemo(() => state.messages[roomId] || [], [state.messages, roomId]);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [showStickers, setShowStickers] = useState(false);

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Image, Linking, NativeModules, PermissionsAndroid, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Image, InteractionManager, Linking, NativeModules, PermissionsAndroid, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
@@ -188,6 +188,14 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   onOpenCharacterSettings?: (characterId: string) => void;
 }) {
   const [activeSection, setActiveSection] = useState<SettingsSection>(() => getSettingsSection(state.config.lastSettingsSection));
+  const [contentReady, setContentReady] = useState(false);
+  useEffect(() => {
+    setContentReady(false);
+    const task = InteractionManager.runAfterInteractions(() => {
+      setContentReady(true);
+    });
+    return () => task.cancel();
+  }, [activeSection]);
   const [provider, setProvider] = useState<ApiProvider>(state.config.apiType);
   const profile = useMemo(() => state.config.apiProfiles[provider] || {}, [state.config.apiProfiles, provider]);
   const keySlots = useMemo(() => apiKeySlotsFromProfile(profile), [profile.apiKey, profile.apiKeys]);
@@ -903,6 +911,8 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
         </ScrollView>
       </View>
       <ScrollView contentContainerStyle={styles.content}>
+        {contentReady ? (
+          <>
         {status ? <View style={styles.statusBox}><Text style={styles.statusText}>{status}</Text></View> : null}
         <View style={[styles.card, activeSection !== 'characters' && styles.hidden]}>
           <Text style={styles.cardTitle}>캐릭터별 설정</Text>
@@ -1365,6 +1375,12 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           <Text style={styles.help}>트리거 단어가 나올 때만 참고하는 설정입니다. 현재 공통/캐릭터 로어북 항목은 {(state.loreEntries || []).length}개입니다.</Text>
           <Pressable onPress={onOpenLorebook} style={styles.secondary}><Text style={styles.secondaryText}>로어북 관리</Text></Pressable>
         </View>
+          </>
+        ) : (
+          <View style={styles.loadingCard}>
+            <Text style={styles.loadingText}>설정 불러오는 중...</Text>
+          </View>
+        )}
       </ScrollView>
     </View>
   );
@@ -1412,6 +1428,8 @@ const styles = StyleSheet.create({
   sectionTabTextActive: { color: '#241a00' },
   content: { padding: 16, gap: 14 },
   card: { backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 14 },
+  loadingCard: { minHeight: 96, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panel, alignItems: 'center', justifyContent: 'center', padding: 14 },
+  loadingText: { color: colors.sub, fontWeight: '900' },
   cardHeadRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
   hidden: { display: 'none' },
   cardTitle: { fontSize: 17, fontWeight: '900', color: colors.text, marginBottom: 12 },

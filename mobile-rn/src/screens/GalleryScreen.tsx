@@ -130,7 +130,10 @@ export function GalleryScreen({ state, onBack, onChange }: {
   onBack: () => void;
   onChange: (next: SNSGodState) => Promise<void> | void;
 }) {
-  const items = useMemo(() => collectGalleryItems(state), [state]);
+  const items = useMemo(
+    () => collectGalleryItems(state),
+    [state.characters, state.snsPosts, state.messages]
+  );
   const [selected, setSelected] = useState<GalleryItem | null>(null);
 
   async function deleteItem(item: GalleryItem) {

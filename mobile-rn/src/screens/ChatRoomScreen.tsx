@@ -53,8 +53,26 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
   const room = findRoom(state, roomId);
   const character = findCharacter(state, room?.characterId);
   const isRandomRoom = randomMode || room?.type === 'random';
-  const messages = useMemo(() => roomMessages(state, roomId), [state, roomId]);
+  const messages = useMemo(() => roomMessages(state, roomId), [state.messages, roomId]);
   const displayMessages = useMemo(() => [...messages].reverse(), [messages]);
+  const messageMetaById = useMemo(() => {
+    const meta = new Map<string, { previous?: SNSGodMessage; showDateDivider: boolean }>();
+    messages.forEach((message, index) => {
+      const previous = index > 0 ? messages[index - 1] : undefined;
+      meta.set(message.id, {
+        previous,
+        showDateDivider: index === 0 || !isSameMessageDate(previous?.createdAt, message.createdAt)
+      });
+    });
+    return meta;
+  }, [messages]);
+  const meetingStatusById = useMemo(() => {
+    const status = new Map<string, string | undefined>();
+    for (const session of state.meetingEventSessions || []) {
+      status.set(session.id, session.status);
+    }
+    return status;
+  }, [state.meetingEventSessions]);
   const pendingReplyPhase = state.pendingReplies?.[roomId]?.phase;
   const typing = pendingReplyPhase === 'typing' || pendingReplyPhase === 'generating';
 
@@ -328,14 +346,12 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
         ListHeaderComponent={typing ? <TypingBubble character={character} /> : null}
         renderItem={({ item }) => {
           const meetingSessionId = String(item.meetingEventId || '');
-          const meetingSession = meetingSessionId ? (state.meetingEventSessions || []).find(session => session.id === meetingSessionId) : undefined;
-          const messageIndex = messages.findIndex(message => message.id === item.id);
-          const previousMessage = messageIndex > 0 ? messages[messageIndex - 1] : undefined;
-          const showDateDivider = messageIndex === 0 || !isSameMessageDate(previousMessage?.createdAt, item.createdAt);
+          const messageMeta = messageMetaById.get(item.id);
+          const showDateDivider = messageMeta?.showDateDivider ?? false;
           return (
             <View>
               {showDateDivider ? <DateDivider timestamp={item.createdAt} /> : null}
-              <MessageBubble message={item} character={character} userStickers={state.userStickers || []} roomId={room.id} meetingStatus={meetingSession?.status} onOpenCall={onOpenCall} onStartMeeting={startMeetingEvent} onCancelMeeting={cancelMeetingEvent} onRejectCall={rejectCall} onRetryFailed={retryFailedReply} onOpenImage={setViewerImage} onRetryImage={openImageRetryEditor} regeneratingImageId={regeneratingImageId} />
+              <MessageBubble message={item} character={character} userStickers={state.userStickers || []} roomId={room.id} meetingStatus={meetingSessionId ? meetingStatusById.get(meetingSessionId) : undefined} onOpenCall={onOpenCall} onStartMeeting={startMeetingEvent} onCancelMeeting={cancelMeetingEvent} onRejectCall={rejectCall} onRetryFailed={retryFailedReply} onOpenImage={setViewerImage} onRetryImage={openImageRetryEditor} regeneratingImageId={regeneratingImageId} />
             </View>
           );
         }}

@@ -148,10 +148,33 @@ const FACE_SHAPES = ['soft oval face', 'small angular face', 'heart-shaped face'
 const EYES = ['calm almond-shaped eyes', 'round gentle eyes', 'slightly upturned cat-like eyes', 'soft downturned eyes', 'calm narrow eyes', 'large bright puppy-like eyes', 'sleepy half-lidded eyes', 'clear sharp eyes', 'wide-set gentle eyes', 'deep-set mature eyes', 'smiling crescent eyes', 'cool fox-like eyes'];
 const EYELIDS = ['inner double eyelids', 'monolids', 'natural double eyelids', 'soft hooded eyelids', 'clear eyelid crease', 'thin tapered double eyelids', 'subtle uneven eyelids', 'wide parallel double eyelids'];
 const NOSES = ['small straight nose', 'softly rounded nose tip', 'low delicate nose bridge', 'slim nose', 'natural Korean nose shape', 'short cute nose', 'defined high nose bridge', 'button nose', 'long elegant nose', 'slightly upturned nose tip'];
-const LIPS = ['small heart-shaped lips', 'full soft lips', 'thin delicate lips', 'slightly pouty lips', 'clear cupid bow', 'wide smiling lips', 'small rosebud lips', 'natural bare lips', 'soft blurred lip line', 'defined matte lips'];
-const HAIRS = ['long dark brown layered hair', 'short black bob hair', 'medium wavy black hair', 'long straight ash brown hair', 'low ponytail with soft bangs', 'chin-length blunt bob', 'long black hair with see-through bangs', 'short wolf cut hair', 'half-up wavy hair', 'messy bun with loose strands', 'medium chestnut C-curl hair', 'straight black hime cut', 'natural short pixie-bob', 'long reddish brown hair'];
-const MAKEUPS = ['natural Korean daily makeup', 'clean office makeup', 'soft pink romantic makeup', 'chic cat-eye makeup', 'warm coral makeup', 'barely-there clean makeup', 'muted rose matte makeup', 'cool-toned smoky eye makeup', 'glossy idol-inspired makeup', 'freckle-like natural skin detail makeup', 'bold red lip point makeup', 'soft peach college makeup'];
+const LIPS = ['small heart-shaped lips', 'full soft lips', 'thin delicate lips', 'slightly pouty lips', 'clear cupid bow', 'wide smiling lips', 'small rosebud lips', 'natural bare lips', 'soft blurred lip line', 'defined matte lips', 'soft rounded upper lip', 'asymmetric natural smile line', 'wide natural lip shape', 'delicate small mouth', 'plump glossy lips', 'straight calm lip line'];
+const LIP_COLORS = ['soft pink lips', 'clear rose-pink lips', 'muted coral lips', 'warm peach lips', 'natural beige-pink lips', 'cool mauve lips', 'glossy cherry-tint lips', 'matte rose lips', 'bare natural lip balm', 'soft raspberry lips', 'brownish nude lips', 'bright pink gradient lips', 'brick red point lips', 'milky pink lips', 'clear watermelon tint lips', 'subtle plum lip color'];
+const HAIRS = ['long dark brown layered hair', 'short black bob hair', 'medium wavy black hair', 'long straight ash brown hair', 'low ponytail with soft bangs', 'chin-length blunt bob', 'long black hair with see-through bangs', 'short wolf cut hair', 'half-up wavy hair', 'messy bun with loose strands', 'medium chestnut C-curl hair', 'straight black hime cut', 'natural short pixie-bob', 'long reddish brown hair', 'shoulder-length hush cut hair', 'high ponytail with face-framing strands', 'short layered bob with side part', 'long loose perm hair', 'medium straight hair tucked behind one ear', 'soft brown hippie perm', 'neat low bun', 'airy bangs with long layers', 'sleek black lob hair', 'natural wavy ponytail'];
+const MAKEUPS = ['natural Korean daily makeup', 'clean office makeup', 'soft pink romantic makeup', 'chic cat-eye makeup', 'warm coral makeup', 'barely-there clean makeup', 'muted rose matte makeup', 'cool-toned smoky eye makeup', 'glossy idol-inspired makeup', 'freckle-like natural skin detail makeup', 'bold red lip point makeup', 'soft peach college makeup', '학생스타일의 메이크업', 'fresh university campus makeup', 'polished 직장인 메이크업', 'neat office interview makeup', 'soft cafe-date makeup', 'minimal gym-to-cafe makeup', 'warm bookstore makeup', 'cool winter mute makeup', 'spring bright pink makeup', 'summer clean no-makeup makeup', 'autumn muted brown makeup', 'night-out shimmer eye makeup', 'subtle aegyo-sal highlight makeup', 'matte MLBB makeup', 'clear skin with pink lips makeup', 'elegant hotel-lounge makeup'];
 const BODY_TYPES: CandidateAppearance['bodyType'][] = ['slender', 'petite_slim', 'tall_slender', 'soft_slim', 'athletic_slim'];
+const BODY_SILHOUETTES = [
+  'petite compact frame',
+  'tall long-limbed frame',
+  'soft slim frame with gentle shoulders',
+  'athletic slim frame with toned posture',
+  'delicate narrow-shoulder frame',
+  'balanced average-height frame',
+  'slender model-like proportions',
+  'soft curvy-but-slim silhouette',
+  'small frame with rounded cheeks',
+  'long neck and elegant posture',
+  'healthy yoga-instructor posture',
+  'office-worker straight posture',
+  'relaxed casual slouch posture',
+  'graceful dancer-like posture',
+  'sporty energetic stance',
+  'calm bookstore-reader posture',
+  'confident broad-shoulder styling',
+  'soft feminine silhouette with layered outfit',
+  'minimal chic silhouette',
+  'cozy casual silhouette'
+];
 const PHOTO_COMPOSITIONS = [
   'close-up selfie from a slightly high angle',
   'waist-up mirror selfie with phone partly visible',
@@ -162,7 +185,21 @@ const PHOTO_COMPOSITIONS = [
   'bright window-light portrait',
   'night street flash photo',
   'low-angle casual phone photo',
-  'soft side-profile portrait'
+  'soft side-profile portrait',
+  'full-body street snapshot with face clear',
+  'knee-up candid portrait in motion',
+  'over-the-shoulder cafe portrait',
+  'elevator mirror selfie with different phone angle',
+  'outdoor bench portrait from slight distance',
+  'bookstore browsing candid with face visible',
+  'restaurant table candid looking sideways',
+  'riverside walking photo with wind in hair',
+  'office hallway portrait with one hand in pocket',
+  'gallery wall portrait with asymmetrical framing',
+  'close portrait cropped above shoulders, direct gaze',
+  'two-thirds body portrait with bag strap gesture',
+  'night flash candid with playful expression',
+  'quiet indoor window reflection portrait'
 ];
 const PHOTO_BACKGROUNDS = [
   'small independent cafe background',
@@ -174,7 +211,58 @@ const PHOTO_BACKGROUNDS = [
   'flower shop background',
   'minimal apartment room background',
   'restaurant table background',
-  'city street crosswalk background'
+  'city street crosswalk background',
+  'university library steps background',
+  'modern office elevator lobby background',
+  'yoga studio hallway background',
+  'vinyl record shop background',
+  'rainy bus stop background',
+  'hotel lobby lounge background',
+  'rooftop evening city background',
+  'neighborhood bakery front background',
+  'Han River picnic mat background',
+  'photo booth curtain background',
+  'plant-filled apartment balcony background',
+  'underground parking elevator background',
+  'Seongsu brick alley background',
+  'department store cosmetics floor background',
+  'cozy laundromat background'
+];
+const ACCESSORY_CUES = [
+  'tiny silver hoop earrings',
+  'thin gold necklace',
+  'black ribbon hair tie',
+  'canvas tote bag',
+  'small leather shoulder bag',
+  'round metal glasses',
+  'clear acetate glasses',
+  'baseball cap held in hand',
+  'wireless earbuds in one ear',
+  'simple wristwatch',
+  'colorful scarf',
+  'hair claw clip',
+  'mini backpack strap',
+  'delicate pearl earrings',
+  'no visible accessories',
+  'phone case with sticker detail'
+];
+const EXPRESSION_CUES = [
+  'quiet neutral expression',
+  'wide friendly smile',
+  'small shy smile',
+  'cool unsmiling gaze',
+  'laughing candid expression',
+  'slightly surprised eye contact',
+  'soft tired after-work expression',
+  'playful teasing smile',
+  'thoughtful bookstore expression',
+  'confident direct gaze',
+  'awkward first-meeting smile',
+  'gentle warm eyes',
+  'mischievous side glance',
+  'calm mature expression',
+  'bright energetic expression',
+  'reserved introvert expression'
 ];
 const WORLDCUP_POSES = [
   'standing three-quarter pose with one shoulder angled toward camera',
@@ -446,17 +534,17 @@ function appearanceFor(index: number): CandidateAppearance {
     faceShape: FACE_SHAPES[index % FACE_SHAPES.length],
     eyes: EYES[index % EYES.length],
     eyelids: EYELIDS[index % EYELIDS.length],
-    eyebrows: ['straight soft eyebrows', 'soft arched eyebrows', 'neat natural eyebrows', 'thin elegant eyebrows', 'slightly thick natural eyebrows'][index % 5],
+    eyebrows: ['straight soft eyebrows', 'soft arched eyebrows', 'neat natural eyebrows', 'thin elegant eyebrows', 'slightly thick natural eyebrows', 'short natural eyebrows', 'high arched chic eyebrows', 'soft flat student-style eyebrows'][index % 8],
     nose: NOSES[index % NOSES.length],
     lips: LIPS[index % LIPS.length],
-    cheeks: ['gentle cheek volume', 'slightly flushed cheeks', 'soft cheek line', 'clear cheek texture', 'subtle smile lines'][index % 5],
-    jawline: ['slim V-line jaw', 'soft rounded jawline', 'small angular jawline', 'gentle jaw with soft edges', 'clean narrow jawline'][index % 5],
-    chin: ['small rounded chin', 'soft pointed chin', 'delicate small chin', 'balanced oval chin', 'short rounded chin'][index % 5],
-    skinTone: ['fair neutral Korean skin tone', 'warm ivory skin tone', 'clear light beige skin tone', 'neutral porcelain skin tone', 'soft natural Korean skin tone'][index % 5],
-    distinctiveMarks: [['tiny mole under one eye'], ['faint dimples'], ['subtle aegyo-sal under eyes'], ['clear skin texture'], ['gentle smile lines']][index % 5],
+    cheeks: ['gentle cheek volume', 'slightly flushed cheeks', 'soft cheek line', 'clear cheek texture', 'subtle smile lines', 'round soft cheeks', 'high cheekbone shadow', 'natural cheek redness'][index % 8],
+    jawline: ['slim V-line jaw', 'soft rounded jawline', 'small angular jawline', 'gentle jaw with soft edges', 'clean narrow jawline', 'short round jawline', 'mature defined jawline', 'wide friendly jawline'][index % 8],
+    chin: ['small rounded chin', 'soft pointed chin', 'delicate small chin', 'balanced oval chin', 'short rounded chin', 'slightly cleft natural chin', 'soft square chin', 'tiny pointed chin'][index % 8],
+    skinTone: ['fair neutral Korean skin tone', 'warm ivory skin tone', 'clear light beige skin tone', 'neutral porcelain skin tone', 'soft natural Korean skin tone', 'slightly sun-kissed beige skin tone', 'cool fair skin tone', 'warm peach undertone skin'][index % 8],
+    distinctiveMarks: [['tiny mole under one eye'], ['faint dimples'], ['subtle aegyo-sal under eyes'], ['clear skin texture'], ['gentle smile lines'], ['tiny beauty mark near lip'], ['natural under-eye shadows'], ['soft freckles on nose bridge']][index % 8],
     hairStyle: HAIRS[index % HAIRS.length],
-    hairColor: ['dark brown', 'black', 'soft black', 'ash brown', 'natural black'][index % 5],
-    heightCm: [164, 158, 167, 162, 170][index % 5],
+    hairColor: ['dark brown', 'black', 'soft black', 'ash brown', 'natural black', 'chestnut brown', 'cool black', 'reddish brown', 'milk tea brown', 'blue-black'][index % 10],
+    heightCm: [153, 156, 158, 161, 164, 167, 170, 173, 160, 166][index % 10],
     bodyType: BODY_TYPES[index % BODY_TYPES.length],
     makeupStyle: MAKEUPS[index % MAKEUPS.length],
     outfitStyle: ARCHETYPES[index % ARCHETYPES.length].outfit
@@ -464,6 +552,7 @@ function appearanceFor(index: number): CandidateAppearance {
 }
 
 function buildImagePrompt(candidate: Partial<BlindDateCandidate>, appearance: CandidateAppearance): string {
+  const index = Number(String(candidate.id || candidate.name || candidate.age || '').split('').reduce((sum, char) => sum + char.charCodeAt(0), 0)) || Number(candidate.age || 27);
   return [
     `adult Asian woman, ${appearance.ethnicityDetail}, age ${candidate.age || 27}`,
     appearance.faceShape,
@@ -472,6 +561,7 @@ function buildImagePrompt(candidate: Partial<BlindDateCandidate>, appearance: Ca
     appearance.eyebrows,
     appearance.nose,
     appearance.lips,
+    LIP_COLORS[index % LIP_COLORS.length],
     appearance.cheeks,
     appearance.jawline,
     appearance.chin,
@@ -480,11 +570,15 @@ function buildImagePrompt(candidate: Partial<BlindDateCandidate>, appearance: Ca
     appearance.hairStyle,
     appearance.hairColor,
     appearance.makeupStyle,
+    BODY_SILHOUETTES[(index * 3) % BODY_SILHOUETTES.length],
     `${appearance.bodyType.replaceAll('_', ' ')} figure`,
     `wearing ${appearance.outfitStyle}`,
+    ACCESSORY_CUES[(index * 5) % ACCESSORY_CUES.length],
+    EXPRESSION_CUES[(index * 7) % EXPRESSION_CUES.length],
     'low quality',
-    'realistic Korean social profile photo, natural candid portrait composition, face clearly visible, clean modern everyday background, soft realistic lighting, natural skin texture, high quality, distinct facial features, not similar to other candidates',
-    'no minor, no child, no teen, no school uniform, no western face, no clone, no duplicate, no text, no logo, no watermark, no explicit clothing'
+    'realistic Korean personal snapshot, not a standardized profile photo, not an ID photo, not a template selfie, face clearly visible, natural skin texture, distinctive individual styling',
+    'vary body silhouette, makeup palette, lip color, pose, clothing category, accessory, camera distance, and background from every other candidate',
+    'no minor, no child, no teen, no school uniform, no western face, no clone, no duplicate, no same-face generation, no text, no logo, no watermark, no explicit clothing'
   ].filter(Boolean).join(', ');
 }
 
@@ -498,10 +592,15 @@ function visualDiversityCueFor(index: number): string {
   return [
     `unique candidate visual identity ${index % 97}`,
     DISTINCT_STYLE_CUES[index % DISTINCT_STYLE_CUES.length],
+    BODY_SILHOUETTES[(index * 11) % BODY_SILHOUETTES.length],
+    MAKEUPS[(index * 13) % MAKEUPS.length],
+    LIP_COLORS[(index * 17) % LIP_COLORS.length],
+    ACCESSORY_CUES[(index * 19) % ACCESSORY_CUES.length],
+    EXPRESSION_CUES[(index * 23) % EXPRESSION_CUES.length],
     PHOTO_COMPOSITIONS[(index * 3) % PHOTO_COMPOSITIONS.length],
     PHOTO_BACKGROUNDS[(index * 5) % PHOTO_BACKGROUNDS.length],
-    `distinct from every other candidate: different face shape, eye shape, eyelids, nose, lips, hairstyle, makeup, outfit color, camera angle, and background`,
-    `avoid same woman, avoid twin, avoid clone, avoid similar selfie pose, avoid same hair and same outfit`
+    `distinct from every other candidate: different body silhouette, face shape, eye shape, eyelids, nose, lips, lip color, hairstyle, makeup, outfit color, camera angle, and background`,
+    `avoid same woman, avoid twin, avoid clone, avoid similar profile-photo pose, avoid same hair, same outfit, same pink makeup, same small smile`
   ].join(', ');
 }
 
@@ -510,6 +609,11 @@ function worldcupVisualDiversityCueFor(index: number): string {
     `worldcup candidate visual slot ${index + 1}`,
     `pose: ${WORLDCUP_POSES[index % WORLDCUP_POSES.length]}`,
     `outfit: ${WORLDCUP_OUTFITS[(index * 2) % WORLDCUP_OUTFITS.length]}`,
+    `body silhouette: ${BODY_SILHOUETTES[(index * 3) % BODY_SILHOUETTES.length]}`,
+    `makeup: ${MAKEUPS[(index * 5) % MAKEUPS.length]}`,
+    `lip color: ${LIP_COLORS[(index * 7) % LIP_COLORS.length]}`,
+    `accessory: ${ACCESSORY_CUES[(index * 11) % ACCESSORY_CUES.length]}`,
+    `expression: ${EXPRESSION_CUES[(index * 13) % EXPRESSION_CUES.length]}`,
     `camera: ${WORLDCUP_CAMERA_LENSES[(index * 3) % WORLDCUP_CAMERA_LENSES.length]}`,
     `background: ${PHOTO_BACKGROUNDS[(index * 7) % PHOTO_BACKGROUNDS.length]}`,
     `composition: ${PHOTO_COMPOSITIONS[(index * 5) % PHOTO_COMPOSITIONS.length]}`,
@@ -775,7 +879,9 @@ async function generateBlindDateCandidates(state: SNSGodState, mode: BlindDateMo
           'For every candidate, strongly vary face shape, eye shape, eyelids, eyebrows, nose bridge, nose tip, lips, cheeks, jawline, chin, skin tone, hair length, hair texture, hair color, makeup intensity, outfit color, camera angle, background, and photo composition.',
           'Do not give all candidates black wavy hair, the same pink makeup, the same white shirt, the same close selfie crop, or the same indoor background.',
           'Every imagePrompt must be written in English only.',
-          'Profile images should feel like realistic Korean social profile photos, but each candidate must use a clearly different everyday portrait composition and setting.',
+          'Do not write generic profile-photo prompts. Avoid repeating "realistic Korean social profile photo" as a fixed template.',
+          'Every imagePrompt must feel like a distinct personal snapshot or candid dating-app image with a different body silhouette, makeup style, lip color, hair shape, clothing category, accessory, pose, camera distance, and background.',
+          'Use a wide mix such as student-style makeup, office-worker makeup, pink lips, coral lips, nude lips, glossy tint, sporty styling, soft cardigan, blazer, street outfit, long-limbed body, petite frame, athletic slim frame, soft slim silhouette, and different expressions.',
           'Every imagePrompt must include the exact phrase "low quality" as a variation trigger.',
           'For some candidates, intermittently include one or more of these variation triggers exactly as written to diversify faces: "20-year-old Korean adult woman taking an Instagram selfie", "학생스타일의 메이크업", "K-pop idol inspired makeup".',
           'For each candidate, include snsPreview as one realistic Korean SNS caption example, and callPreview as one short Korean first-call line.',
@@ -2187,8 +2293,9 @@ export async function createMixedBlindDateSession(state: SNSGodState, firstArchi
           'Return JSON only for one candidate object.',
           'The mixed candidate must still feel like a coherent realistic adult Asian woman in modern Korea.',
           'Do not copy either source exactly. Blend personality, speech style, relationship style, job/lifestyle, likes, and SNS style.',
-          'imagePrompt must be English only and must describe a realistic Korean social profile photo with natural everyday portrait composition.',
-          'imagePrompt must include the exact phrase "low quality" and may include one or more variation triggers exactly as written, such as "20-year-old Korean adult woman taking an Instagram selfie", "학생스타일의 메이크업", or "K-pop idol inspired makeup" to avoid duplicate faces.',
+          'imagePrompt must be English only and must not be a generic profile-photo template.',
+          'imagePrompt must describe a distinct candid dating-app snapshot with different body silhouette, makeup, lip color, outfit category, accessory, pose, camera distance, and background from both source candidates.',
+          'imagePrompt must include the exact phrase "low quality" and may include one or more variation triggers exactly as written, such as "20-year-old Korean adult woman taking an Instagram selfie", "학생스타일의 메이크업", "직장인 메이크업", "pink lips", "coral lips", or "K-pop idol inspired makeup" to avoid duplicate faces.',
           'Include snsPreview as one realistic Korean SNS caption example, and callPreview as one short Korean first-call line.',
           'Do not mention school uniform, minor, teen, or explicit clothing.'
         ].join('\n')

@@ -26,6 +26,31 @@ type PhoneTurn = {
 };
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const PHONE_CONNECTION_GLITCH_PATTERN = /(내\s*말\s*들려|목소리\s*들려|말\s*들려|잘\s*안\s*들|안\s*들려|통화\s*(?:상태|품질)|신호(?:가|는)?|끊기|끊겨|지직|노이즈|소리\s*(?:깨|끊))/i;
+const REPEATED_GLITCH_REPLACEMENTS = [
+  '응, 방금 네 말 생각하고 있었어. 계속 얘기해줘.',
+  '응, 나 여기 있어. 네 얘기 더 듣고 싶어.',
+  '잠깐 생각했어. 그 말은 좀 오래 남을 것 같아.'
+];
+
+function isPhoneConnectionGlitch(text: string) {
+  return PHONE_CONNECTION_GLITCH_PATTERN.test(text);
+}
+
+function replaceRepeatedPhoneGlitches(sourceLines: string[], previousLines: CallLine[], allowNewGlitch: boolean) {
+  let glitchAlreadyUsed = previousLines.some(line => line.speaker === 'character' && isPhoneConnectionGlitch(line.text));
+  let replacementIndex = previousLines.length % REPEATED_GLITCH_REPLACEMENTS.length;
+  return sourceLines.map(line => {
+    if (!isPhoneConnectionGlitch(line)) return line;
+    if (!glitchAlreadyUsed && allowNewGlitch) {
+      glitchAlreadyUsed = true;
+      return line;
+    }
+    const replacement = REPEATED_GLITCH_REPLACEMENTS[replacementIndex % REPEATED_GLITCH_REPLACEMENTS.length];
+    replacementIndex += 1;
+    return replacement;
+  });
+}
 
 export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack, onChange, onRequestReply }: {
   state: SNSGodState;
@@ -58,6 +83,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
   const endingRef = useRef(false);
   const bootedRef = useRef(false);
   const typingTokenRef = useRef(0);
+  const connectionGlitchAllowedRef = useRef(Math.random() < 0.25);
   const ring = useRef(new Animated.Value(0)).current;
   const cardFade = useRef(new Animated.Value(1)).current;
   const backgroundUri = useMemo(() => {
@@ -174,13 +200,23 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
     addLine('character', text);
   }
 
-  function parsePhoneTurn(text: string): { lines: string[]; choices: string[]; uiMode: CallTurnUiMode; allowDirectReply: boolean } {
+  function sanitizePhoneLines(sourceLines: string[], previousLines: CallLine[]) {
+    const latestUserLine = [...previousLines].reverse().find(item => item.speaker === 'user')?.text || '';
+    const allowPromptedConnectionCheck = isPhoneConnectionGlitch(latestUserLine);
+    const allowNewGlitch = connectionGlitchAllowedRef.current || allowPromptedConnectionCheck;
+    const nextLines = replaceRepeatedPhoneGlitches(sourceLines, previousLines, allowNewGlitch);
+    const keptNewGlitch = nextLines.some((line, index) => line === sourceLines[index] && isPhoneConnectionGlitch(line));
+    if (keptNewGlitch && !allowPromptedConnectionCheck) connectionGlitchAllowedRef.current = false;
+    return nextLines;
+  }
+
+  function parsePhoneTurn(text: string, previousLines: CallLine[]): { lines: string[]; choices: string[]; uiMode: CallTurnUiMode; allowDirectReply: boolean } {
     const parsed = parseJsonObject<PhoneTurn>(text);
     const sourceLines = parsed
       ? parsed.lines || parsed.characterLines || parsed.dialogue || [parsed.line || parsed.content || parsed.text || '']
       : [text];
     const parsedChoices = parsed?.choices || parsed?.options || [];
-    const nextLines = sourceLines.map(item => String(item || '').trim()).filter(Boolean).slice(0, 3);
+    const nextLines = sanitizePhoneLines(sourceLines.map(item => String(item || '').trim()).filter(Boolean).slice(0, 3), previousLines);
     const nextChoices = parsedChoices.map(item => String(item || '').trim()).filter(Boolean).slice(0, 3);
     const mode = parsed?.uiMode === 'next' || parsed?.uiMode === 'input' || parsed?.uiMode === 'mixed' || parsed?.uiMode === 'choices'
       ? parsed.uiMode
@@ -234,6 +270,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
             'Return raw JSON only: {"lines":["short spoken line 1","short spoken line 2"],"choices":["user reply option 1","user reply option 2","user reply option 3"],"uiMode":"next|choices|input|mixed","allowDirectReply":true}.',
             'Lines must contain 1-3 short spoken live phone lines. Each line is shown as one card page. No narration, no action descriptions, no speaker labels, no phone-call markers, no SNS posts.',
             'Choices must be concise, varied, and directly reply to the spoken lines.',
+            'A bad-connection or hearing-trouble moment such as "Can you hear me?" is a rare live-call flavor. Use it at most once in the entire call, never twice, and do not use it if it already appears in the transcript.',
             firstTurn ? 'For the first connected turn, uiMode may be next if the character is starting with a short greeting.' : 'Use choices when the user should answer meaningfully.',
             `Character profile:\n${character.prompt || '(empty)'}`,
             `User profile:\n${state.config.userDescription || '(empty)'}`,
@@ -251,10 +288,11 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
           ].join('\n\n')
         }
       ]);
-      const turn = parsePhoneTurn(result.text);
+      const turn = parsePhoneTurn(result.text, baseLines);
       await showCharacterPage(turn.lines, 0, turn.choices, turn.uiMode, turn.allowDirectReply);
     } catch {
-      await showCharacterPage(['잠깐만... 목소리 들려?'], 0, ['다시 말해줘.', '괜찮아?', '나중에 다시 통화하자.'], 'choices', true);
+      const fallbackLines = sanitizePhoneLines(['잠깐만... 목소리 들려?'], baseLines);
+      await showCharacterPage(fallbackLines, 0, ['다시 말해줘.', '괜찮아?', '나중에 다시 통화하자.'], 'choices', true);
     }
   }
 

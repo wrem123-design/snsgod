@@ -226,10 +226,9 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
     }));
     const jobId = beginChatJob(roomId);
     try {
-      const firstSpeaker = chooseFallbackSpeaker(participants, stateRef.current.messages[roomId] || []);
-      if (firstSpeaker) {
-        setTypingCharacters([firstSpeaker]);
-        await sleep(characterDelayMs(stateRef.current, firstSpeaker));
+      const firstReader = chooseFallbackSpeaker(participants, stateRef.current.messages[roomId] || []);
+      if (firstReader) {
+        await sleep(characterDelayMs(stateRef.current, firstReader));
         if (!isCurrentChatJob(roomId, jobId)) return;
         await commitCurrent(current => markUserMessagesRead(current, roomId));
       }

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors } from '../theme';
 import { BlindDateCandidate, BlindDateCandidateArchive, BlindDateRound, BlindDateSession, SNSGodState } from '../types';
 import {
@@ -62,6 +62,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
   const [mixArchiveIds, setMixArchiveIds] = useState<string[]>([]);
   const [profileIndex, setProfileIndex] = useState(0);
   const [profileRefilling, setProfileRefilling] = useState(false);
+  const [detailCandidate, setDetailCandidate] = useState<BlindDateCandidate | null>(null);
   const progress = getBlindDateProgress(state);
   const activeSession = activeBlindDateSession(state);
   const session = entryMode === 'encounter'
@@ -332,6 +333,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
                 onPass={passProfileCandidate}
                 onSelect={chooseCandidate}
                 onArchive={archiveCandidate}
+                onOpenDetails={setDetailCandidate}
               />
             ) : session.mode === 'question' ? (
               <QuestionMode
@@ -347,7 +349,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
                 busy={busy}
               />
             ) : session.mode === 'rotation' ? (
-              <RotationMode session={session} rotationText={rotationText} setRotationText={setRotationText} activeCandidateId={rotationCandidateId} setActiveCandidateId={setRotationCandidateId} onSend={sendRotationTurn} onSelect={chooseCandidate} busy={busy} />
+              <RotationMode session={session} rotationText={rotationText} setRotationText={setRotationText} activeCandidateId={rotationCandidateId} setActiveCandidateId={setRotationCandidateId} onSend={sendRotationTurn} onSelect={chooseCandidate} onOpenDetails={setDetailCandidate} busy={busy} />
             ) : null}
 
             {session.mode === 'question' && session.rounds.length >= Number(session.questionTarget || 5) && session.rounds.every(round => round.selectedAnswerId) && session.status !== 'revealing' && session.status !== 'completed' ? (
@@ -355,7 +357,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
             ) : null}
 
             {(session.mode === 'question' || session.mode === 'rotation') && (session.status === 'revealing' || session.finalRanking?.length) ? (
-              <RankingBlock mode={session.mode} candidates={session.candidates} ranking={session.finalRanking || []} selectedCandidateId={session.selectedCandidateId} onSelect={chooseCandidate} onArchive={archiveCandidate} />
+              <RankingBlock mode={session.mode} candidates={session.candidates} ranking={session.finalRanking || []} selectedCandidateId={session.selectedCandidateId} onSelect={chooseCandidate} onArchive={archiveCandidate} onOpenDetails={setDetailCandidate} />
             ) : null}
 
             {session.mode !== 'encounter' && importCandidate ? (
@@ -368,6 +370,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
           </>
         )}
       </ScrollView>
+      <CandidateDetailModal candidate={detailCandidate} onClose={() => setDetailCandidate(null)} />
     </View>
   );
 }
@@ -638,13 +641,14 @@ function StatPill({ label, value, strong, danger }: { label: string; value: stri
   );
 }
 
-function ProfileGachaMode({ session, activeIndex, refilling, onPass, onSelect, onArchive }: {
+function ProfileGachaMode({ session, activeIndex, refilling, onPass, onSelect, onArchive, onOpenDetails }: {
   session: BlindDateSession;
   activeIndex: number;
   refilling?: boolean;
   onPass: () => void;
   onSelect: (candidateId: string) => void;
   onArchive: (candidateId: string) => void;
+  onOpenDetails: (candidate: BlindDateCandidate) => void;
 }) {
   const safeIndex = Math.min(activeIndex, Math.max(0, session.candidates.length - 1));
   const candidate = session.candidates[safeIndex];
@@ -666,9 +670,11 @@ function ProfileGachaMode({ session, activeIndex, refilling, onPass, onSelect, o
             <Text style={styles.gachaName}>{candidate.name} · {candidate.age}</Text>
             <Text style={styles.gachaJob}>{candidate.job} · {candidate.locationBase}</Text>
           </View>
-          <Pressable onPress={() => onArchive(candidate.id)} style={styles.archiveMiniButton}><Text style={styles.archiveMiniText}>보관</Text></Pressable>
+          <Pressable onPress={() => onArchive(candidate.id)} style={styles.archiveMiniButton}><Text style={styles.archiveMiniText}>보관함</Text></Pressable>
         </View>
-        {candidate.profileImageUri ? <Image source={{ uri: candidate.profileImageUri }} style={styles.gachaImage} /> : <View style={styles.hiddenImage}><Text style={styles.hiddenText}>{candidate.name.slice(0, 1)}</Text></View>}
+        <Pressable onPress={() => onOpenDetails(candidate)}>
+          {candidate.profileImageUri ? <Image source={{ uri: candidate.profileImageUri }} style={styles.gachaImage} /> : <View style={styles.hiddenImage}><Text style={styles.hiddenText}>{candidate.name.slice(0, 1)}</Text></View>}
+        </Pressable>
 
         <View style={styles.gachaSection}>
           <Text style={styles.gachaLabel}>프로필</Text>
@@ -716,11 +722,15 @@ function ProfileGachaMode({ session, activeIndex, refilling, onPass, onSelect, o
   );
 }
 
-function CandidateCard({ candidate, selected, revealed, onSelect, onArchive, selectLabel, selectDisabled }: { candidate: BlindDateCandidate; selected?: boolean; revealed?: boolean; onSelect: () => void; onArchive?: () => void; selectLabel?: string; selectDisabled?: boolean }) {
+function CandidateCard({ candidate, selected, revealed, onSelect, onArchive, onOpenDetails, selectLabel, selectDisabled }: { candidate: BlindDateCandidate; selected?: boolean; revealed?: boolean; onSelect: () => void; onArchive?: () => void; onOpenDetails?: () => void; selectLabel?: string; selectDisabled?: boolean }) {
   const tags = [candidate.contactPresetId, candidate.hobbies[0], candidate.locationBase].filter(Boolean).slice(0, 3);
   return (
     <View style={[styles.candidateCard, selected && styles.candidateSelected]}>
-      {revealed && candidate.profileImageUri ? <Image source={{ uri: candidate.profileImageUri }} style={styles.profileImage} /> : <View style={styles.hiddenImage}><Text style={styles.hiddenText}>{candidate.anonymousLabel || '?'}</Text></View>}
+      {revealed && onOpenDetails ? (
+        <Pressable onPress={onOpenDetails}>
+          {candidate.profileImageUri ? <Image source={{ uri: candidate.profileImageUri }} style={styles.profileImage} /> : <View style={styles.hiddenImage}><Text style={styles.hiddenText}>{candidate.name.slice(0, 1)}</Text></View>}
+        </Pressable>
+      ) : revealed && candidate.profileImageUri ? <Image source={{ uri: candidate.profileImageUri }} style={styles.profileImage} /> : <View style={styles.hiddenImage}><Text style={styles.hiddenText}>{candidate.anonymousLabel || '?'}</Text></View>}
       <Text style={styles.candidateName}>{revealed ? `${candidate.name} · ${candidate.age}` : `${candidate.anonymousLabel}번 후보`}</Text>
       <Text style={styles.candidateJob}>{revealed ? candidate.job : '정체 비공개'}</Text>
       <Text style={styles.candidateBody}>{revealed ? candidate.personalitySummary : '답변만 보고 선택해보세요.'}</Text>
@@ -738,7 +748,8 @@ function CandidateCard({ candidate, selected, revealed, onSelect, onArchive, sel
         <Pressable disabled={selectDisabled} onPress={onSelect} style={[styles.selectButton, selected && styles.selectButtonActive, selectDisabled && styles.disabled]}>
           <Text style={[styles.selectButtonText, selected && styles.selectButtonTextActive]}>{selected ? '선택됨' : selectLabel || '이 사람 선택'}</Text>
         </Pressable>
-        {onArchive ? <Pressable onPress={onArchive} style={styles.archiveMiniButton}><Text style={styles.archiveMiniText}>보관</Text></Pressable> : null}
+        {onOpenDetails ? <Pressable onPress={onOpenDetails} style={styles.archiveMiniButton}><Text style={styles.archiveMiniText}>자세히</Text></Pressable> : null}
+        {onArchive ? <Pressable onPress={onArchive} style={styles.archiveMiniButton}><Text style={styles.archiveMiniText}>보관함</Text></Pressable> : null}
       </View>
     </View>
   );
@@ -760,6 +771,10 @@ function QuestionMode({ sessionId, candidates, rounds, questionTarget, questions
   const latestRound = rounds[rounds.length - 1];
   const reachedTarget = rounds.length >= questionTarget;
   const canAsk = !reachedTarget && (!latestRound || Boolean(latestRound.selectedAnswerId));
+  const displayNoFor = (candidateId: string) => {
+    const index = candidates.findIndex(candidate => candidate.id === candidateId);
+    return index >= 0 ? index + 1 : 0;
+  };
 
   useEffect(() => {
     setVisibleQuestions(pickQuestionSet(questions));
@@ -773,7 +788,7 @@ function QuestionMode({ sessionId, candidates, rounds, questionTarget, questions
   return (
     <View style={styles.section}>
       <View style={styles.blindLine}>
-        {candidates.map(candidate => <View key={candidate.id} style={styles.blindToken}><Text style={styles.blindTokenText}>{candidate.anonymousLabel}</Text></View>)}
+        {candidates.map((candidate, index) => <View key={candidate.id} style={styles.blindToken}><Text style={styles.blindTokenText}>{index + 1}</Text></View>)}
       </View>
       {canAsk ? (
         <View style={styles.questionBox}>
@@ -800,7 +815,7 @@ function QuestionMode({ sessionId, candidates, rounds, questionTarget, questions
           <Text style={styles.roundQuestion}>Q{round.roundIndex}. {round.question}</Text>
           {round.answers.map(answer => (
             <Pressable key={answer.id} onPress={() => onSelectAnswer(round, answer.id)} disabled={Boolean(round.selectedAnswerId)} style={[styles.answerCard, round.selectedAnswerId === answer.id && styles.answerSelected]}>
-              <Text style={styles.answerLabel}>{answer.anonymousLabel}번</Text>
+              <Text style={styles.answerLabel}>{displayNoFor(answer.candidateId) || answer.anonymousLabel}번</Text>
               <Text style={styles.answerText}>{answer.text}</Text>
               <Text style={styles.answerPick}>{round.selectedAnswerId === answer.id ? '선택됨' : round.selectedAnswerId ? '' : '이 답변 선택'}</Text>
             </Pressable>
@@ -914,7 +929,7 @@ const ROTATION_QUESTION_POOL = [
   '네가 연애에서 가장 쉽게 흔들리는 순간은 언제야?'
 ];
 
-function RotationMode({ session, rotationText, setRotationText, activeCandidateId, setActiveCandidateId, onSend, onSelect, busy }: {
+function RotationMode({ session, rotationText, setRotationText, activeCandidateId, setActiveCandidateId, onSend, onSelect, onOpenDetails, busy }: {
   session: BlindDateSession;
   rotationText: string;
   setRotationText: (value: string) => void;
@@ -922,6 +937,7 @@ function RotationMode({ session, rotationText, setRotationText, activeCandidateI
   setActiveCandidateId: (value: string) => void;
   onSend: (candidateId: string, presetText?: string) => void;
   onSelect: (candidateId: string) => void;
+  onOpenDetails: (candidate: BlindDateCandidate) => void;
   busy?: boolean;
 }) {
   const [introIndex, setIntroIndex] = useState(0);
@@ -1049,7 +1065,7 @@ function RotationMode({ session, rotationText, setRotationText, activeCandidateI
       </ScrollView>
       {current ? (
         <View style={styles.rotationPanel}>
-          <CandidateCard candidate={current} selected={session.selectedCandidateId === current.id} revealed onSelect={() => onSelect(current.id)} selectDisabled selectLabel="대화 진행 중" />
+          <CandidateCard candidate={current} selected={session.selectedCandidateId === current.id} revealed onSelect={() => onSelect(current.id)} onOpenDetails={() => onOpenDetails(current)} selectDisabled selectLabel="대화 진행 중" />
           <View style={styles.rotationTalk}>
             {turns.length ? turns.map(turn => (
               <View key={turn.id} style={styles.rotationTurn}>
@@ -1083,27 +1099,77 @@ function RotationMode({ session, rotationText, setRotationText, activeCandidateI
   );
 }
 
-function RankingBlock({ mode, candidates, ranking, selectedCandidateId, onSelect, onArchive }: { mode?: string; candidates: BlindDateCandidate[]; ranking: { candidateId: string; rank: number; score: number; selectedCount: number; reason: string }[]; selectedCandidateId?: string; onSelect: (candidateId: string) => void; onArchive?: (candidateId: string) => void }) {
+function RankingBlock({ mode, candidates, ranking, selectedCandidateId, onSelect, onArchive, onOpenDetails }: { mode?: string; candidates: BlindDateCandidate[]; ranking: { candidateId: string; rank: number; score: number; selectedCount: number; reason: string }[]; selectedCandidateId?: string; onSelect: (candidateId: string) => void; onArchive?: (candidateId: string) => void; onOpenDetails?: (candidate: BlindDateCandidate) => void }) {
   const rows = ranking.length ? ranking : candidates.map((candidate, index) => ({ candidateId: candidate.id, rank: index + 1, score: candidate.score, selectedCount: candidate.selectedCount, reason: '' }));
   return (
     <View style={styles.rankingPanel}>
       <Text style={styles.panelTitle}>{mode === 'rotation' ? '데이트 결과 정리' : '정체 공개'}</Text>
-      {rows.map(row => {
+      {rows.map((row, index) => {
         const candidate = candidates.find(item => item.id === row.candidateId);
         if (!candidate) return null;
+        const displayNo = index + 1;
         return (
           <Pressable key={row.candidateId} onPress={() => onSelect(row.candidateId)} style={[styles.rankingRow, selectedCandidateId === row.candidateId && styles.rankingSelected]}>
-            <Text style={styles.rankNo}>{row.rank}</Text>
+            <Text style={styles.rankNo}>{displayNo}</Text>
             {candidate.profileImageUri ? <Image source={{ uri: candidate.profileImageUri }} style={styles.rankImage} /> : <View style={styles.rankFallback}><Text style={styles.rankFallbackText}>{candidate.name.slice(0, 1)}</Text></View>}
             <View style={styles.rankTextWrap}>
-              <Text style={styles.rankName}>{candidate.anonymousLabel}번 후보, {candidate.name}입니다.</Text>
+              <Text style={styles.rankName}>{displayNo}번 후보, {candidate.name}입니다.</Text>
               <Text style={styles.rankSub}>{candidate.job} · {mode === 'rotation' ? '3턴 대화 완료' : `선택 ${row.selectedCount}회`} · {candidate.personalitySummary}</Text>
             </View>
-            {onArchive ? <Pressable onPress={() => onArchive(candidate.id)} style={styles.rankArchiveButton}><Text style={styles.rankArchiveText}>보관</Text></Pressable> : null}
+            <View style={styles.rankActions}>
+              {onOpenDetails ? <Pressable onPress={() => onOpenDetails(candidate)} style={styles.rankDetailButton}><Text style={styles.rankDetailText}>자세히</Text></Pressable> : null}
+              {onArchive ? <Pressable onPress={() => onArchive(candidate.id)} style={styles.rankArchiveButton}><Text style={styles.rankArchiveText}>보관함</Text></Pressable> : null}
+            </View>
           </Pressable>
         );
       })}
     </View>
+  );
+}
+
+function CandidateDetailModal({ candidate, onClose }: { candidate: BlindDateCandidate | null; onClose: () => void }) {
+  if (!candidate) return null;
+  const tags = [...candidate.likes, ...candidate.hobbies, candidate.contactPresetId].filter(Boolean).slice(0, 8);
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.detailOverlay}>
+        <View style={styles.detailPanel}>
+          <ScrollView contentContainerStyle={styles.detailContent}>
+            <View style={styles.detailTop}>
+              <View style={styles.detailTitleWrap}>
+                <Text style={styles.detailTitle}>{candidate.name} · {candidate.age}</Text>
+                <Text style={styles.detailSub}>{candidate.job} · {candidate.locationBase}</Text>
+              </View>
+              <Pressable onPress={onClose} style={styles.detailCloseButton}><Text style={styles.detailCloseText}>닫기</Text></Pressable>
+            </View>
+            {candidate.profileImageUri ? (
+              <Image source={{ uri: candidate.profileImageUri }} style={styles.detailImage} />
+            ) : (
+              <View style={styles.detailImageFallback}><Text style={styles.hiddenText}>{candidate.name.slice(0, 1)}</Text></View>
+            )}
+            <Text style={styles.detailQuote}>“{candidate.firstDm}”</Text>
+            <View style={styles.detailSection}>
+              <Text style={styles.detailLabel}>성격</Text>
+              <Text style={styles.detailText}>{candidate.personalitySummary}</Text>
+            </View>
+            <View style={styles.detailSection}>
+              <Text style={styles.detailLabel}>연애 스타일</Text>
+              <Text style={styles.detailText}>{candidate.relationshipStyle}</Text>
+            </View>
+            <View style={styles.detailSection}>
+              <Text style={styles.detailLabel}>말투</Text>
+              <Text style={styles.detailText}>{candidate.speechStyle}</Text>
+            </View>
+            <View style={styles.detailSection}>
+              <Text style={styles.detailLabel}>SNS / 통화 느낌</Text>
+              <Text style={styles.detailText}>{candidate.snsPreview || candidate.snsStyle}</Text>
+              <Text style={styles.detailText}>{candidate.callPreview || candidate.relationshipStyle}</Text>
+            </View>
+            <View style={styles.tags}>{tags.map(tag => <Text key={tag} style={styles.tag}>#{tag}</Text>)}</View>
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -1320,11 +1386,29 @@ const styles = StyleSheet.create({
   rankTextWrap: { flex: 1 },
   rankName: { color: colors.text, fontSize: 14, fontWeight: '900' },
   rankSub: { marginTop: 3, color: colors.sub, fontSize: 12, lineHeight: 17, fontWeight: '800' },
+  rankActions: { gap: 6 },
+  rankDetailButton: { minHeight: 32, paddingHorizontal: 9, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#111' },
+  rankDetailText: { color: '#fffefa', fontSize: 12, fontWeight: '900' },
   rankArchiveButton: { minHeight: 34, paddingHorizontal: 9, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f2eee6' },
   rankArchiveText: { color: colors.text, fontSize: 12, fontWeight: '900' },
   importPanel: { marginTop: 14, padding: 14, borderRadius: 8, backgroundColor: '#111', borderWidth: 1, borderColor: '#111' },
   importTitle: { color: '#fff', fontSize: 18, fontWeight: '900' },
   importSub: { marginTop: 6, color: '#d8d8d8', fontSize: 13, lineHeight: 19, fontWeight: '700' },
   importButton: { marginTop: 14, minHeight: 48, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
-  importButtonText: { color: '#241a00', fontWeight: '900', fontSize: 16 }
+  importButtonText: { color: '#241a00', fontWeight: '900', fontSize: 16 },
+  detailOverlay: { flex: 1, padding: 16, backgroundColor: 'rgba(0,0,0,0.62)', justifyContent: 'center' },
+  detailPanel: { maxHeight: '88%', borderRadius: 8, overflow: 'hidden', backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
+  detailContent: { padding: 14, paddingBottom: 20 },
+  detailTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  detailTitleWrap: { flex: 1 },
+  detailTitle: { color: colors.text, fontSize: 22, fontWeight: '900' },
+  detailSub: { marginTop: 3, color: colors.sub, fontSize: 13, fontWeight: '800' },
+  detailCloseButton: { minHeight: 38, paddingHorizontal: 12, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#111' },
+  detailCloseText: { color: '#fffefa', fontWeight: '900' },
+  detailImage: { width: '100%', aspectRatio: 0.82, marginTop: 12, borderRadius: 8, backgroundColor: '#eee8dc' },
+  detailImageFallback: { width: '100%', aspectRatio: 0.82, marginTop: 12, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#eee8dc' },
+  detailQuote: { marginTop: 12, color: colors.text, fontSize: 15, lineHeight: 22, fontWeight: '900' },
+  detailSection: { marginTop: 12, padding: 10, borderRadius: 8, backgroundColor: '#f7f2e9', borderWidth: 1, borderColor: colors.border },
+  detailLabel: { color: colors.text, fontSize: 12, fontWeight: '900' },
+  detailText: { marginTop: 5, color: colors.sub, fontSize: 13, lineHeight: 19, fontWeight: '800' }
 });

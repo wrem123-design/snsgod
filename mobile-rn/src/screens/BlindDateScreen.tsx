@@ -561,7 +561,7 @@ function StreetEncounterMode({ session, busy, onChooseLocation, onApproach, onCh
         <View style={styles.locationGrid}>
           {visibleLocations.map(location => (
             <Pressable key={location} disabled={busy} onPress={() => onChooseLocation(location)} style={[styles.locationCard, busy && styles.disabled]}>
-              <Image source={locationThumbnails[location]} resizeMode="cover" style={styles.locationImage} />
+              <Image source={locationThumbnails[location]} resizeMode="contain" style={styles.locationImage} />
               <View style={styles.locationShade} />
               <Text style={styles.locationTitle}>{location}</Text>
             </Pressable>
@@ -1257,8 +1257,8 @@ const styles = StyleSheet.create({
   encounterLine: { marginTop: 12, padding: 12, borderRadius: 8, color: colors.text, backgroundColor: '#fffefa', fontSize: 15, lineHeight: 22, fontWeight: '900' },
   locationGrid: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 12 },
   locationCard: { flexBasis: '48%', minHeight: 148, borderRadius: 12, overflow: 'hidden', backgroundColor: '#151515', borderWidth: 1, borderColor: '#2f2f2f', shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
-  locationImage: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, width: '100%', height: '100%' },
-  locationShade: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.18)' },
+  locationImage: { position: 'absolute', left: 8, right: 8, top: 8, bottom: 30, width: undefined, height: undefined },
+  locationShade: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.08)' },
   locationTitle: { position: 'absolute', left: 10, right: 10, bottom: 10, color: '#fffefa', fontSize: 18, lineHeight: 22, fontWeight: '900', textShadowColor: 'rgba(0,0,0,0.55)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
   encounterStats: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   statPill: { flexGrow: 1, flexBasis: '47%', minHeight: 48, borderRadius: 8, paddingHorizontal: 10, justifyContent: 'center', backgroundColor: '#f2eee6', borderWidth: 1, borderColor: colors.border },

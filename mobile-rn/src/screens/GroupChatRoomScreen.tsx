@@ -56,6 +56,13 @@ function markUserMessagesRead(state: SNSGodState, roomId: string) {
   };
 }
 
+function clearGroupReadState(state: SNSGodState, roomId: string) {
+  return {
+    ...markUserMessagesRead(state, roomId),
+    unreadCounts: { ...(state.unreadCounts || {}), [roomId]: 0 }
+  };
+}
+
 function appendGroupMessage(state: SNSGodState, roomId: string, message: SNSGodMessage) {
   return updateRoomMemoryAfterAppend({
     ...state,
@@ -309,9 +316,13 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
     } catch (error) {
       setTypingCharacters([]);
       const systemMessage: SNSGodMessage = { id: makeId('msg'), role: 'system', content: `그룹 답장 실패: ${error instanceof Error ? error.message : String(error)}`, createdAt: Date.now(), failed: true };
-      await commitCurrent(current => appendGroupMessage(current, roomId, systemMessage));
+      await commitCurrent(current => clearGroupReadState(appendGroupMessage(current, roomId, systemMessage), roomId));
       Alert.alert('그룹 답장 실패', error instanceof Error ? error.message : String(error));
     } finally {
+      const shouldFinalizeRead = isCurrentChatJob(roomId, jobId);
+      if (shouldFinalizeRead) {
+        await commitCurrent(current => clearGroupReadState(current, roomId));
+      }
       endChatJob(roomId, jobId);
       setTypingCharacters([]);
       setSending(false);

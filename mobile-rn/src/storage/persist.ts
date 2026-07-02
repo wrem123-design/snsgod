@@ -671,6 +671,19 @@ function collectMediaValues(state: SNSGodState): string[] {
   for (const post of state.snsPosts || []) {
     if (isFileMedia(post.image)) values.push(post.image);
   }
+  for (const session of state.meetingEventSessions || []) {
+    if (isFileMedia(session.stillImage)) values.push(session.stillImage);
+  }
+  for (const session of state.blindDate?.sessions || []) {
+    for (const candidate of session.candidates || []) {
+      if (isFileMedia(candidate.profileImageUri)) values.push(candidate.profileImageUri);
+      if (isFileMedia(candidate.faceReferenceImage)) values.push(candidate.faceReferenceImage);
+    }
+  }
+  for (const archive of state.blindDate?.archives || []) {
+    if (isFileMedia(archive.candidate?.profileImageUri)) values.push(archive.candidate.profileImageUri);
+    if (isFileMedia(archive.candidate?.faceReferenceImage)) values.push(archive.candidate.faceReferenceImage);
+  }
   for (const slot of state.referenceFaceSlots || []) {
     if (isFileMedia(slot.image)) values.push(slot.image);
   }

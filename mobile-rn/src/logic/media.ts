@@ -213,7 +213,13 @@ export async function externalizeStateMedia(state: SNSGodState): Promise<SNSGodS
     messages: { ...state.messages },
     snsPosts: [...(state.snsPosts || [])],
     referenceFaceSlots: [...(state.referenceFaceSlots || [])],
-    userStickers: [...(state.userStickers || [])]
+    userStickers: [...(state.userStickers || [])],
+    meetingEventSessions: [...(state.meetingEventSessions || [])],
+    blindDate: state.blindDate ? {
+      ...state.blindDate,
+      sessions: [...(state.blindDate.sessions || [])],
+      archives: [...(state.blindDate.archives || [])]
+    } : state.blindDate
   };
 
   next.characters = await Promise.all(next.characters.map(async character => ({
@@ -256,5 +262,36 @@ export async function externalizeStateMedia(state: SNSGodState): Promise<SNSGodS
     image: isDataUri(slot.image) ? await externalizeDataUri(slot.image, `reference_face_${slot.id}`, true) : slot.image
   })));
 
+  next.meetingEventSessions = await Promise.all((next.meetingEventSessions || []).map(async session => ({
+    ...session,
+    stillImage: isLargeDataUri(session.stillImage) ? await externalizeDataUri(session.stillImage, `meeting_${session.id}`) : session.stillImage
+  })));
+
+  if (next.blindDate) {
+    next.blindDate = {
+      ...next.blindDate,
+      sessions: await Promise.all((next.blindDate.sessions || []).map(externalizeBlindDateSessionImages)),
+      archives: await Promise.all((next.blindDate.archives || []).map(async archive => ({
+        ...archive,
+        candidate: await externalizeBlindDateCandidateImages(archive.candidate)
+      })))
+    };
+  }
+
   return next;
+}
+
+async function externalizeBlindDateSessionImages(session: NonNullable<SNSGodState['blindDate']>['sessions'][number]) {
+  return {
+    ...session,
+    candidates: await Promise.all((session.candidates || []).map(externalizeBlindDateCandidateImages))
+  };
+}
+
+async function externalizeBlindDateCandidateImages(candidate: NonNullable<SNSGodState['blindDate']>['sessions'][number]['candidates'][number]) {
+  return {
+    ...candidate,
+    profileImageUri: isLargeDataUri(candidate.profileImageUri) ? await externalizeDataUri(candidate.profileImageUri, `blind_date_${candidate.id}`) : candidate.profileImageUri,
+    faceReferenceImage: isLargeDataUri(candidate.faceReferenceImage) ? await externalizeDataUri(candidate.faceReferenceImage, `blind_date_ref_${candidate.id}`, true) : candidate.faceReferenceImage
+  };
 }

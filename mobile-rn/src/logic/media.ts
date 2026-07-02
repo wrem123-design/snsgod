@@ -1,7 +1,7 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
-import { SNSGodState } from '../types';
+import { DatingAppProfile, SNSGodState } from '../types';
 
 const MEDIA_DIR = `${FileSystem.documentDirectory || ''}snsgod-media/`;
 export const MEDIA_ROOT_DIR = MEDIA_DIR;
@@ -219,7 +219,18 @@ export async function externalizeStateMedia(state: SNSGodState): Promise<SNSGodS
       ...state.blindDate,
       sessions: [...(state.blindDate.sessions || [])],
       archives: [...(state.blindDate.archives || [])]
-    } : state.blindDate
+    } : state.blindDate,
+    datingApp: state.datingApp ? {
+      ...state.datingApp,
+      profiles: [...(state.datingApp.profiles || [])].map(profile => ({
+        ...profile,
+        photos: [...(profile.photos || [])]
+      })),
+      currentProfile: state.datingApp.currentProfile ? {
+        ...state.datingApp.currentProfile,
+        photos: [...(state.datingApp.currentProfile.photos || [])]
+      } : state.datingApp.currentProfile
+    } : state.datingApp
   };
 
   next.characters = await Promise.all(next.characters.map(async character => ({
@@ -278,6 +289,18 @@ export async function externalizeStateMedia(state: SNSGodState): Promise<SNSGodS
     };
   }
 
+  if (next.datingApp) {
+    const profiles = await Promise.all((next.datingApp.profiles || []).map(externalizeDatingAppProfileImages));
+    const currentProfile = next.datingApp.currentProfile
+      ? await externalizeDatingAppProfileImages(next.datingApp.currentProfile)
+      : next.datingApp.currentProfile;
+    next.datingApp = {
+      ...next.datingApp,
+      profiles,
+      currentProfile
+    };
+  }
+
   return next;
 }
 
@@ -293,5 +316,15 @@ async function externalizeBlindDateCandidateImages(candidate: NonNullable<SNSGod
     ...candidate,
     profileImageUri: isLargeDataUri(candidate.profileImageUri) ? await externalizeDataUri(candidate.profileImageUri, `blind_date_${candidate.id}`) : candidate.profileImageUri,
     faceReferenceImage: isLargeDataUri(candidate.faceReferenceImage) ? await externalizeDataUri(candidate.faceReferenceImage, `blind_date_ref_${candidate.id}`, true) : candidate.faceReferenceImage
+  };
+}
+
+async function externalizeDatingAppProfileImages(profile: DatingAppProfile) {
+  return {
+    ...profile,
+    photos: await Promise.all((profile.photos || []).map(async photo => ({
+      ...photo,
+      uri: isLargeDataUri(photo.uri) ? await externalizeDataUri(photo.uri, `dating_app_${profile.id}_${photo.id}`) : photo.uri
+    })))
   };
 }

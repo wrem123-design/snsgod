@@ -28,9 +28,9 @@ type PhoneTurn = {
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const PHONE_CONNECTION_GLITCH_PATTERN = /(내\s*말\s*들려|목소리\s*들려|말\s*들려|잘\s*안\s*들|안\s*들려|통화\s*(?:상태|품질)|신호(?:가|는)?|끊기|끊겨|지직|노이즈|소리\s*(?:깨|끊))/i;
 const REPEATED_GLITCH_REPLACEMENTS = [
-  '응, 방금 네 말 생각하고 있었어. 계속 얘기해줘.',
-  '응, 나 여기 있어. 네 얘기 더 듣고 싶어.',
-  '잠깐 생각했어. 그 말은 좀 오래 남을 것 같아.'
+  '잠깐만, 방금 하나도 못 들었어.',
+  '어어, 통신 상태 왜 이러지? 내 목소리는 잘 들려?',
+  '내 말 들려? 방금 좀 끊겼어.'
 ];
 
 function isPhoneConnectionGlitch(text: string) {
@@ -291,7 +291,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
       const turn = parsePhoneTurn(result.text, baseLines);
       await showCharacterPage(turn.lines, 0, turn.choices, turn.uiMode, turn.allowDirectReply);
     } catch {
-      const fallbackLines = sanitizePhoneLines(['잠깐만... 목소리 들려?'], baseLines);
+      const fallbackLines = sanitizePhoneLines(['잠깐만, 방금 하나도 못 들었어.'], baseLines);
       await showCharacterPage(fallbackLines, 0, ['다시 말해줘.', '괜찮아?', '나중에 다시 통화하자.'], 'choices', true);
     }
   }

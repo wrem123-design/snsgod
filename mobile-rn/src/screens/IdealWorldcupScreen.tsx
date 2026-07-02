@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { BlindDateCandidate, BlindDateSession, SNSGodState } from '../types';
-import { activeBlindDateSession, createBlindDateSession, getBlindDateProgress, importBlindDateCandidate, selectBlindDateWorldcupCandidate } from '../logic/blindDate';
+import { activeBlindDateSession, createBlindDateSession, ensureWorldcupCandidateImages, getBlindDateProgress, importBlindDateCandidate, selectBlindDateWorldcupCandidate } from '../logic/blindDate';
 import { createBlindDateFirstDatePrompt } from '../logic/meetingEvent';
 import { colors } from '../theme';
 
@@ -16,8 +16,10 @@ export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
   const [roundCount, setRoundCount] = useState(16);
   const [includeExisting, setIncludeExisting] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [imageBusy, setImageBusy] = useState(false);
   const [winningCandidate, setWinningCandidate] = useState<BlindDateCandidate | undefined>();
   const overlay = useRef(new Animated.Value(0)).current;
+  const imageAttemptedRef = useRef<Set<string>>(new Set());
   const progress = getBlindDateProgress(state);
   const session = activeBlindDateSession(state);
   const worldcupSession = session?.mode === 'worldcup' ? session : undefined;
@@ -25,9 +27,12 @@ export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
   const left = worldcupSession?.candidates.find(candidate => candidate.id === currentPair?.leftCandidateId);
   const right = worldcupSession?.candidates.find(candidate => candidate.id === currentPair?.rightCandidateId);
   const champion = worldcupSession?.candidates.find(candidate => candidate.id === worldcupSession.selectedCandidateId);
+  const currentImageIds = [currentPair?.leftCandidateId, currentPair?.rightCandidateId].filter(Boolean);
+  const currentImagesReady = Boolean(left?.profileImageUri && right?.profileImageUri);
+  const currentImagesStillLoading = Boolean(left && right && !currentImagesReady && (imageBusy || currentImageIds.some(candidateId => !imageAttemptedRef.current.has(String(candidateId)))));
   const loadingLines = useMemo(() => [
     '후보들이 입장 순서를 정하고 있어요.',
-    '사진이 준비된 후보부터 먼저 대진표에 올리는 중이에요.',
+    '사진이 준비된 후보부터 대진표에 올리는 중이에요.',
     '기존 캐릭터와 새 후보의 분위기를 맞춰 섞고 있어요.',
     '큰 라운드라 후보를 나눠서 준비하고 있어요.'
   ], []);
@@ -54,6 +59,24 @@ export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
       });
     }
   }, [currentPair?.id, worldcupSession?.id]);
+
+  useEffect(() => {
+    if (!worldcupSession || !currentPair || imageBusy) return;
+    const pairs = worldcupSession.worldcupPairs || [];
+    const currentIndex = Number(worldcupSession.worldcupIndex || 0);
+    const candidateIds = pairs
+      .slice(currentIndex, currentIndex + 3)
+      .flatMap(pair => [pair.leftCandidateId, pair.rightCandidateId])
+      .filter(Boolean)
+      .filter(candidateId => !imageAttemptedRef.current.has(candidateId));
+    const needsImages = worldcupSession.candidates.some(candidate => candidateIds.includes(candidate.id) && !candidate.profileImageUri);
+    if (!needsImages) return;
+    candidateIds.forEach(candidateId => imageAttemptedRef.current.add(candidateId));
+    setImageBusy(true);
+    void ensureWorldcupCandidateImages(state, worldcupSession.id, candidateIds)
+      .then(next => onChange(next))
+      .finally(() => setImageBusy(false));
+  }, [currentPair?.id, imageBusy, worldcupSession?.id]);
 
   async function startWorldcup() {
     if (busy) return;
@@ -86,21 +109,29 @@ export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
     });
   }
 
+  function exitWorldcup() {
+    void onChange({ ...state, blindDate: { ...progress, activeSessionId: undefined } });
+  }
+
+  const showSetupHeader = !worldcupSession || (champion && worldcupSession.status === 'revealing');
+
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
-        <Pressable onPress={onBack} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable>
-        <View style={styles.headerText}>
-          <Text style={styles.title}>이상형 월드컵</Text>
-          <Text style={styles.subtitle}>둘 중 더 끌리는 사람을 골라 최종 연락처를 얻어요.</Text>
+      {showSetupHeader ? (
+        <View style={styles.header}>
+          <Pressable onPress={onBack} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable>
+          <View style={styles.headerText}>
+            <Text style={styles.title}>이상형 월드컵</Text>
+            <Text style={styles.subtitle}>둘 중 더 끌리는 사람을 골라 최종 연락처를 얻어요.</Text>
+          </View>
         </View>
-      </View>
+      ) : null}
 
       {!worldcupSession ? (
         <ScrollView contentContainerStyle={styles.setup}>
           <View style={styles.trophyBox}><Text style={styles.trophy}>🏆</Text></View>
           <Text style={styles.heroTitle}>대진표를 선택하세요</Text>
-          <Text style={styles.heroSub}>라운드가 클수록 준비 시간이 길어져요. 후보는 4명씩 나눠 준비합니다.</Text>
+          <Text style={styles.heroSub}>라운드가 클수록 준비 시간이 길어져요. 후보는 필요한 경기부터 자연스럽게 준비합니다.</Text>
           <View style={styles.roundGrid}>
             {ROUND_OPTIONS.map(option => (
               <Pressable key={option} onPress={() => setRoundCount(option)} style={[styles.roundButton, roundCount === option && styles.roundButtonActive]}>
@@ -133,9 +164,20 @@ export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
           <Pressable onPress={importChampion} style={styles.startButton}><Text style={styles.startButtonText}>그녀에게 연락처 얻기</Text></Pressable>
           <Pressable onPress={() => void onChange({ ...state, blindDate: { ...progress, activeSessionId: undefined } })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>새 월드컵</Text></Pressable>
         </View>
+      ) : left && right && currentImagesStillLoading ? (
+        <View style={styles.matchLoadingPanel}>
+          <ActivityIndicator color={colors.accent} />
+          <Text style={styles.loadingTitle}>후보 사진을 불러오고 있어요</Text>
+          <Text style={styles.loadingText}>현재 경기 사진을 먼저 완성한 뒤 선택을 시작합니다.</Text>
+        </View>
       ) : left && right ? (
         <View style={styles.match}>
-          <Text style={styles.matchTitle}>{worldcupMatchTitle(worldcupSession, currentPair)}</Text>
+          <View style={styles.matchHeader}>
+            <Pressable onPress={exitWorldcup} style={styles.matchBackButton}><Text style={styles.matchBackText}>‹</Text></Pressable>
+            <Text style={styles.matchTitle}>{worldcupMatchTitle(worldcupSession, currentPair)}</Text>
+            <View style={styles.matchHeaderSpacer} />
+          </View>
+          {imageBusy ? <Text style={styles.matchSub}>뒤쪽 대진 사진을 백그라운드로 준비 중</Text> : null}
           <View style={styles.versusRow}>
             <WorldcupCard candidate={left} onPress={() => choose(left)} namePosition="top" />
             <View pointerEvents="none" style={styles.vsBadge}>
@@ -189,7 +231,7 @@ function CandidateNameBar({ candidate, position }: { candidate: BlindDateCandida
 function WorldcupCard({ candidate, onPress, namePosition }: { candidate: BlindDateCandidate; onPress: () => void; namePosition: 'top' | 'bottom' }) {
   return (
     <Pressable onPress={onPress} style={styles.card}>
-      {candidate.profileImageUri ? <Image source={{ uri: candidate.profileImageUri }} style={styles.cardImage} /> : <View style={styles.emptyImage}><Text style={styles.emptyText}>{candidate.name.slice(0, 1)}</Text></View>}
+      {candidate.profileImageUri ? <Image source={{ uri: candidate.profileImageUri }} style={styles.cardImage} resizeMode="cover" /> : <View style={styles.emptyImage}><Text style={styles.emptyText}>{candidate.name.slice(0, 1)}</Text></View>}
       <CandidateNameBar candidate={candidate} position={namePosition} />
     </Pressable>
   );
@@ -221,6 +263,7 @@ const styles = StyleSheet.create({
   checkTitle: { color: '#fff', fontSize: 16, fontWeight: '900' },
   checkSub: { marginTop: 3, color: '#b9b9b9', fontSize: 12, fontWeight: '800' },
   loadingPanel: { marginTop: 16, padding: 16, borderRadius: 8, backgroundColor: '#202020', borderWidth: 1, borderColor: '#333' },
+  matchLoadingPanel: { flex: 1, margin: 18, padding: 18, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#202020', borderWidth: 1, borderColor: '#333' },
   loadingTitle: { color: '#fff', fontSize: 18, fontWeight: '900', textAlign: 'center' },
   loadingText: { marginTop: 6, color: '#d8cda8', fontSize: 13, lineHeight: 19, fontWeight: '800', textAlign: 'center' },
   startButton: { marginTop: 18, minHeight: 54, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
@@ -228,11 +271,16 @@ const styles = StyleSheet.create({
   secondaryButton: { marginTop: 10, minHeight: 48, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
   secondaryButtonText: { color: colors.text, fontWeight: '900' },
   disabled: { opacity: 0.55 },
-  match: { flex: 1, paddingTop: 16 },
-  matchTitle: { color: '#fff', fontSize: 25, lineHeight: 32, fontWeight: '900', textAlign: 'center' },
-  versusRow: { flex: 1, flexDirection: 'column', alignItems: 'stretch', paddingTop: 12 },
+  match: { flex: 1 },
+  matchHeader: { minHeight: 70, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8, flexDirection: 'row', alignItems: 'center', backgroundColor: '#111' },
+  matchBackButton: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f2eee6' },
+  matchBackText: { color: colors.text, fontSize: 36, lineHeight: 40, fontWeight: '900' },
+  matchHeaderSpacer: { width: 48 },
+  matchTitle: { flex: 1, color: '#fff', fontSize: 25, lineHeight: 32, fontWeight: '900', textAlign: 'center' },
+  matchSub: { marginTop: 4, color: '#d8cda8', fontSize: 12, lineHeight: 17, fontWeight: '900', textAlign: 'center' },
+  versusRow: { flex: 1, flexDirection: 'column', alignItems: 'stretch' },
   card: { flex: 1, width: '100%', backgroundColor: '#1d1d1d', overflow: 'hidden', justifyContent: 'center' },
-  cardImage: { width: '100%', height: '100%', resizeMode: 'cover' },
+  cardImage: { width: '100%', height: '100%' },
   emptyImage: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#333' },
   emptyText: { color: '#fff', fontSize: 48, fontWeight: '900' },
   nameStrip: { position: 'absolute', left: 0, right: 0, minHeight: 32, paddingHorizontal: 14, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(0,0,0,0.58)', zIndex: 4 },

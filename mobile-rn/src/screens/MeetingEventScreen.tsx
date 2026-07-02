@@ -7,7 +7,7 @@ import { findCharacter, findRoom } from '../logic/stateHelpers';
 import { makeId } from '../logic/ids';
 import { isRenderableMediaUri } from '../logic/media';
 import { userNameFor } from '../logic/prompts';
-import { MeetingEventLine, SNSGodState } from '../types';
+import { MeetingEventLine, SNSGodCharacter, SNSGodState } from '../types';
 
 type MeetingPhase = 'opening' | 'character_typing' | 'awaiting_next' | 'awaiting_choice' | 'awaiting_text' | 'user_sending' | 'thinking' | 'ending' | 'ended';
 type MeetingUiMode = 'next' | 'choices' | 'input' | 'mixed';
@@ -277,9 +277,13 @@ export function MeetingEventScreen({ state, sessionId, onBack, onChange }: {
             {isRenderableMediaUri(session.stillImage) ? (
               <Image source={{ uri: String(session.stillImage) }} style={styles.stillImage} resizeMode="cover" />
             ) : (
-              <View style={styles.stillFallback}>
-                <Text style={styles.stillFallbackText}>{session.location || '만남 장소'}</Text>
-              </View>
+              <MeetingSceneFallback
+                character={character}
+                location={session.location || '만남 장소'}
+                mood={session.mood || '첫 만남 분위기'}
+                seedSummary={session.seedSummary || session.reason || ''}
+                compact={false}
+              />
             )}
           </View>
         ) : null}
@@ -332,6 +336,44 @@ export function MeetingEventScreen({ state, sessionId, onBack, onChange }: {
   );
 }
 
+function MeetingSceneFallback({ character, location, mood, seedSummary, compact }: {
+  character: SNSGodCharacter;
+  location: string;
+  mood: string;
+  seedSummary: string;
+  compact: boolean;
+}) {
+  const initial = (character.avatarText || character.name || '?').slice(0, 1);
+  const summary = String(seedSummary || mood || '').replace(/\s+/g, ' ').trim();
+  return (
+    <View style={[styles.sceneFallback, compact && styles.sceneFallbackCompact]}>
+      <View style={styles.sceneSky}>
+        <View style={styles.sceneSun} />
+        <View style={styles.sceneWindow} />
+        <View style={[styles.sceneWindow, styles.sceneWindowSecond]} />
+      </View>
+      <View style={styles.sceneGround}>
+        <View style={styles.scenePersonLeft}>
+          <View style={styles.sceneHead}><Text style={styles.sceneHeadText}>나</Text></View>
+          <View style={styles.sceneBody} />
+        </View>
+        <View style={styles.sceneTable}>
+          <View style={styles.sceneCup} />
+          <View style={styles.sceneCupSmall} />
+        </View>
+        <View style={styles.scenePersonRight}>
+          <View style={[styles.sceneHead, styles.sceneCharacterHead]}><Text style={styles.sceneHeadText}>{initial}</Text></View>
+          <View style={[styles.sceneBody, styles.sceneCharacterBody]} />
+        </View>
+      </View>
+      <View style={styles.sceneCaption}>
+        <Text style={styles.sceneLocation} numberOfLines={1}>{location}</Text>
+        <Text style={styles.sceneMood} numberOfLines={compact ? 1 : 2}>{summary || mood}</Text>
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#151d27' },
   fallback: { flex: 1, backgroundColor: '#151d27', padding: 20, justifyContent: 'center' },
@@ -345,8 +387,26 @@ const styles = StyleSheet.create({
   headerTitle: { flex: 1, color: '#edf2f6', fontSize: 16, fontWeight: '900', textAlign: 'center' },
   stillWrap: { width: '100%', aspectRatio: 1.72, borderRadius: 14, overflow: 'hidden', backgroundColor: '#0b0f15', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
   stillImage: { width: '100%', height: '100%' },
-  stillFallback: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.08)' },
-  stillFallbackText: { color: '#edf2f6', fontSize: 20, fontWeight: '900' },
+  sceneFallback: { flex: 1, backgroundColor: '#1c2c37' },
+  sceneFallbackCompact: { minHeight: 150 },
+  sceneSky: { flex: 1, backgroundColor: '#33475a', position: 'relative' },
+  sceneSun: { position: 'absolute', right: 22, top: 18, width: 34, height: 34, borderRadius: 17, backgroundColor: '#f3dd72' },
+  sceneWindow: { position: 'absolute', left: 24, top: 22, width: 54, height: 42, borderRadius: 8, backgroundColor: 'rgba(237,242,246,0.18)', borderWidth: 1, borderColor: 'rgba(237,242,246,0.18)' },
+  sceneWindowSecond: { left: 88, top: 34, width: 38, height: 30 },
+  sceneGround: { height: '48%', flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', gap: 20, paddingBottom: 22, backgroundColor: '#26313c' },
+  scenePersonLeft: { alignItems: 'center' },
+  scenePersonRight: { alignItems: 'center' },
+  sceneHead: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: '#edf2f6', borderWidth: 2, borderColor: 'rgba(255,255,255,0.55)' },
+  sceneCharacterHead: { backgroundColor: '#f3dd72' },
+  sceneHeadText: { color: '#26313c', fontSize: 13, fontWeight: '900' },
+  sceneBody: { marginTop: -2, width: 42, height: 46, borderTopLeftRadius: 18, borderTopRightRadius: 18, backgroundColor: '#7995a8' },
+  sceneCharacterBody: { backgroundColor: '#d9947a' },
+  sceneTable: { width: 66, height: 30, borderRadius: 15, backgroundColor: '#edf2f6', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7 },
+  sceneCup: { width: 12, height: 16, borderRadius: 4, backgroundColor: '#33475a' },
+  sceneCupSmall: { width: 10, height: 13, borderRadius: 4, backgroundColor: '#8b5e45' },
+  sceneCaption: { position: 'absolute', left: 12, right: 12, bottom: 10, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: 'rgba(10,14,20,0.62)' },
+  sceneLocation: { color: '#edf2f6', fontSize: 15, lineHeight: 20, fontWeight: '900' },
+  sceneMood: { marginTop: 1, color: 'rgba(237,242,246,0.76)', fontSize: 11, lineHeight: 15, fontWeight: '800' },
   turnCard: { marginTop: 14, alignSelf: 'center', width: '100%', minHeight: 124, borderRadius: 16, paddingHorizontal: 20, paddingVertical: 18, backgroundColor: 'rgba(0,0,0,0.56)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', justifyContent: 'center' },
   turnCardKeyboard: { marginTop: 4, minHeight: 88, paddingHorizontal: 16, paddingVertical: 12 },
   turnText: { color: '#fff', fontSize: 18, lineHeight: 28, fontWeight: '800' },

@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Animated, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors } from '../theme';
 import { BlindDateCandidate, BlindDateCandidateArchive, BlindDateRound, BlindDateSession, SNSGodState } from '../types';
 import {
@@ -18,6 +18,7 @@ import {
   getBlindDateProgress,
   importBlindDateCandidate,
   importBlindDateArchive,
+  passStreetEncounterContact,
   chooseStreetEncounterOption,
   chooseStreetEncounterCustomText,
   revealBlindDateRanking,
@@ -28,6 +29,8 @@ import {
 } from '../logic/blindDate';
 import { createBlindDateFirstDatePrompt } from '../logic/meetingEvent';
 const fallbackEncounterLocations = ['성수 카페거리', '한강 산책로', '베이커리 앞', '지하철역 근처'];
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+type PhotoPreview = { uri: string; name?: string };
 
 export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode = 'blindDate' }: {
   state: SNSGodState;
@@ -48,6 +51,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
   const [profileIndex, setProfileIndex] = useState(0);
   const [profileRefilling, setProfileRefilling] = useState(false);
   const [detailCandidate, setDetailCandidate] = useState<BlindDateCandidate | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<PhotoPreview | null>(null);
   const progress = getBlindDateProgress(state);
   const activeSession = activeBlindDateSession(state);
   const session = entryMode === 'encounter'
@@ -197,9 +201,16 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
   function askEncounterContact() {
     if (!session) return;
     const result = requestStreetEncounterContact(state, session.id);
-    void Promise.resolve(onChange(result.next)).then(() => {
-      if (result.success && result.roomId) onOpenRoom(result.roomId);
-    });
+    void Promise.resolve(onChange(result.next));
+  }
+
+  function passEncounterContact() {
+    if (!session) return;
+    void onChange(passStreetEncounterContact(state, session.id));
+  }
+
+  function exitActiveSession() {
+    void onChange({ ...state, blindDate: { ...progress, activeSessionId: undefined } });
   }
 
   function importArchive(archiveId: string) {
@@ -240,6 +251,11 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
           <Text style={styles.title}>{entryMode === 'encounter' ? '우연한 만남' : '블라인드 데이트'}</Text>
           {entryMode === 'encounter' ? null : <Text style={styles.subtitle}>AI 후보를 비교하고 마음에 드는 사람을 가져와요.</Text>}
         </View>
+        {entryMode === 'encounter' && session ? (
+          <Pressable onPress={exitActiveSession} style={styles.headerExitButton}>
+            <Text style={styles.headerExitText}>나가기</Text>
+          </Pressable>
+        ) : null}
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
@@ -288,13 +304,15 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
           </View>
         ) : (
           <>
-            <View style={styles.sessionBar}>
-              <View>
-                <Text style={styles.sessionTitle}>{modeTitle(session.mode)}</Text>
-                <Text style={styles.sessionSub}>{session.candidates.length}명 후보 · {session.status === 'completed' ? '가져오기 완료' : session.status === 'revealing' ? '정체 공개' : '진행 중'}</Text>
+            {session.mode === 'encounter' ? null : (
+              <View style={styles.sessionBar}>
+                <View>
+                  <Text style={styles.sessionTitle}>{modeTitle(session.mode)}</Text>
+                  <Text style={styles.sessionSub}>{session.candidates.length}명 후보 · {session.status === 'completed' ? '가져오기 완료' : session.status === 'revealing' ? '정체 공개' : '진행 중'}</Text>
+                </View>
+                <Pressable onPress={exitActiveSession} style={styles.smallButton}><Text style={styles.smallButtonText}>나가기</Text></Pressable>
               </View>
-              <Pressable onPress={() => void onChange({ ...state, blindDate: { ...progress, activeSessionId: undefined } })} style={styles.smallButton}><Text style={styles.smallButtonText}>나가기</Text></Pressable>
-            </View>
+            )}
 
             {busy ? <LoadingBlock /> : null}
 
@@ -306,9 +324,12 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
                 onApproach={approachEncounter}
                 onChoice={chooseEncounterChoice}
                 onAskContact={askEncounterContact}
+                onPassContact={passEncounterContact}
+                onSaveAndMessage={importSelected}
                 customText={encounterText}
                 setCustomText={setEncounterText}
                 onSendCustom={sendEncounterText}
+                onOpenPhoto={setPhotoPreview}
               />
             ) : session.mode === 'profile' ? (
               <ProfileGachaMode
@@ -334,7 +355,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
                 busy={busy}
               />
             ) : session.mode === 'rotation' ? (
-              <RotationMode session={session} rotationText={rotationText} setRotationText={setRotationText} activeCandidateId={rotationCandidateId} setActiveCandidateId={setRotationCandidateId} onSend={sendRotationTurn} onSelect={chooseCandidate} onOpenDetails={setDetailCandidate} busy={busy} />
+              <RotationMode session={session} rotationText={rotationText} setRotationText={setRotationText} activeCandidateId={rotationCandidateId} setActiveCandidateId={setRotationCandidateId} onSend={sendRotationTurn} onSelect={chooseCandidate} onOpenDetails={setDetailCandidate} onOpenPhoto={setPhotoPreview} busy={busy} />
             ) : null}
 
             {session.mode === 'question' && session.rounds.length >= Number(session.questionTarget || 5) && session.rounds.every(round => round.selectedAnswerId) && session.status !== 'revealing' && session.status !== 'completed' ? (
@@ -364,6 +385,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
         )}
       </ScrollView>
       <CandidateDetailModal candidate={detailCandidate} onClose={() => setDetailCandidate(null)} />
+      <PhotoPreviewModal preview={photoPreview} onClose={() => setPhotoPreview(null)} />
     </View>
   );
 }
@@ -511,27 +533,92 @@ function ArchiveBlock({ archives, mixArchiveIds, onToggleMix, onCreateMix, onImp
   );
 }
 
-function StreetEncounterMode({ session, busy, onChooseLocation, onApproach, onChoice, onAskContact, customText, setCustomText, onSendCustom }: {
+function StreetEncounterMode({ session, busy, onChooseLocation, onApproach, onChoice, onAskContact, onPassContact, onSaveAndMessage, customText, setCustomText, onSendCustom, onOpenPhoto }: {
   session: BlindDateSession;
   busy?: boolean;
   onChooseLocation: (location: string) => void;
   onApproach: (text: string) => void;
   onChoice: (choiceId: string) => void;
   onAskContact: () => void;
+  onPassContact: () => void;
+  onSaveAndMessage: () => void;
   customText: string;
   setCustomText: (text: string) => void;
   onSendCustom: () => void;
+  onOpenPhoto: (preview: PhotoPreview) => void;
 }) {
   const candidate = session.candidates[0];
-  const stats = session.encounterStats;
   const phase = session.encounterPhase || 'locations';
   const maxTurns = Number(session.encounterMaxTurns || 4);
   const turn = Math.min(maxTurns, Number(session.encounterTurn || 0));
-  const canAskContact = Boolean(stats && stats.affinity >= 50 && phase === 'talk');
   const talkedOut = turn >= maxTurns && phase === 'talk';
-  const canSendCustom = Boolean(customText.trim()) && (phase === 'intro' || (phase === 'talk' && !talkedOut));
+  const sceneParagraphs = useMemo(() => encounterSceneParagraphs(session, candidate), [
+    candidate?.id,
+    phase,
+    session.encounterNarration,
+    session.encounterNpcLine,
+    session.encounterContactFailureReason,
+    session.encounterResult,
+    turn
+  ]);
+  const sceneKey = `${session.id}:${phase}:${turn}:${session.encounterNarration || ''}:${session.encounterNpcLine || ''}:${session.encounterResult || ''}`;
+  const [paragraphIndex, setParagraphIndex] = useState(0);
+  const [displayText, setDisplayText] = useState('');
+  const [typing, setTyping] = useState(false);
+  const typingTokenRef = useRef(0);
+  const sceneFade = useRef(new Animated.Value(1)).current;
+  const currentParagraph = sceneParagraphs[paragraphIndex] || '';
+  const sceneComplete = phase === 'locations' || (paragraphIndex >= sceneParagraphs.length - 1 && !typing);
+  const canSendCustom = Boolean(customText.trim()) && sceneComplete && (phase === 'intro' || (phase === 'talk' && !talkedOut));
   const encounterLocations = (session.encounterLocations || []).slice(0, 4);
   const visibleLocations = encounterLocations.length ? encounterLocations : fallbackEncounterLocations;
+
+  useEffect(() => {
+    typingTokenRef.current += 1;
+    setParagraphIndex(0);
+  }, [sceneKey]);
+
+  useEffect(() => {
+    if (phase === 'locations') return;
+    const text = currentParagraph || '';
+    const token = typingTokenRef.current + 1;
+    typingTokenRef.current = token;
+    setTyping(true);
+    setDisplayText('');
+    sceneFade.setValue(0);
+    Animated.timing(sceneFade, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+    void (async () => {
+      let out = '';
+      for (const ch of Array.from(text)) {
+        if (typingTokenRef.current !== token) return;
+        out += ch;
+        setDisplayText(out);
+        let delay = 21;
+        if (/[,.!?…。？！]/.test(ch)) delay += 95;
+        if (/\n/.test(ch)) delay += 130;
+        await sleep(delay);
+      }
+      if (typingTokenRef.current !== token) return;
+      setDisplayText(text);
+      setTyping(false);
+    })();
+    return () => {
+      typingTokenRef.current += 1;
+    };
+  }, [currentParagraph, phase, sceneFade]);
+
+  function nextSceneParagraph() {
+    if (typing) {
+      typingTokenRef.current += 1;
+      setDisplayText(currentParagraph);
+      setTyping(false);
+      return;
+    }
+    if (paragraphIndex < sceneParagraphs.length - 1) {
+      setParagraphIndex(index => index + 1);
+    }
+  }
+
   if (phase === 'locations') {
     return (
       <View style={styles.encounterPanel}>
@@ -553,23 +640,65 @@ function StreetEncounterMode({ session, busy, onChooseLocation, onApproach, onCh
       </View>
     );
   }
+  if (phase === 'success' && candidate) {
+    return (
+      <View style={styles.encounterWrap}>
+        <View style={styles.encounterSuccessHero}>
+          {candidate.profileImageUri ? (
+            <Pressable onPress={() => onOpenPhoto({ uri: candidate.profileImageUri!, name: candidate.name })} style={styles.encounterSuccessImageButton} accessibilityLabel={`${candidate.name} 사진 크게 보기`}>
+              <Image source={{ uri: candidate.profileImageUri }} resizeMode="cover" style={styles.encounterSuccessImage} />
+            </Pressable>
+          ) : <View style={styles.encounterImageFallback}><Text style={styles.hiddenText}>{candidate.name.slice(0, 1)}</Text></View>}
+          <View style={styles.encounterSuccessShade} />
+          <View style={styles.encounterSuccessCopy}>
+            <Text style={styles.encounterSuccessKicker}>연락처 교환 성공</Text>
+            <Text style={styles.encounterSuccessName}>{candidate.name} · {candidate.age}</Text>
+            <Animated.Text style={[styles.encounterSuccessLine, { opacity: sceneFade }]}>{displayText || currentParagraph}</Animated.Text>
+            {!sceneComplete ? (
+              <Pressable onPress={nextSceneParagraph} style={styles.encounterStoryButton}>
+                <Text style={styles.encounterStoryButtonText}>{typing ? '바로 보기' : '다음'}</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
+        {sceneComplete ? <View style={styles.encounterProfilePanel}>
+          <Text style={styles.profileModalLabel}>프로필</Text>
+          <Text style={styles.profileModalTitle}>{candidate.job} · {candidate.locationBase}</Text>
+          <Text style={styles.profileModalText}>{candidate.personalitySummary}</Text>
+          <Text style={styles.profileModalText}>{candidate.relationshipStyle}</Text>
+          <View style={styles.previewBox}>
+            <Text style={styles.previewLabel}>소개팅 자리에 온 이유</Text>
+            <Text style={styles.previewLine}>{candidate.snsPreview || candidate.relationshipStyle}</Text>
+            <Text style={styles.previewLabel}>소개팅남에게 하고 싶은 말</Text>
+            <Text style={styles.previewLine}>{candidate.callPreview || candidate.speechStyle}</Text>
+          </View>
+          <Pressable onPress={onSaveAndMessage} style={styles.importButton}>
+            <Text style={styles.importButtonText}>저장하고 메세지 보내기</Text>
+          </Pressable>
+        </View> : null}
+      </View>
+    );
+  }
   return (
     <View style={styles.encounterWrap}>
-      {candidate?.profileImageUri ? <Image source={{ uri: candidate.profileImageUri }} resizeMode="contain" style={styles.encounterImage} /> : <View style={styles.encounterImageFallback}><ActivityIndicator color={colors.accent} /><Text style={styles.loadingSub}>장면을 준비하고 있어요.</Text></View>}
+      <View style={styles.encounterScene}>
+        {candidate?.profileImageUri ? (
+          <Pressable onPress={() => onOpenPhoto({ uri: candidate.profileImageUri!, name: candidate.name })} accessibilityLabel={`${candidate.name} 사진 크게 보기`}>
+            <Image source={{ uri: candidate.profileImageUri }} resizeMode="cover" style={styles.encounterImage} />
+          </Pressable>
+        ) : <View style={styles.encounterImageFallback}><ActivityIndicator color={colors.accent} /><Text style={styles.loadingSub}>장면을 준비하고 있어요.</Text></View>}
+      </View>
       <View style={styles.encounterPanel}>
         <Text style={styles.encounterKicker}>{session.encounterLocation || candidate?.locationBase || '어느 거리'}</Text>
-        <Text style={styles.encounterNarration}>{session.encounterNarration}</Text>
-        {session.encounterNpcLine ? <Text style={styles.encounterLine}>{session.encounterNpcLine}</Text> : null}
+        <Animated.Text style={[styles.encounterNarration, { opacity: sceneFade }]}>{displayText || currentParagraph}</Animated.Text>
+        {typing ? <Text style={styles.encounterSpeaking}>상대가 말하는 중...</Text> : null}
+        {!sceneComplete ? (
+          <Pressable onPress={nextSceneParagraph} style={styles.encounterStoryButton}>
+            <Text style={styles.encounterStoryButtonText}>{typing ? '바로 보기' : '다음'}</Text>
+          </Pressable>
+        ) : null}
       </View>
-      {stats ? (
-        <View style={styles.encounterStats}>
-          <StatPill label="호감도" value={`${stats.affinity}%`} strong={stats.affinity >= 50} />
-          <StatPill label="경계심" value={stats.caution >= 70 ? '높음' : stats.caution >= 45 ? '보통' : '낮음'} danger={stats.caution >= 70} />
-          <StatPill label="대화 턴" value={`${turn}/${maxTurns}`} />
-          <StatPill label="연락처" value={session.encounterContactChanceLabel || contactChanceLabelForUi(stats)} strong={stats.affinity >= 75 && stats.caution < 55} danger={stats.affinity >= 50 && stats.caution >= 70} />
-        </View>
-      ) : null}
-      {phase === 'intro' ? (
+      {sceneComplete && phase === 'intro' ? (
         <View style={styles.choiceList}>
           {(session.encounterChoices || []).map(choice => (
             <Pressable key={choice.id} onPress={() => onApproach(choice.text)} style={styles.choiceButton}>
@@ -577,33 +706,42 @@ function StreetEncounterMode({ session, busy, onChooseLocation, onApproach, onCh
             </Pressable>
           ))}
         </View>
-      ) : phase === 'talk' ? (
+      ) : sceneComplete && phase === 'talk' ? (
         <View style={styles.choiceList}>
           {(session.encounterChoices || []).map(choice => (
             <Pressable key={choice.id} onPress={() => onChoice(choice.id)} style={styles.choiceButton}>
               <Text style={styles.choiceText}>{choice.text}</Text>
             </Pressable>
           ))}
-          <Pressable disabled={!canAskContact} onPress={onAskContact} style={[styles.contactWide, !canAskContact && styles.disabled]}>
-            <Text style={styles.contactWideText}>{canAskContact ? '연락처 물어보기' : '호감도 50%부터 연락처 요청 가능'}</Text>
-          </Pressable>
-          <Text style={styles.encounterHelp}>{canAskContact ? '성공은 확정이 아니며, 경계심이 높으면 거절될 수 있어요.' : '호감도와 경계심을 같이 관리해야 연락처를 자연스럽게 물어볼 수 있어요.'}</Text>
-          {talkedOut ? <Text style={styles.encounterHelp}>짧은 첫 대화는 여기까지입니다. 연락처를 물어보거나, 오늘은 정중히 마무리하세요.</Text> : null}
+          {talkedOut ? (
+            <View style={styles.encounterDecisionPanel}>
+              <Text style={styles.encounterDecisionTitle}>짧은 우연이 끝나가요</Text>
+              <Text style={styles.encounterDecisionSub}>연락처를 물어볼 수 있습니다. 성공 여부는 지금까지의 분위기에 따라 달라집니다.</Text>
+              <View style={styles.encounterDecisionActions}>
+                <Pressable onPress={onPassContact} style={styles.meetingSecondary}>
+                  <Text style={styles.meetingSecondaryText}>그냥 마무리</Text>
+                </Pressable>
+                <Pressable onPress={onAskContact} style={styles.meetingPrimary}>
+                  <Text style={styles.meetingPrimaryText}>연락처 물어보기</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
         </View>
-      ) : (
+      ) : sceneComplete && phase !== 'intro' && phase !== 'talk' ? (
         <View style={styles.choiceList}>
           <Text style={styles.encounterResult}>{phase === 'success' ? '연락처를 교환했습니다.' : phase === 'failed' ? '상대가 정중히 거절했습니다.' : '오늘의 우연은 여기서 끝났습니다.'}</Text>
           {session.encounterContactFailureReason ? <Text style={styles.encounterReason}>{session.encounterContactFailureReason}</Text> : null}
         </View>
-      )}
+      ) : null}
       {phase === 'intro' || phase === 'talk' ? (
         <View style={styles.encounterCustomBar}>
           <TextInput
             value={customText}
             onChangeText={setCustomText}
-            editable={!busy && !talkedOut}
+            editable={!busy && sceneComplete && !talkedOut}
             style={styles.encounterInput}
-            placeholder={talkedOut ? '대화 턴이 끝났습니다' : '직접 말하기'}
+            placeholder={!sceneComplete ? '장면이 진행 중입니다' : talkedOut ? '대화 턴이 끝났습니다' : '직접 말하기'}
             placeholderTextColor="#9b9b9b"
             multiline
           />
@@ -614,6 +752,39 @@ function StreetEncounterMode({ session, busy, onChooseLocation, onApproach, onCh
       ) : null}
     </View>
   );
+}
+
+function encounterSceneParagraphs(session: BlindDateSession, candidate?: BlindDateCandidate): string[] {
+  const phase = session.encounterPhase || 'locations';
+  if (phase === 'success') {
+    return splitEncounterParagraphs([
+      session.encounterNarration || '짧은 대화 끝에 분위기가 부드럽게 풀렸다. 상대는 잠깐 고민하더니 휴대폰을 꺼낸다.',
+      session.encounterNpcLine || '“괜찮으면 여기로 연락해요.”'
+    ]);
+  }
+  if (phase === 'failed') {
+    return splitEncounterParagraphs([
+      session.encounterNarration || session.encounterContactFailureReason || '상대는 잠깐 미안한 표정으로 시선을 내린다.',
+      session.encounterNpcLine || '“대화는 괜찮았는데, 연락처까지는 조금 부담스러워요.”'
+    ]);
+  }
+  if (phase === 'passed') {
+    return splitEncounterParagraphs([
+      session.encounterNarration || '당신은 오늘의 우연을 짧은 기억으로 남기기로 했다.',
+      session.encounterNpcLine || '“오늘 잠깐이었지만 반가웠어요. 조심히 가세요.”'
+    ]);
+  }
+  return splitEncounterParagraphs([
+    session.encounterNarration || `${session.encounterLocation || candidate?.locationBase || '어느 거리'}에서 낯선 시선이 잠깐 마주친다.`,
+    session.encounterNpcLine || ''
+  ]);
+}
+
+function splitEncounterParagraphs(parts: string[]): string[] {
+  return parts
+    .flatMap(part => String(part || '').split(/\n{2,}|\r?\n/))
+    .map(part => part.trim())
+    .filter(Boolean);
 }
 
 function contactChanceLabelForUi(stats: NonNullable<BlindDateSession['encounterStats']>): string {
@@ -675,23 +846,18 @@ function ProfileGachaMode({ session, activeIndex, refilling, onPass, onSelect, o
 
         <View style={styles.gachaSection}>
           <Text style={styles.gachaLabel}>말투 예시</Text>
-          <Text style={styles.gachaQuote}>“{candidate.firstDm}”</Text>
           <Text style={styles.gachaText}>{candidate.speechStyle}</Text>
         </View>
 
         <View style={styles.gachaPreviewGrid}>
           <View style={styles.gachaPreviewBox}>
-            <Text style={styles.gachaDarkLabel}>SNS</Text>
-            <Text style={styles.gachaSmallText}>{candidate.snsPreview || candidate.snsStyle}</Text>
+            <Text style={styles.gachaDarkLabel}>온 이유</Text>
+            <Text style={styles.gachaSmallText}>{candidate.snsPreview || candidate.relationshipStyle}</Text>
           </View>
           <View style={styles.gachaPreviewBox}>
-            <Text style={styles.gachaDarkLabel}>통화</Text>
-            <Text style={styles.gachaSmallText}>{candidate.callPreview || candidate.relationshipStyle}</Text>
+            <Text style={styles.gachaDarkLabel}>하고 싶은 말</Text>
+            <Text style={styles.gachaSmallText}>{candidate.callPreview || candidate.speechStyle}</Text>
           </View>
-        </View>
-
-        <View style={styles.tags}>
-          {[...candidate.likes.slice(0, 2), ...candidate.hobbies.slice(0, 2), candidate.contactPresetId].filter(Boolean).map(tag => <Text key={tag} style={styles.tag}>#{tag}</Text>)}
         </View>
 
         <View style={styles.gachaActions}>
@@ -713,28 +879,25 @@ function ProfileGachaMode({ session, activeIndex, refilling, onPass, onSelect, o
   );
 }
 
-function CandidateCard({ candidate, selected, revealed, onSelect, onArchive, onOpenDetails, selectLabel, selectDisabled }: { candidate: BlindDateCandidate; selected?: boolean; revealed?: boolean; onSelect: () => void; onArchive?: () => void; onOpenDetails?: () => void; selectLabel?: string; selectDisabled?: boolean }) {
-  const tags = [candidate.contactPresetId, candidate.hobbies[0], candidate.locationBase].filter(Boolean).slice(0, 3);
+function CandidateCard({ candidate, selected, revealed, onSelect, onArchive, onOpenDetails, onOpenPhoto, selectLabel, selectDisabled }: { candidate: BlindDateCandidate; selected?: boolean; revealed?: boolean; onSelect: () => void; onArchive?: () => void; onOpenDetails?: () => void; onOpenPhoto?: () => void; selectLabel?: string; selectDisabled?: boolean }) {
   return (
     <View style={[styles.candidateCard, selected && styles.candidateSelected]}>
-      {revealed && onOpenDetails ? (
-        <Pressable onPress={onOpenDetails}>
+      {revealed && (onOpenPhoto || onOpenDetails) ? (
+        <Pressable onPress={onOpenPhoto || onOpenDetails}>
           {candidate.profileImageUri ? <Image source={{ uri: candidate.profileImageUri }} style={styles.profileImage} /> : <View style={styles.hiddenImage}><Text style={styles.hiddenText}>{candidate.name.slice(0, 1)}</Text></View>}
         </Pressable>
       ) : revealed && candidate.profileImageUri ? <Image source={{ uri: candidate.profileImageUri }} style={styles.profileImage} /> : <View style={styles.hiddenImage}><Text style={styles.hiddenText}>{candidate.anonymousLabel || '?'}</Text></View>}
       <Text style={styles.candidateName}>{revealed ? `${candidate.name} · ${candidate.age}` : `${candidate.anonymousLabel}번 후보`}</Text>
       <Text style={styles.candidateJob}>{revealed ? candidate.job : '정체 비공개'}</Text>
       <Text style={styles.candidateBody}>{revealed ? candidate.personalitySummary : '답변만 보고 선택해보세요.'}</Text>
-      {revealed ? <Text style={styles.firstDm}>“{candidate.firstDm}”</Text> : null}
       {revealed ? (
         <View style={styles.previewBox}>
-          <Text style={styles.previewLabel}>SNS 미리보기</Text>
-          <Text style={styles.previewLine}>{candidate.snsPreview || candidate.snsStyle}</Text>
-          <Text style={styles.previewLabel}>첫 통화 미리보기</Text>
-          <Text style={styles.previewLine}>{candidate.callPreview || candidate.relationshipStyle}</Text>
+          <Text style={styles.previewLabel}>소개팅 자리에 온 이유</Text>
+          <Text style={styles.previewLine}>{candidate.snsPreview || candidate.relationshipStyle}</Text>
+          <Text style={styles.previewLabel}>소개팅남에게 하고 싶은 말</Text>
+          <Text style={styles.previewLine}>{candidate.callPreview || candidate.speechStyle}</Text>
         </View>
       ) : null}
-      <View style={styles.tags}>{tags.map(tag => <Text key={tag} style={styles.tag}>#{tag}</Text>)}</View>
       <View style={styles.candidateActions}>
         <Pressable disabled={selectDisabled} onPress={onSelect} style={[styles.selectButton, selected && styles.selectButtonActive, selectDisabled && styles.disabled]}>
           <Text style={[styles.selectButtonText, selected && styles.selectButtonTextActive]}>{selected ? '선택됨' : selectLabel || '이 사람 선택'}</Text>
@@ -830,97 +993,97 @@ function pickRotationQuestionSet(avoid: string[] = []): string[] {
   const source = pool.length >= 3 ? pool : ROTATION_QUESTION_POOL;
   const shuffled = [...source].sort(() => Math.random() - 0.5);
   const groups = [
-    shuffled.find(question => /(첫 데이트|좋아|연락|가까워|설렘|분위기|통화)/.test(question)),
-    shuffled.find(question => /(솔직|싫|불안|늦|전 연인|질투|양보|시험|단점|빠르)/.test(question)),
-    shuffled.find(question => /(오늘|갑자기|목소리|옷|선택받|밀당|버튼)/.test(question))
+    shuffled.find(question => /(카톡|연락|자\?|관심|밀당|애프터|첫인상|취향|플러팅)/.test(question)),
+    shuffled.find(question => /(스킨십|스킨쉽|키스|호캉스|집|밤|손잡|섹시|질투|전 남친)/.test(question)),
+    shuffled.find(question => /(무인도|좀비|탕수육|민트초코|흑역사|방귀|라면|치킨|로또|벌레)/.test(question))
   ].filter((question): question is string => Boolean(question));
   return [...new Set([...groups, ...shuffled])].slice(0, 3);
 }
 
 const ROTATION_QUESTION_POOL = [
-  '첫 데이트에서 어떤 분위기를 좋아해?',
-  '연락은 자주 하는 편이 좋아, 편한 때 몰아서 하는 편이 좋아?',
-  '가까워지면 어떤 모습이 제일 달라져?',
-  '좋아하는 사람이 생기면 티가 많이 나는 편이야?',
-  '상대가 힘들다고 하면 현실적으로 뭘 해줄 수 있어?',
-  '너한테 좋은 사람과 끌리는 사람은 같은 사람이야?',
-  '처음 만난 사람한테 어디까지 솔직해질 수 있어?',
-  '연애할 때 제일 먼저 확인하고 싶은 기준은 뭐야?',
-  '상대가 연락이 느리면 기다리는 편이야, 바로 식는 편이야?',
-  '내가 약속에 늦으면 첫 반응은?',
-  '호감이 없어도 예의상 다정하게 말하는 편이야?',
-  '사귀기 전에 제일 보기 싫은 행동은 뭐야?',
-  '좋아하면 먼저 다가가는 편이야, 상대가 오길 기다려?',
-  '첫 만남에서 이 사람이 괜찮다 싶어지는 순간은?',
-  '연애할 때 너를 제일 불안하게 만드는 건 뭐야?',
-  '가까워지면 제일 먼저 들키는 네 단점은 뭐야?',
-  '상대가 너무 착하기만 하면 매력이 떨어져?',
-  '질투 나면 솔직히 말해, 아니면 혼자 삭혀?',
-  '상대가 전 연인 얘기를 자주 하면 어떻게 받아들여?',
-  '연애에서 절대 양보 못 하는 선은 뭐야?',
-  '내가 갑자기 오늘 보고 싶다고 하면 나올 수 있어?',
-  '네가 일부러 밀당한다면 왜 하게 될 것 같아?',
-  '첫 통화에서 목소리가 취향이면 마음이 빨리 움직여?',
-  '나랑 가까워지면 제일 조심해야 할 네 버튼은 뭐야?',
-  '오늘 여기 있는 사람 중에 네가 선택받으려면 뭘 보여줄 거야?',
-  '상대가 네 취향이 아닌 옷을 입고 오면 솔직히 말해?',
-  '첫 데이트가 어색하게 끝나도 사람이 괜찮으면 다시 만나?',
-  '너한테 설렘이 식는 가장 빠른 순간은?',
-  '연애 초반에 너무 빠르다고 느끼는 기준은 어디부터야?',
-  '나를 시험해본다면 어떤 걸 보고 판단할 것 같아?',
-  '내가 갑자기 “지금 나 보러 올래?” 하면 현실적으로 어떻게 답해?',
-  '너는 좋아하는 사람 앞에서 멋있는 척해, 편한 척해?',
-  '상대가 사소한 거짓말을 했는데 이유가 귀여우면 넘어갈 수 있어?',
-  '첫 만남에서 상대가 제일 없어 보이는 순간은?',
-  '연애 중에도 썸 타는 기분이 필요하다고 생각해?',
-  '네가 질투를 숨기면 어떤 식으로 티가 나?',
+  '썸남이 밤 11시에 "자?" 하고 카톡 보내면 솔직한 심정은?',
+  '얼굴 잘생기고 164cm 남자 vs 얼굴 평균이하이고 키 182cm 남자',
+  '내가 첫눈에 반했다고 하면 솔직히 믿을래?',
+  '가까워지면 애교가 많아지는 편이야, 아니면 타격감 좋은 샌드백이 되는 편이야?',
+  '솔직히 전 남친 번호, 아직 저장되어 있어?',
+  '오늘 여기 있는 사람 중에 솔직히 내가 제일 네 취향이지?',
+  '샤워할 때 씻는 순서가 어떻게 돼?',
+  '연락 텀 3분인데 노잼인 남자 vs 연락 텀 3시간인데 꿀잼인 남자.',
+  '내가 다짜고짜 손잡으면 확 뺄 거야, 가만히 있을 거야?',
+  '칭찬에 약해, 아니면 살짝 선 넘는 장난에 더 끌려?',
+  '술버릇이 뭐야? 혹시 취하면 스킨십 많아지는 타입?',
+  '나랑 무인도에 갇히면 제일 먼저 뭘 할래?',
+  '스킨십 진도는 마음이 중요해, 분위기가 중요해?',
+  "네가 생각하는 '선 넘는 농담'의 기준은 어디까지야? 나 오늘 선 좀 넘어보려고.",
+  '남자가 섹시해 보이는 순간은 언제야? 셔츠 걷어붙일 때? 후진할 때?',
+  '오늘 입은 옷, 나 만나려고 특별히 신경 쓴 거야?',
+  '내가 밤늦게 집 앞으로 찾아가서 "잠깐 나와" 하면 머리 감고 나와, 모자 쓰고 나와?',
+  '스킨십할 때 리드하는 게 좋아, 당하는 게 좋아?',
+  '첫 키스는 사귀고 나서? 아니면 사귀기 전에도 느낌 오면 가능?',
+  '남사친이랑 단둘이 1박 2일 여행 간다는 애인, 이해 가능해?',
+  '너무 순진해서 스킨쉽 망설이는 남자 vs 스킨쉽 너무 적극적인 남자',
   '나한테 관심 없는 척하다가 들키면 뭐라고 변명할래?',
-  '상대가 너무 안정적이면 심심할 수도 있어?',
-  '좋아하는 사람이 네 하루를 너무 많이 차지하면 좋아, 무서워?',
-  '데이트 장소가 별로여도 상대가 좋으면 기억에 남아?',
-  '나랑 말싸움하면 이기려고 해, 풀려고 해?',
-  '상대가 너를 너무 잘 파악하면 설레, 부담스러워?',
-  '오늘 세 명 중 너만의 무기를 하나 꺼내야 한다면 뭐야?',
-  '네가 생각하는 “선 넘는 농담”은 어디부터야?',
-  '연애할 때 네가 제일 자주 착각하는 신호는 뭐야?',
-  '상대가 네 취향을 맞추려고 애쓰면 고마워, 부담스러워?',
-  '나한테 바로 들키면 민망한 네 습관 하나만 말해봐.',
-  '첫 데이트에서 침묵이 10초 생기면 무슨 말로 깨?',
-  '나를 좋아하게 되면 제일 먼저 누구한테 말할 것 같아?',
-  '상대가 너무 솔직해서 상처 주면 그게 매력이 될 수도 있어?',
-  '썸인데 내가 다른 약속을 우선하면 서운한 티 낼 거야?',
-  '너는 감정이 커지면 연락이 많아져, 오히려 조심스러워져?',
-  '내가 네 단점을 정확히 짚으면 인정해, 방어해?',
-  '사귀기 전 둘이 여행 가자는 말은 어느 정도로 받아들여?',
-  '상대가 네 SNS에 댓글을 자주 달면 좋아, 민망해?',
-  '네가 은근히 약한 플러팅은 어떤 스타일이야?',
-  '나랑 가치관 토론하다가 안 맞으면 더 궁금해져, 식어?',
-  '상대가 너무 인기 많다는 걸 알면 더 끌려, 피곤해?',
-  '좋아하면 약속을 무리해서라도 잡는 편이야?',
-  '첫 만남에 “우리 잘 맞는 것 같아”라는 말 들으면 어때?',
-  '네가 상대한테 마음을 닫기 직전에 하는 행동은 뭐야?',
-  '연애에서 네가 가장 못 참는 애매함은 뭐야?',
-  '나를 하루 만에 기억하게 만들려면 뭘 보여줄래?',
-  '상대가 전화를 싫어하면 맞춰줄 수 있어?',
-  '너는 칭찬에 약해, 장난 섞인 도발에 약해?',
-  '오늘 대화가 끝나고 내가 기억했으면 하는 네 모습은 뭐야?',
-  '상대가 피곤하다고 데이트를 미루면 몇 번까지 이해해?',
-  '좋아하는 사람에게 괜히 심술 부리는 타입이야?',
-  '연애할 때 네가 제일 숨기기 어려운 감정은 뭐야?',
-  '나랑 가까워지면 제일 먼저 바뀔 말투는 뭐야?',
-  '상대가 너를 너무 쉽게 믿으면 좋게 보여, 걱정돼?',
-  '네가 먼저 보고 싶다고 말하는 기준은 어디야?',
-  '좋아하는 사람과 친구 사이의 결정적 차이는 뭐라고 생각해?',
-  '상대가 네 계획을 망쳤는데 얼굴 보면 풀릴 수 있어?',
-  '나랑 처음 싸운다면 아마 어떤 주제일 것 같아?',
-  '너는 사랑받는 느낌을 말에서 느껴, 시간에서 느껴?',
-  '상대가 너무 예측 가능하면 안정적이야, 지루해?',
-  '내가 장난으로 떠보는 말을 하면 바로 알아차릴 것 같아?',
-  '호감 있는 사람에게 일부러 늦게 답장해본 적 있어?',
-  '네가 연애에서 가장 쉽게 흔들리는 순간은 언제야?'
+  '내가 너무 빤히 쳐다보면 시선 피할 거야, 같이 쳐다볼 거야?',
+  '자취방에 벌레 나오면 너의 행동은?',
+  '썸남이 자취방에서 넷플릭스 보자고 하면 무슨 생각부터 들어?',
+  '네가 은근히 흘리는 플러팅 기술 하나만 나한테 써봐.',
+  '얼굴은 완벽한데 입만 열면 깬다 vs 얼굴은 평범한데 목소리가 미쳤다.',
+  '나랑 술 마시다가 네가 취하면 어떻게 돼? 집에 무사히 갈 수 있어?',
+  '사귀기 전에 둘이 호캉스 가자는 말, 어떻게 받아들여?',
+  '내가 다른 여자한테 엄청 친절하게 대하면 질투 날 것 같아?',
+  '남친이랑 나보다 이쁜 친구랑 셋이 노는데 남친이 자꾸 친구 쳐다보면?',
+  '만약에 좀비 사태가 터지면 나 지켜줄 거야, 나 버리고 도망갈 거야?',
+  '길에서 완벽한 이상형을 만났는데 사이비 종교야. 따라간다 vs 만다.',
+  '네가 먹으려는 탕수육에 내가 냅다 소스 부어버리면 바로 집 갈 거야?',
+  '한겨울에 패딩 안에 반팔 입기 vs 한여름에 반팔 안에 히트텍 입기.',
+  '민트초코 좋아해? 여기서 안 맞으면 우리 오늘이 마지막일 수도 있어.',
+  '내가 갑자기 길에서 춤추면 모른 척할 거야, 같이 춰줄 거야?',
+  '카톡 프로필 사진 고를 때 친구들한테 컨펌받는 편이지?',
+  '네가 가장 숨기고 싶은 흑역사 하나만 말해주면 내 것도 하나 풀게.',
+  '샤워하면서 혼자 상황극 해본 적 있다, 없다?',
+  '전 애인이랑 환승 이별 vs 잠수 이별. 뭐가 더 최악이야?',
+  '내 첫인상 무슨 동물 닮았어? 눈치 보지 말고 솔직하게 말해봐.',
+  '내가 아재 개그 쳤는데 진짜 개노잼이면 정색해, 억텐으로 웃어줘?',
+  '로또 1등 당첨되면 나한테 얼마까지 줄 수 있어?',
+  '비 오는 날 파전에 막걸리 vs 눈 오는 날 분위기 좋은 바에서 와인.',
+  '나랑 밥 먹다가 내 이빨에 고춧가루 낀 거 보면 어떻게 말해줄래?',
+  '네가 방귀 뀌었는데 내가 들었어. 어떻게 대처할래?',
+  '평생 라면 안 먹기 vs 평생 치킨 안 먹기.',
+  '내가 약속에 1시간 늦었는데 한 손에 명품백 들고 오면 용서해 줘?',
+  '애인이 내 친구들이랑 나보다 더 잘 놀아도 짜증 나지 않아?',
+  '넌 연애할 때 집착하는 편이야, 방목하는 편이야?',
+  '나랑 말싸움하면 논리로 이기려고 해, 아니면 감정으로 호소해?',
+  '내가 네 단점을 팩트 폭행하면 화낼 거야, 인정할 거야?',
+  '상대가 너무 착하고 안정적이기만 하면 질려서 딴생각 들어?',
+  "솔직히 나 처음 봤을 때 '얘 좀 괜찮네'라고 3초 이상 생각했다, 안 했다?",
+  "연애할 때 '이것만은 절대 양보 못해' 하는 너만의 똥고집 있어?",
+  '호감이 별로 없어도 상대방이 미친 듯이 직진하면 흔들리는 편이야?',
+  '네가 생각하는 가장 완벽한 데이트의 마무리는 뭐야?',
+  '내가 너한테 "오늘 집 안 가고 싶어" 하면 뭐라고 할래?',
+  '질투심 유발하려고 일부러 다른 남자 얘기 꺼내본 적 있어?',
+  '애인의 핸드폰 비번 알게 되면 몰래 볼 거야, 모른 척할 거야?',
+  '네 앞에서 내가 펑펑 우면 달래줄래, 당황해서 얼어붙을래?',
+  '상대방 과거 연애사, 다 알아야 직성이 풀려 아니면 묻어두는 게 좋아?',
+  '넌 내가 지금 속으로 무슨 생각 하는 것 같아?',
+  '내가 갑자기 키스할 것처럼 다가가면 눈 감을래, 밀쳐낼래?',
+  '너 완전 빡쳤을 때 풀어주는 제일 확실하고 빠른 방법이 뭐야?',
+  '썸 탈 때 제일 짜릿한 순간이 언제라고 생각해?',
+  '네가 먼저 꼬시고 싶은 남자는 어떤 스타일이야?',
+  '연락 절대 안 되는 애인 vs 만날 때마다 핸드폰만 보는 애인.',
+  '내가 너한테 완전히 빠지게 만들 자신 있어?',
+  '오늘 밤에 나 말고 다른 남자랑도 연락할 거야?',
+  '네가 일부러 밀당한다면, 그건 나를 헷갈리게 하려는 거야 더 안달 나게 하려는 거야?',
+  '나랑 가까워지면 네가 나한테 할 수 있는 제일 심한 장난은 뭐야?',
+  '첫 데이트가 끝날 때쯤 내가 별로 안 아쉬워하면 자존심 상해?',
+  '만약 우리가 사귀게 되면 내가 제일 고생할 것 같은 부분은 뭐야?',
+  '스킨십 진도는 남자가 먼저 빼는 게 맞아, 아니면 눈치껏 같이?',
+  '내가 장난으로 "우리 그냥 사귈래?" 하면 어떻게 받아칠 거야?',
+  '네가 외로움을 제일 심하게 타는 시간이나 계절은 언제야?',
+  '나랑 단둘이 차 안에서 30분 동안 있으면 무슨 얘기 할래?',
+  '오늘 대화 끝나고 내가 너한테 애프터 신청하면 바로 콜 할래, 좀 튕길래?'
 ];
 
-function RotationMode({ session, rotationText, setRotationText, activeCandidateId, setActiveCandidateId, onSend, onSelect, onOpenDetails, busy }: {
+function RotationMode({ session, rotationText, setRotationText, activeCandidateId, setActiveCandidateId, onSend, onSelect, onOpenDetails, onOpenPhoto, busy }: {
   session: BlindDateSession;
   rotationText: string;
   setRotationText: (value: string) => void;
@@ -929,6 +1092,7 @@ function RotationMode({ session, rotationText, setRotationText, activeCandidateI
   onSend: (candidateId: string, presetText?: string) => void;
   onSelect: (candidateId: string) => void;
   onOpenDetails: (candidate: BlindDateCandidate) => void;
+  onOpenPhoto: (preview: PhotoPreview) => void;
   busy?: boolean;
 }) {
   const [introIndex, setIntroIndex] = useState(0);
@@ -998,7 +1162,11 @@ function RotationMode({ session, rotationText, setRotationText, activeCandidateI
       <View style={styles.section}>
         <View style={styles.rotationIntro}>
           <Text style={styles.rotationIntroKicker}>오늘의 후보 {introIndex + 1}/{session.candidates.length}</Text>
-          {introCandidate?.profileImageUri ? <Image source={{ uri: introCandidate.profileImageUri }} style={styles.rotationIntroImage} /> : <View style={styles.hiddenImage}><Text style={styles.hiddenText}>{introCandidate?.name.slice(0, 1) || '?'}</Text></View>}
+          {introCandidate?.profileImageUri ? (
+            <Pressable onPress={() => onOpenPhoto({ uri: introCandidate.profileImageUri!, name: introCandidate.name })} accessibilityLabel={`${introCandidate.name} 사진 크게 보기`}>
+              <Image source={{ uri: introCandidate.profileImageUri }} style={styles.rotationIntroImage} />
+            </Pressable>
+          ) : <View style={styles.hiddenImage}><Text style={styles.hiddenText}>{introCandidate?.name.slice(0, 1) || '?'}</Text></View>}
           <Text style={styles.rotationIntroName}>{introCandidate?.name} · {introCandidate?.age}</Text>
           <Text style={styles.rotationIntroSub}>{introCandidate?.job} · {introCandidate?.personalitySummary}</Text>
           <View style={styles.rotationIntroDots}>
@@ -1021,7 +1189,11 @@ function RotationMode({ session, rotationText, setRotationText, activeCandidateI
           const candidateTurns = (session.rotationTurns || []).filter(turn => turn.candidateId === candidate.id);
           return (
             <Pressable key={candidate.id} onPress={() => onSelect(candidate.id)} style={[styles.rotationSummaryCard, session.selectedCandidateId === candidate.id && styles.candidateSelected]}>
-              {candidate.profileImageUri ? <Image source={{ uri: candidate.profileImageUri }} style={styles.rotationSummaryImage} /> : <View style={styles.rotationAvatarFallback}><Text style={styles.rankFallbackText}>{candidate.name.slice(0, 1)}</Text></View>}
+              {candidate.profileImageUri ? (
+                <Pressable onPress={event => { event.stopPropagation(); onOpenPhoto({ uri: candidate.profileImageUri!, name: candidate.name }); }} accessibilityLabel={`${candidate.name} 사진 크게 보기`}>
+                  <Image source={{ uri: candidate.profileImageUri }} style={styles.rotationSummaryImage} />
+                </Pressable>
+              ) : <View style={styles.rotationAvatarFallback}><Text style={styles.rankFallbackText}>{candidate.name.slice(0, 1)}</Text></View>}
               <View style={styles.rotationSummaryText}>
                 <Text style={styles.rankName}>{candidate.name} · {candidate.job}</Text>
                 <Text style={styles.rankSub}>{candidate.personalitySummary}</Text>
@@ -1047,7 +1219,11 @@ function RotationMode({ session, rotationText, setRotationText, activeCandidateI
           const count = (session.rotationTurns || []).filter(turn => turn.candidateId === candidate.id).length;
           return (
             <Pressable key={candidate.id} disabled={!allDone} onPress={() => setActiveCandidateId(candidate.id)} style={[styles.rotationChip, current?.id === candidate.id && styles.rotationChipActive]}>
-              {candidate.profileImageUri ? <Image source={{ uri: candidate.profileImageUri }} style={styles.rotationAvatar} /> : <View style={styles.rotationAvatarFallback}><Text style={styles.rankFallbackText}>{candidate.name.slice(0, 1)}</Text></View>}
+              {candidate.profileImageUri ? (
+                <Pressable onPress={event => { event.stopPropagation(); onOpenPhoto({ uri: candidate.profileImageUri!, name: candidate.name }); }} accessibilityLabel={`${candidate.name} 사진 크게 보기`}>
+                  <Image source={{ uri: candidate.profileImageUri }} style={styles.rotationAvatar} />
+                </Pressable>
+              ) : <View style={styles.rotationAvatarFallback}><Text style={styles.rankFallbackText}>{candidate.name.slice(0, 1)}</Text></View>}
               <Text style={styles.rotationChipText}>{candidate.name}</Text>
               <Text style={[styles.rotationCount, count >= 3 && styles.rotationCountDone]}>{Math.min(3, count)}/3</Text>
             </Pressable>
@@ -1056,7 +1232,7 @@ function RotationMode({ session, rotationText, setRotationText, activeCandidateI
       </ScrollView>
       {current ? (
         <View style={styles.rotationPanel}>
-          <CandidateCard candidate={current} selected={session.selectedCandidateId === current.id} revealed onSelect={() => onSelect(current.id)} onOpenDetails={() => onOpenDetails(current)} selectDisabled selectLabel="대화 진행 중" />
+          <CandidateCard candidate={current} selected={session.selectedCandidateId === current.id} revealed onSelect={() => onSelect(current.id)} onOpenDetails={() => onOpenDetails(current)} onOpenPhoto={() => current.profileImageUri ? onOpenPhoto({ uri: current.profileImageUri, name: current.name }) : undefined} selectDisabled selectLabel="대화 진행 중" />
           <View style={styles.rotationTalk}>
             {turns.length ? turns.map(turn => (
               <View key={turn.id} style={styles.rotationTurn}>
@@ -1120,7 +1296,6 @@ function RankingBlock({ mode, candidates, ranking, selectedCandidateId, onSelect
 
 function CandidateDetailModal({ candidate, onClose }: { candidate: BlindDateCandidate | null; onClose: () => void }) {
   if (!candidate) return null;
-  const tags = [...candidate.likes, ...candidate.hobbies, candidate.contactPresetId].filter(Boolean).slice(0, 8);
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.detailOverlay}>
@@ -1138,7 +1313,6 @@ function CandidateDetailModal({ candidate, onClose }: { candidate: BlindDateCand
             ) : (
               <View style={styles.detailImageFallback}><Text style={styles.hiddenText}>{candidate.name.slice(0, 1)}</Text></View>
             )}
-            <Text style={styles.detailQuote}>“{candidate.firstDm}”</Text>
             <View style={styles.detailSection}>
               <Text style={styles.detailLabel}>성격</Text>
               <Text style={styles.detailText}>{candidate.personalitySummary}</Text>
@@ -1152,13 +1326,35 @@ function CandidateDetailModal({ candidate, onClose }: { candidate: BlindDateCand
               <Text style={styles.detailText}>{candidate.speechStyle}</Text>
             </View>
             <View style={styles.detailSection}>
-              <Text style={styles.detailLabel}>SNS / 통화 느낌</Text>
-              <Text style={styles.detailText}>{candidate.snsPreview || candidate.snsStyle}</Text>
-              <Text style={styles.detailText}>{candidate.callPreview || candidate.relationshipStyle}</Text>
+              <Text style={styles.detailLabel}>소개팅 자리에 온 이유</Text>
+              <Text style={styles.detailText}>{candidate.snsPreview || candidate.relationshipStyle}</Text>
             </View>
-            <View style={styles.tags}>{tags.map(tag => <Text key={tag} style={styles.tag}>#{tag}</Text>)}</View>
+            <View style={styles.detailSection}>
+              <Text style={styles.detailLabel}>소개팅남에게 하고 싶은 말</Text>
+              <Text style={styles.detailText}>{candidate.callPreview || candidate.speechStyle}</Text>
+            </View>
             <View style={styles.detailBottomSpacer} />
           </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function PhotoPreviewModal({ preview, onClose }: { preview: PhotoPreview | null; onClose: () => void }) {
+  if (!preview) return null;
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.photoPreviewOverlay}>
+        <Pressable onPress={onClose} style={styles.photoPreviewBackdrop} accessibilityLabel="사진 크게 보기 닫기" />
+        <View style={styles.photoPreviewPanel}>
+          <Image source={{ uri: preview.uri }} resizeMode="contain" style={styles.photoPreviewImage} />
+          <View style={styles.photoPreviewFooter}>
+            <Text style={styles.photoPreviewTitle}>{preview.name || '사진'}</Text>
+            <Pressable onPress={onClose} style={styles.photoPreviewCloseButton}>
+              <Text style={styles.photoPreviewCloseText}>닫기</Text>
+            </Pressable>
+          </View>
         </View>
       </View>
     </Modal>
@@ -1171,6 +1367,8 @@ const styles = StyleSheet.create({
   back: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#f2eee6', alignItems: 'center', justifyContent: 'center' },
   backText: { fontSize: 34, lineHeight: 38, fontWeight: '900', color: colors.text },
   headerText: { flex: 1 },
+  headerExitButton: { minHeight: 38, paddingHorizontal: 13, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f2eee6', borderWidth: 1, borderColor: colors.border },
+  headerExitText: { color: colors.text, fontSize: 13, fontWeight: '900' },
   title: { color: colors.text, fontSize: 26, fontWeight: '900' },
   subtitle: { marginTop: 4, color: colors.sub, fontSize: 13, fontWeight: '800' },
   content: { padding: 16, paddingBottom: 140 },
@@ -1230,13 +1428,29 @@ const styles = StyleSheet.create({
   loadingDotActive: { width: 16, backgroundColor: colors.accent },
   grid: { gap: 12 },
   encounterWrap: { gap: 12 },
+  encounterScene: { borderRadius: 8, overflow: 'hidden', backgroundColor: '#111', borderWidth: 1, borderColor: '#222' },
   encounterImage: { width: '100%', aspectRatio: 1.33, borderRadius: 8, backgroundColor: '#111' },
   encounterImageFallback: { width: '100%', aspectRatio: 1.33, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#111', gap: 8 },
+  encounterSuccessHero: { minHeight: 360, borderRadius: 8, overflow: 'hidden', backgroundColor: '#111', borderWidth: 1, borderColor: '#222' },
+  encounterSuccessImageButton: { ...StyleSheet.absoluteFillObject },
+  encounterSuccessImage: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  encounterSuccessShade: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.34)' },
+  encounterSuccessCopy: { flex: 1, justifyContent: 'flex-end', padding: 16 },
+  encounterSuccessKicker: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, overflow: 'hidden', color: '#241a00', backgroundColor: colors.accent, fontSize: 12, fontWeight: '900' },
+  encounterSuccessName: { marginTop: 10, color: '#fffefa', fontSize: 30, lineHeight: 36, fontWeight: '900' },
+  encounterSuccessLine: { marginTop: 8, color: '#f7f2e9', fontSize: 15, lineHeight: 22, fontWeight: '900' },
+  encounterProfilePanel: { borderRadius: 8, padding: 14, backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
+  profileModalLabel: { marginTop: 12, color: colors.sub, fontSize: 12, fontWeight: '900' },
+  profileModalTitle: { marginTop: 5, color: colors.text, fontSize: 20, lineHeight: 25, fontWeight: '900' },
+  profileModalText: { marginTop: 8, color: colors.text, fontSize: 14, lineHeight: 21, fontWeight: '800' },
   encounterPanel: { borderRadius: 8, padding: 14, backgroundColor: '#111', borderWidth: 1, borderColor: '#222' },
   encounterLoading: { marginTop: 12, minHeight: 118, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#191919', borderWidth: 1, borderColor: '#2a2a2a' },
   panelSub: { marginTop: 6, color: '#d8cda8', fontSize: 13, lineHeight: 19, fontWeight: '800' },
   encounterKicker: { color: colors.accent, fontSize: 12, fontWeight: '900' },
   encounterNarration: { marginTop: 8, color: '#fffefa', fontSize: 15, lineHeight: 23, fontWeight: '800' },
+  encounterSpeaking: { marginTop: 10, color: '#d8cda8', fontSize: 12, lineHeight: 17, fontWeight: '900' },
+  encounterStoryButton: { alignSelf: 'flex-start', marginTop: 12, minHeight: 38, paddingHorizontal: 14, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
+  encounterStoryButtonText: { color: '#241a00', fontSize: 13, fontWeight: '900' },
   encounterLine: { marginTop: 12, padding: 12, borderRadius: 8, color: colors.text, backgroundColor: '#fffefa', fontSize: 15, lineHeight: 22, fontWeight: '900' },
   locationGrid: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 12 },
   locationCard: { flexBasis: '48%', minHeight: 92, paddingHorizontal: 12, paddingVertical: 14, borderRadius: 12, justifyContent: 'center', backgroundColor: '#151515', borderWidth: 1, borderColor: '#2f2f2f', shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
@@ -1250,6 +1464,14 @@ const styles = StyleSheet.create({
   choiceList: { gap: 8 },
   choiceButton: { minHeight: 56, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12, alignItems: 'stretch', justifyContent: 'center', backgroundColor: '#eef3f7', borderWidth: 1, borderColor: '#dde5eb' },
   choiceText: { width: '100%', color: '#21303b', fontSize: 14, lineHeight: 21, fontWeight: '900', textAlign: 'center', flexShrink: 1 },
+  encounterDecisionPanel: { gap: 12, padding: 14, borderRadius: 8, backgroundColor: '#fff8da', borderWidth: 1, borderColor: '#ead894' },
+  encounterDecisionTitle: { color: colors.text, fontSize: 18, lineHeight: 23, fontWeight: '900', textAlign: 'center' },
+  encounterDecisionSub: { color: '#5f5439', fontSize: 13, lineHeight: 19, fontWeight: '800', textAlign: 'center' },
+  encounterDecisionActions: { flexDirection: 'row', gap: 8 },
+  meetingSecondary: { flex: 1, minHeight: 48, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
+  meetingSecondaryText: { color: colors.text, fontSize: 14, fontWeight: '900' },
+  meetingPrimary: { flex: 1.25, minHeight: 48, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent, borderWidth: 1, borderColor: '#d9bd42' },
+  meetingPrimaryText: { color: '#241a00', fontSize: 14, fontWeight: '900' },
   encounterCustomBar: { marginTop: 10, flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   encounterInput: { flex: 1, minHeight: 48, maxHeight: 104, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 11, backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border, color: colors.text, fontSize: 14, lineHeight: 20, fontWeight: '800' },
   encounterSendButton: { minHeight: 48, minWidth: 72, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent, borderWidth: 1, borderColor: '#d9bd42' },
@@ -1402,5 +1624,13 @@ const styles = StyleSheet.create({
   detailSection: { marginTop: 12, padding: 10, borderRadius: 8, backgroundColor: '#f7f2e9', borderWidth: 1, borderColor: colors.border },
   detailLabel: { color: colors.text, fontSize: 12, fontWeight: '900' },
   detailText: { marginTop: 5, color: colors.sub, fontSize: 13, lineHeight: 19, fontWeight: '800' },
-  detailBottomSpacer: { height: 34 }
+  detailBottomSpacer: { height: 34 },
+  photoPreviewOverlay: { flex: 1, padding: 14, justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.78)' },
+  photoPreviewBackdrop: { ...StyleSheet.absoluteFillObject },
+  photoPreviewPanel: { maxHeight: '92%', borderRadius: 8, overflow: 'hidden', backgroundColor: '#111', borderWidth: 1, borderColor: '#333' },
+  photoPreviewImage: { width: '100%', height: 560, maxHeight: '88%', backgroundColor: '#111' },
+  photoPreviewFooter: { minHeight: 58, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#111' },
+  photoPreviewTitle: { flex: 1, color: '#fffefa', fontSize: 16, fontWeight: '900' },
+  photoPreviewCloseButton: { minHeight: 38, paddingHorizontal: 14, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
+  photoPreviewCloseText: { color: '#241a00', fontWeight: '900' }
 });

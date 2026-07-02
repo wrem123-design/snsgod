@@ -11,6 +11,7 @@ type MenuItem = {
 const menuImages = {
   encounter: require('../../assets/etc-menu/encounter.png'),
   blindDate: require('../../assets/etc-menu/blind-date.png'),
+  datingApp: require('../../assets/etc-menu/dating-app.png'),
   worldcup: require('../../assets/etc-menu/worldcup.png'),
   sumgod: require('../../assets/etc-menu/sumgod.png'),
   gallery: require('../../assets/etc-menu/gallery.png'),
@@ -18,10 +19,11 @@ const menuImages = {
   debug: require('../../assets/etc-menu/debug.png')
 };
 
-export function MenuHubScreen({ mode, onOpenEncounter, onOpenBlindDate, onOpenIdealWorldcup, onOpenReferences, onOpenSumGod, onOpenGallery, onOpenNotifications, onOpenSettings, onOpenDebug }: {
+export function MenuHubScreen({ mode, onOpenEncounter, onOpenBlindDate, onOpenDatingApp, onOpenIdealWorldcup, onOpenReferences, onOpenSumGod, onOpenGallery, onOpenNotifications, onOpenSettings, onOpenDebug }: {
   mode: 'etc';
   onOpenEncounter: () => void;
   onOpenBlindDate: () => void;
+  onOpenDatingApp: () => void;
   onOpenIdealWorldcup: () => void;
   onOpenReferences: () => void;
   onOpenSumGod: () => void;
@@ -33,6 +35,7 @@ export function MenuHubScreen({ mode, onOpenEncounter, onOpenBlindDate, onOpenId
   const items: MenuItem[] = [
     { title: '우연한 만남', image: menuImages.encounter, onPress: onOpenEncounter },
     { title: '블라인드 데이트', image: menuImages.blindDate, onPress: onOpenBlindDate },
+    { title: '데이트 어플', subtitle: '3명 중 최종 선택', image: menuImages.datingApp, onPress: onOpenDatingApp },
     { title: '이상형 월드컵', image: menuImages.worldcup, onPress: onOpenIdealWorldcup },
     { title: 'SumGod', subtitle: '커플 질문 다이어리', image: menuImages.sumgod, onPress: onOpenSumGod },
     { title: '갤러리', subtitle: '저장된 이미지 보기', image: menuImages.gallery, onPress: onOpenGallery }

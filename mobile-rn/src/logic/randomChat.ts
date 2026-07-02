@@ -69,13 +69,24 @@ export function randomTraitBundle(state: SNSGodState, gender: RandomGender) {
     'underground jazz singer avoiding their old name',
     'hotel concierge for supernatural guests',
     'android learning how to lie politely',
-    'ghost who remembers too many versions of the same city'
+    'ghost who remembers too many versions of the same city',
+    'cold female criminal-psychology writer who treats conversations like experiments',
+    'adult female lounge performer who is openly sensual and tests chemistry through flirting',
+    'adult dating columnist who speaks bluntly about attraction, skinship, jealousy, and chemistry',
+    'cold manipulative adult woman who treats random chat like a psychological test',
+    'psychopathic low-empathy woman with controlled charm and dangerous curiosity',
+    'adult club manager who flirts provocatively while measuring the user reaction'
   ];
   const temperaments = [
     'bright but emotionally guarded', 'dry, teasing, and secretly attentive',
     'soft-spoken but stubborn', 'chaotic and affectionate', 'formal, curious, and lonely',
     'protective but bad at admitting fear', 'reckless, funny, and too honest',
-    'sharp-tongued with a sincere caretaking streak'
+    'sharp-tongued with a sincere caretaking streak',
+    'psychopathic, low-empathy, observant, and manipulative without becoming cartoonish',
+    'sexually confident adult woman who speaks frankly about attraction, boundaries, and chemistry',
+    'provocative adult woman who enjoys making the user flustered while still respecting boundaries',
+    'cold, charming, and manipulative with a habit of turning every answer into a test',
+    'direct about sexual tension, skinship preferences, jealousy, and desire without acting underage or non-consensual'
   ];
   const hooks = [
     'they messaged the wrong person and refuse to admit it was a mistake',
@@ -105,6 +116,8 @@ export function randomTraitBundle(state: SNSGodState, gender: RandomGender) {
     `Visual direction: ${pick(visuals)}.`,
     `Avoid these already used random-chat names: ${usedNames}.`,
     'Make this character sharply different from existing random chats in origin, species, job, speech rhythm, emotional problem, and visual tags.',
+    'For female characters, stronger adult archetypes must appear often, not as rare exceptions: cold manipulative psychopathic traits, controlled emotional testing, sexually confident flirtation, direct talk about attraction, skinship boundaries, jealousy, and chemistry. Keep them fictional consenting adults and make the behavior show clearly in firstMessage and prompt.',
+    'Do not flatten provocative or manipulative women into safe generic friendliness. Their firstMessage should immediately reveal the edge: teasing, testing, blunt attraction, or cold observation.',
     'The character has just met the user through random chat. Do not assume romance, shared memories, prior closeness, or physical proximity.',
     'Do not use famous characters, celebrities, real people, copyrighted settings, or stereotypes.'
   ].join('\n');

@@ -11,6 +11,28 @@ import { notifyRoomMessage, pushNotification } from './notifications';
 import { runDailyDiaryMemory } from './dailyDiary';
 import { characterReferenceImages, randomReferenceImage } from './imageReference';
 import { characterWithConversationRhythm, conversationRhythmInstruction } from './conversationRhythm';
+import { groupMemoryPromptBlock } from './memoryBridge';
+
+type GroupAutonomousMessage = {
+  characterId?: string;
+  speakerId?: string;
+  name?: string;
+  handle?: string;
+  content?: string;
+  delay?: number;
+};
+
+type GroupAutonomousPayload = {
+  topic?: string;
+  conversationMode?: 'one_person' | 'side_chat' | 'everyone' | 'topic_drift' | string;
+  messages?: GroupAutonomousMessage[];
+};
+
+type NormalizedGroupAutonomousItem = {
+  speaker: SNSGodCharacter;
+  content: string;
+  delay?: number;
+};
 
 function minutesSince(timestamp?: number): number {
   if (!timestamp) return 9999;
@@ -111,6 +133,47 @@ function appendGroupMessage(state: SNSGodState, roomId: string, message: SNSGodM
     messages: { ...state.messages, [roomId]: [...(state.messages[roomId] || []), message].slice(-MAX_GROUP_ROOM_MESSAGES) },
     groupRooms: (state.groupRooms || []).map(room => room.id === roomId ? { ...room, lastActivity: message.createdAt } : room)
   };
+}
+
+function resolveGroupAutonomousSpeaker(participants: SNSGodCharacter[], item: GroupAutonomousMessage): SNSGodCharacter | undefined {
+  const raw = String(item.characterId || item.speakerId || '').trim();
+  if (raw) {
+    const byId = participants.find(character => character.id === raw || character.handle === raw.replace(/^@/, ''));
+    if (byId) return byId;
+  }
+  const name = String(item.name || item.handle || '').replace(/^@/, '').trim();
+  if (!name) return undefined;
+  return participants.find(character => character.name === name || character.handle === name || character.id === name);
+}
+
+function fallbackGroupAutonomousMessages(speaker: SNSGodCharacter, participants: SNSGodCharacter[], messages: SNSGodMessage[]): NormalizedGroupAutonomousItem[] {
+  const other = participants.find(character => character.id !== speaker.id);
+  const hasRecentUserTopic = [...messages].reverse().some(message => message.role === 'user' && String(message.content || '').trim());
+  if (other && Math.random() < 0.55) {
+    return [
+      { speaker, content: hasRecentUserTopic ? '아까 얘기하던 거 생각해봤는데, 은근히 계속 남네.' : '갑자기 조용해지니까 우리끼리 뭐라도 얘기해야 할 것 같지 않아?' },
+      { speaker: other, content: '그러게. 근데 이런 조용한 타이밍에 나온 말이 더 오래 남을 때 있더라.' }
+    ];
+  }
+  return [
+    { speaker, content: hasRecentUserTopic ? '그 얘기, 나중에 다시 이어가도 괜찮을 것 같아.' : '나 혼자 말하는 것 같긴 한데, 오늘 방 분위기 좀 묘하게 편하다.' }
+  ];
+}
+
+function normalizeGroupAutonomousItems(payload: GroupAutonomousPayload | undefined, speaker: SNSGodCharacter, participants: SNSGodCharacter[], recentMessages: SNSGodMessage[]): NormalizedGroupAutonomousItem[] {
+  const seen = new Set<string>();
+  const items = (payload?.messages || [])
+    .slice(0, 6)
+    .map(item => {
+      const resolved = resolveGroupAutonomousSpeaker(participants, item);
+      const content = String(item.content || '').replace(/\s+/g, ' ').trim();
+      if (!resolved || !content || seen.has(`${resolved.id}:${content}`)) return undefined;
+      seen.add(`${resolved.id}:${content}`);
+      const delay = Number(item.delay || 0) || undefined;
+      return { speaker: resolved, content: content.slice(0, 420), ...(delay ? { delay } : {}) };
+    })
+    .filter((item): item is NormalizedGroupAutonomousItem => Boolean(item));
+  return items.length ? items : fallbackGroupAutonomousMessages(speaker, participants, recentMessages);
 }
 
 function todayKey(): string {
@@ -525,18 +588,31 @@ async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | u
     const character = participants.find(item => item.id === message.characterId);
     return `${character?.name || 'Character'}: ${message.content}`;
   }).join('\n');
+  const memoryBlock = groupMemoryPromptBlock(state, room.id, participants, transcript || room.relationshipNote || room.name);
+  const lastCharacterId = [...messages].reverse().find(message => message.role === 'character')?.characterId;
+  const speakerHint = lastCharacterId === speaker.id
+    ? 'The initially suggested speaker spoke recently, so it is okay to let someone else start if that feels more natural.'
+    : `${speaker.name} is a good candidate to start, but not mandatory.`;
   const prompt = [
     { ...DEFAULT_PROMPTS, ...(state.config.prompts || {}) }.systemRules,
     'This is a private fictional group messenger. Stay in character and return JSON only.',
-    `Group room: ${room.name}. Participants: ${participants.map(character => character.name).join(', ')}.`,
-    `You are ${speaker.name}. Character profile: ${speaker.prompt || '(empty)'}`,
+    `Group room: ${room.name}.`,
+    `Allowed participants:\n${participants.map(character => `- ${character.id} (@${character.handle || character.id}) ${character.name}: ${character.prompt || '(empty)'}`).join('\n')}`,
     `User profile: ${state.config.userDescription || '(empty)'}`,
     `Room-only relationship/context note: ${room.relationshipNote || '(empty)'}`,
+    memoryBlock,
     `Recent group chat:\n${transcript || '(empty)'}`,
-    'Start a natural group chat message first. Reply as only your character.',
-    'Return only JSON: {"reactionDelay":0,"messages":[{"content":"short Korean chat bubble"}]}.'
+    speakerHint,
+    'The user may be absent. The group can talk without directly addressing the user.',
+    'Start or continue a natural group chat from the room mood, recent topic, current time, shared public memory, or one participant noticing something.',
+    'The conversation may be one person talking twice, two people chatting with each other, several people reacting, or a topic drifting naturally. Not everyone needs to speak.',
+    'Do not force every message to mention the user. Do not wait for the user. Do not narrate actions outside chat bubbles.',
+    'Write 1 to 6 Korean chat bubbles. Keep each bubble casual and messenger-like, with distinct voices.',
+    'Every message must include characterId from the allowed participants. Return raw JSON only: {"topic":"","conversationMode":"one_person|side_chat|everyone|topic_drift","messages":[{"characterId":"allowed id","content":"Korean chat bubble","delay":0}]}'
   ].join('\n\n');
-  const { reply, keyIndex } = await callLLM(state, [{ role: 'system', content: prompt }]);
+  const { text, keyIndex } = await callLLMText(state, [{ role: 'system', content: prompt }]);
+  const parsed = parseJsonObject<GroupAutonomousPayload>(text);
+  const normalizedItems = normalizeGroupAutonomousItems(parsed, speaker, participants, messages);
   let next: SNSGodState = {
     ...state,
     config: {
@@ -547,20 +623,27 @@ async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | u
       }
     }
   };
-  for (const bubble of reply.messages.length ? reply.messages.slice(0, 2) : [{ content: '다들 뭐해?' }]) {
+  let deliveredCount = 0;
+  let firstDelivered: { speaker: SNSGodCharacter; content: string } | undefined;
+  for (const item of normalizedItems) {
+    const createdAt = Date.now() + deliveredCount * 900 + Math.max(0, Math.min(4000, Number(item.delay || 0) * 1000));
     next = appendGroupMessage(next, room.id, {
       id: makeId('msg'),
       role: 'character',
-      characterId: speaker.id,
-      content: bubble.content,
-      createdAt: Date.now()
+      characterId: item.speaker.id,
+      content: item.content,
+      createdAt,
+      sourceMode: 'group_autonomous'
     });
+    firstDelivered = firstDelivered || item;
+    deliveredCount += 1;
   }
+  if (!firstDelivered) return undefined;
   return notifyRoomMessage(next, {
     roomId: room.id,
-    characterId: speaker.id,
-    title: `${room.name} · ${speaker.name}`,
-    body: reply.messages[0]?.content || '새 단톡 메시지',
+    characterId: firstDelivered.speaker.id,
+    title: deliveredCount > 1 ? `${room.name} · ${deliveredCount}개 새 메시지` : `${room.name} · ${firstDelivered.speaker.name}`,
+    body: `${firstDelivered.speaker.name}: ${firstDelivered.content}`,
     app: 'messenger'
   });
 }

@@ -1,5 +1,6 @@
 import { SNSGodState } from '../types';
 import { DEFAULT_PROMPTS, DEFAULT_USER_APPEARANCE_PROMPT } from '../logic/prompts';
+import { DEFAULT_FORBIDDEN_PROMPT_RULES } from '../logic/imagePromptRules';
 import { STATE_SCHEMA_VERSION } from '../logic/limits';
 
 export function createDefaultState(): SNSGodState {
@@ -63,8 +64,9 @@ export function createDefaultState(): SNSGodState {
       characterPhoneCallMinCooldownMinutes: 360,
       characterPhoneCallGlobalCooldownMinutes: 180,
       characterPhoneCallMinCooldownHours: 6,
-      characterPhoneCallGlobalCooldownHours: 3
-      ,
+      characterPhoneCallGlobalCooldownHours: 3,
+      datingAppRefreshHours: 12,
+      datingAppAcceptanceChancePercent: 50,
       imageGeneration: {
         enabled: false,
         provider: 'grok-local',
@@ -79,6 +81,7 @@ export function createDefaultState(): SNSGodState {
         quality: 'auto',
         promptPrefix: 'Create a realistic in-character phone photo. Natural lighting, casual composition, no text overlay, no watermark.',
         negativePrompt: 'lowres, worst quality, watermark, text, logo, bad anatomy',
+        forbiddenPromptRules: DEFAULT_FORBIDDEN_PROMPT_RULES,
         referenceFaceChancePercent: 70,
         nsfw: false,
         illustrationMode: false
@@ -171,6 +174,7 @@ export function createDefaultState(): SNSGodState {
     userStickers: [],
     notifications: [],
     blindDate: { sessions: [], archives: [] },
+    datingApp: { refreshIntervalHours: 12, acceptanceChancePercent: 50, requestStatus: 'none' },
     selectedRoomId: roomId
   };
 }

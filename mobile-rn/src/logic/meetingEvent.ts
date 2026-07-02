@@ -366,6 +366,7 @@ export async function createBlindDateFirstDatePrompt(state: SNSGodState, roomId:
           'Use the selected candidate profile and blind date memory as the source.',
           'location, mood, seedSummary, and firstLine are visible to the user and must be Korean only.',
           'stillPrompt must be English only. It must describe one realistic horizontal cinematic still for the first blind date meeting.',
+          'The still must be generated from the selected candidate reference photo when one exists. Preserve her face, body impression, hairstyle vibe, and ordinary-person likeness while changing only the date scene, pose, outfit, and background.',
           'The still should include the female character and the male user as separate adults. Use the provided user appearance prompt for the male user.',
           'Choose the female outfit naturally from her profile, personality, job, and the date context. No text, no UI, no logos.'
         ].join('\n')
@@ -396,6 +397,34 @@ export async function createBlindDateFirstDatePrompt(state: SNSGodState, roomId:
   return createMeetingEventSession(state, roomId, normalizeMeetingStartText(start, blindMemory || character.prompt || ''));
 }
 
+async function generateMeetingStillImage(state: SNSGodState, character: SNSGodCharacter, stillPrompt: string, roomId: string): Promise<string> {
+  const referenceImage = randomReferenceImage(characterReferenceImages(character));
+  try {
+    return await generateImageDataUri(state, stillPrompt, character, {
+      referenceImage,
+      kind: 'meeting'
+    });
+  } catch (error) {
+    await appendDebugLog('meeting.image', `meeting still generation failed room=${roomId}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+  }
+  const retryPrompt = [
+    `Reference-based first date still of ${character.name} meeting the male user in a realistic Korean cafe or everyday date place.`,
+    referenceImage ? 'Use the attached female reference image as mandatory identity reference; preserve her face and recognizable visual identity.' : '',
+    'Show the female character clearly, face visible, upper body or half-body included, natural date posture.',
+    `Male user appearance: ${state.config.userAppearancePrompt || DEFAULT_USER_APPEARANCE_PROMPT}`,
+    'Two distinct adults, warm realistic lighting, horizontal cinematic phone-drama still, no text, no UI, no logos, no watermark.'
+  ].filter(Boolean).join(' ');
+  try {
+    return await generateImageDataUri(state, retryPrompt, character, {
+      referenceImage,
+      kind: 'meeting'
+    });
+  } catch (error) {
+    await appendDebugLog('meeting.image.retry', `meeting still retry failed room=${roomId}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+    return '';
+  }
+}
+
 export async function createMeetingEventSession(state: SNSGodState, roomId: string, start: MeetingStartResult): Promise<SNSGodState> {
   const room = findRoom(state, roomId);
   const character = findCharacter(state, room?.characterId);
@@ -415,15 +444,7 @@ export async function createMeetingEventSession(state: SNSGodState, roomId: stri
     'Horizontal cinematic still, realistic phone-drama composition, natural light, emotional in-person meeting moment.',
     'No text, no captions, no UI, no logos, no watermark.'
   ].filter(Boolean).join(' ');
-  try {
-    const referenceImage = randomReferenceImage(characterReferenceImages(character));
-    stillImage = await generateImageDataUri(state, stillPrompt, character, {
-      referenceImage,
-      kind: 'meeting'
-    });
-  } catch (error) {
-    await appendDebugLog('meeting.image', `meeting still generation failed room=${roomId}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
-  }
+  stillImage = await generateMeetingStillImage(state, character, stillPrompt, roomId);
   const session: MeetingEventSession = {
     id: makeId('meeting'),
     roomId,

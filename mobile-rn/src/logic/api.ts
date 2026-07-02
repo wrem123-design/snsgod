@@ -2,6 +2,7 @@ import * as FileSystem from 'expo-file-system';
 import { KJUR } from 'jsrsasign';
 
 import { ApiProfile, ImageGenerationConfig, SNSGodCharacter, SNSGodState } from '../types';
+import { editableForbiddenPromptRules } from './imagePromptRules';
 import { appendDebugLog } from './debugLog';
 
 type ChatMessage = {
@@ -853,6 +854,8 @@ function samePromptText(a: string, b: string): boolean {
 
 export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodCharacter | undefined, prompt: string, options: { usesReference?: boolean; kind?: ImagePromptKind } = {}): string {
   const prefix = config.promptPrefix || 'Create a realistic in-character phone photo. Natural lighting, casual composition, no text overlay.';
+  const forbiddenRules = editableForbiddenPromptRules(config.forbiddenPromptRules).trim();
+  const globalRules = forbiddenRules ? `Global forbidden prompt rules: ${forbiddenRules}` : '';
   const profilePhotoPrompt = character?.profileAvatarPrompt ? imagePromptWithoutCharacterName(character.profileAvatarPrompt, character) : '';
   const requested = imagePromptWithoutCharacterName(prompt, character);
   const nsfw = config.nsfw ? 'NSFW/private fictional image is allowed when appropriate.' : 'Keep it safe and non-explicit.';
@@ -861,6 +864,7 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
       'Create a wide messenger profile cover/background image, not a profile photo.',
       'The image must be personless: no humans, no face, no body, no silhouette, no character, no crowd, no selfie, no portrait, no text, no logo, no UI.',
       'Use only scenery, room details, objects, weather, light, or environmental traces that fit the requested mood.',
+      globalRules,
       `Requested cover background: ${requested}`,
       nsfw
     ].filter(Boolean).join('\n');
@@ -873,6 +877,7 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
       'Create a realistic horizontal cinematic still from an in-person meeting event, not a phone call, not a messenger screenshot, not SNS.',
       'Show the fictional female character and the male user as two distinct people when the scene calls for both. Keep their clothing and posture grounded in the recent conversation, time, place, and mood.',
       prefix,
+      globalRules,
       `Requested meeting still: ${requested}`,
       'No text, no captions, no UI, no logos, no watermark.',
       nsfw
@@ -886,6 +891,7 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
         'Only change outfit, background, pose, job context, expression, and photo setting according to the requested prompt. Do not copy the reference outfit, background, pose, age context, job, personality, or story.',
         'Do not ignore the attached image. Do not create a fully new unrelated face from text alone.',
         prefix,
+        globalRules,
         `Requested character image: ${requested}`,
         nsfw
       ].filter(Boolean).join('\n');
@@ -893,6 +899,7 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
     return [
       'Use the attached reference image as the visual identity reference. Create the same person from the reference image, preserving face, hairstyle, and overall likeness.',
       prefix,
+      globalRules,
       `Requested scene: ${requested}`,
       nsfw
     ].filter(Boolean).join('\n');
@@ -900,7 +907,7 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
   const baseIdentity = profilePhotoPrompt && !samePromptText(profilePhotoPrompt, requested)
     ? `Base visual identity from profile-photo prompt: ${profilePhotoPrompt}`
     : '';
-  return [prefix, baseIdentity, `Requested image: ${requested}`, nsfw].filter(Boolean).join('\n');
+  return [prefix, globalRules, baseIdentity, `Requested image: ${requested}`, nsfw].filter(Boolean).join('\n');
 }
 
 function normalizeGrokBaseUrl(value?: string): string {

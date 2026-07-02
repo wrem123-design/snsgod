@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Image, KeyboardAvoidingView, NativeModules, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
-import { SNSGodMessage, SNSGodState, Sticker } from '../types';
+import { MeetingEventSession, SNSGodMessage, SNSGodState, Sticker } from '../types';
 import { makeId } from '../logic/ids';
 import { appendMessage, findCharacter, findRoom, roomMessages } from '../logic/stateHelpers';
 import { isRenderableMediaUri, pickImageDataUri } from '../logic/media';
@@ -46,6 +46,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
   const [sending, setSending] = useState(false);
   const [requestingMeeting, setRequestingMeeting] = useState(false);
   const [showStickers, setShowStickers] = useState(false);
+  const [showQuickActions, setShowQuickActions] = useState(false);
   const [viewerImage, setViewerImage] = useState<RoomImageItem | null>(null);
   const [regeneratingImageId, setRegeneratingImageId] = useState('');
   const [imageRetryDraft, setImageRetryDraft] = useState<{ messageId: string; prompt: string } | null>(null);
@@ -163,6 +164,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
     if (!room || isRandomRoom || !onRequestMeetingPrompt || requestingMeeting) return;
     setRequestingMeeting(true);
     setShowStickers(false);
+    setShowQuickActions(false);
     try {
       const created = await onRequestMeetingPrompt(room.id);
       if (!created) Alert.alert('만남 이벤트', '현재 채팅에서는 만남 이벤트를 준비할 수 없습니다.');
@@ -171,6 +173,13 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
     } finally {
       setRequestingMeeting(false);
     }
+  }
+
+  function openCallFromComposer() {
+    setShowQuickActions(false);
+    setShowStickers(false);
+    if (!room || !character || !onOpenCall) return;
+    onOpenCall(character.id, room.id);
   }
 
   async function rejectCall(message: SNSGodMessage) {
@@ -354,7 +363,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
           return (
             <View>
               {showDateDivider ? <DateDivider timestamp={item.createdAt} /> : null}
-              <MessageBubble message={item} character={character} userStickers={state.userStickers || []} roomId={room.id} meetingStatus={meetingSessionId ? meetingStatusById.get(meetingSessionId) : undefined} onOpenCall={onOpenCall} onStartMeeting={startMeetingEvent} onCancelMeeting={cancelMeetingEvent} onRejectCall={rejectCall} onRetryFailed={retryFailedReply} onOpenImage={setViewerImage} onRetryImage={openImageRetryEditor} regeneratingImageId={regeneratingImageId} />
+              <MessageBubble message={item} character={character} userStickers={state.userStickers || []} roomId={room.id} meetingSession={meetingSessionId ? (state.meetingEventSessions || []).find(session => session.id === meetingSessionId) : undefined} meetingStatus={meetingSessionId ? meetingStatusById.get(meetingSessionId) : undefined} onOpenCall={onOpenCall} onStartMeeting={startMeetingEvent} onCancelMeeting={cancelMeetingEvent} onRejectCall={rejectCall} onRetryFailed={retryFailedReply} onOpenImage={setViewerImage} onRetryImage={openImageRetryEditor} regeneratingImageId={regeneratingImageId} />
             </View>
           );
         }}
@@ -373,14 +382,28 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
         />
       ) : null}
       {showStickers ? <StickerTray stickers={state.userStickers || []} onPick={sendSticker} /> : null}
+      {showQuickActions ? (
+        <View pointerEvents="box-none" style={styles.quickActionLayer}>
+          <Pressable accessibilityLabel="빠른 액션 닫기" onPress={() => setShowQuickActions(false)} style={styles.quickActionBackdrop} />
+          <View style={styles.quickActionMenu}>
+            <Pressable onPress={openCallFromComposer} style={styles.quickActionItem}>
+              <Text style={styles.quickActionText}>전화걸기</Text>
+            </Pressable>
+            <View style={styles.quickActionDivider} />
+            <Pressable onPress={requestMeetingPrompt} disabled={requestingMeeting} style={[styles.quickActionItem, requestingMeeting && styles.sendDisabled]}>
+              <Text style={styles.quickActionText}>{requestingMeeting ? '준비 중' : '만남이벤트'}</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
       <View style={styles.composer}>
-        <Pressable accessibilityLabel="스티커" onPress={() => setShowStickers(value => !value)} disabled={sending} style={[styles.attachIconButton, sending && styles.sendDisabled]}><Text style={styles.attachIconText}>☺</Text></Pressable>
+        <Pressable accessibilityLabel="스티커" onPress={() => { setShowQuickActions(false); setShowStickers(value => !value); }} disabled={sending} style={[styles.attachIconButton, sending && styles.sendDisabled]}><Text style={styles.attachIconText}>☺</Text></Pressable>
         {!isRandomRoom ? (
-          <Pressable accessibilityLabel="만남 이벤트 불러오기" onPress={requestMeetingPrompt} disabled={sending || requestingMeeting} style={[styles.attachIconButton, (sending || requestingMeeting) && styles.sendDisabled]}>
+          <Pressable accessibilityLabel="전화와 만남 메뉴" onPress={() => { setShowStickers(false); setShowQuickActions(value => !value); }} disabled={sending || requestingMeeting} style={[styles.attachIconButton, (sending || requestingMeeting) && styles.sendDisabled]}>
             <Text style={styles.attachIconText}>{requestingMeeting ? '…' : '👥'}</Text>
           </Pressable>
         ) : null}
-        <Pressable accessibilityLabel="사진 추가" onPress={attachImage} disabled={sending} style={[styles.attachIconButton, sending && styles.sendDisabled]}><Text style={styles.attachIconText}>+</Text></Pressable>
+        <Pressable accessibilityLabel="사진 추가" onPress={() => { setShowQuickActions(false); void attachImage(); }} disabled={sending} style={[styles.attachIconButton, sending && styles.sendDisabled]}><Text style={styles.attachIconText}>+</Text></Pressable>
         <TextInput
           value={text}
           onChangeText={setText}
@@ -572,11 +595,12 @@ function ImagePromptRetryEditor({ prompt, finalPrompt, busy, onChangePrompt, onC
   );
 }
 
-function MessageBubble({ message, character, userStickers, roomId, meetingStatus, onOpenCall, onStartMeeting, onCancelMeeting, onRejectCall, onRetryFailed, onOpenImage, onRetryImage, regeneratingImageId }: {
+function MessageBubble({ message, character, userStickers, roomId, meetingSession, meetingStatus, onOpenCall, onStartMeeting, onCancelMeeting, onRejectCall, onRetryFailed, onOpenImage, onRetryImage, regeneratingImageId }: {
   message: SNSGodMessage;
   character: NonNullable<ReturnType<typeof findCharacter>>;
   userStickers: Sticker[];
   roomId: string;
+  meetingSession?: MeetingEventSession;
   meetingStatus?: string;
   onOpenCall?: (characterId: string, roomId?: string, messageId?: string) => void;
   onStartMeeting?: (sessionId: string) => void;
@@ -610,6 +634,7 @@ function MessageBubble({ message, character, userStickers, roomId, meetingStatus
     const pendingMeeting = Boolean(message.meetingEventPrompt && meetingSessionId && meetingStatus === 'pending');
     return (
       <Pressable onLongPress={copyMessageText} delayLongPress={380} style={styles.systemBubble}>
+        {pendingMeeting && meetingSession ? <MeetingPromptPreview session={meetingSession} character={character} /> : null}
         <Text style={[styles.systemText, pendingMeeting && styles.meetingSystemText]}>{message.content}</Text>
         {pendingMeeting ? (
           <View style={styles.meetingActions}>
@@ -682,6 +707,42 @@ function MessageBubble({ message, character, userStickers, roomId, meetingStatus
   );
 }
 
+function MeetingPromptPreview({ session, character }: { session: MeetingEventSession; character: NonNullable<ReturnType<typeof findCharacter>> }) {
+  const location = session.location || '만남 장소';
+  const mood = session.mood || '첫 만남 분위기';
+  const summary = String(session.seedSummary || session.reason || mood).replace(/\s+/g, ' ').trim();
+  const fallbackImage = [
+    character.profileImage,
+    character.profileReferenceImage,
+    ...(Array.isArray(character.profileReferenceImages) ? character.profileReferenceImages : []),
+    character.avatar
+  ].map(value => String(value || '')).find(isRenderableMediaUri);
+  const previewImage = isRenderableMediaUri(session.stillImage) ? String(session.stillImage) : fallbackImage;
+  return (
+    <View style={styles.meetingPreview}>
+      {previewImage ? (
+        <Image source={{ uri: previewImage }} style={styles.meetingPreviewImage} resizeMode="cover" />
+      ) : (
+        <View style={styles.meetingPreviewFallback}>
+          <View style={styles.meetingPreviewSky}>
+            <View style={styles.meetingPreviewSun} />
+            <View style={styles.meetingPreviewWindow} />
+          </View>
+          <View style={styles.meetingPreviewGround}>
+            <View style={styles.meetingPreviewPerson}><Text style={styles.meetingPreviewPersonText}>나</Text></View>
+            <View style={styles.meetingPreviewTable} />
+            <View style={[styles.meetingPreviewPerson, styles.meetingPreviewCharacter]}><Text style={styles.meetingPreviewPersonText}>{character.name.slice(0, 1)}</Text></View>
+          </View>
+        </View>
+      )}
+      <View style={styles.meetingPreviewText}>
+        <Text style={styles.meetingPreviewTitle} numberOfLines={1}>{location}</Text>
+        <Text style={styles.meetingPreviewMood} numberOfLines={2}>{summary || mood}</Text>
+      </View>
+    </View>
+  );
+}
+
 function callStatusLabel(status: string) {
   if (status === 'accepted') return '통화 연결됨';
   if (status === 'rejected') return '통화 취소';
@@ -742,6 +803,20 @@ const styles = StyleSheet.create({
   systemBubble: { alignSelf: 'center', maxWidth: '88%', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: 'rgba(255,255,255,0.45)', position: 'relative' },
   systemText: { color: '#4f5a62', fontSize: 12, fontWeight: '700' },
   meetingSystemText: { color: colors.text, fontSize: 13, lineHeight: 19, fontWeight: '900', textAlign: 'center' },
+  meetingPreview: { width: 236, maxWidth: '100%', marginBottom: 9, borderRadius: 12, overflow: 'hidden', backgroundColor: '#26313c', borderWidth: 1, borderColor: '#d8cbb9' },
+  meetingPreviewImage: { width: '100%', height: 132, backgroundColor: '#e8dfd0' },
+  meetingPreviewFallback: { height: 132, backgroundColor: '#26313c' },
+  meetingPreviewSky: { flex: 1, backgroundColor: '#405a6c', position: 'relative' },
+  meetingPreviewSun: { position: 'absolute', right: 16, top: 13, width: 24, height: 24, borderRadius: 12, backgroundColor: '#f1d15b' },
+  meetingPreviewWindow: { position: 'absolute', left: 18, top: 18, width: 48, height: 34, borderRadius: 7, backgroundColor: 'rgba(255,255,255,0.18)' },
+  meetingPreviewGround: { height: 54, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', gap: 14, paddingBottom: 12, backgroundColor: '#26313c' },
+  meetingPreviewPerson: { width: 36, height: 52, borderTopLeftRadius: 18, borderTopRightRadius: 18, alignItems: 'center', paddingTop: 5, backgroundColor: '#edf2f6' },
+  meetingPreviewCharacter: { backgroundColor: '#f1d15b' },
+  meetingPreviewPersonText: { color: colors.text, fontSize: 11, fontWeight: '900' },
+  meetingPreviewTable: { width: 52, height: 24, borderRadius: 12, backgroundColor: '#fffdf7' },
+  meetingPreviewText: { paddingHorizontal: 10, paddingVertical: 8, backgroundColor: '#fffdf7' },
+  meetingPreviewTitle: { color: colors.text, fontSize: 13, lineHeight: 17, fontWeight: '900' },
+  meetingPreviewMood: { marginTop: 2, color: colors.sub, fontSize: 11, lineHeight: 15, fontWeight: '800' },
   meetingActions: { marginTop: 9, flexDirection: 'row', gap: 8, minWidth: 210 },
   meetingPrimary: { flex: 1, minHeight: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
   meetingPrimaryText: { color: '#241a00', fontWeight: '900' },
@@ -786,6 +861,12 @@ const styles = StyleSheet.create({
   promptEditorSecondaryText: { color: colors.text, fontWeight: '900' },
   promptEditorPrimary: { flex: 1, minHeight: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
   promptEditorPrimaryText: { color: '#241a00', fontWeight: '900' },
+  quickActionLayer: { ...StyleSheet.absoluteFillObject, zIndex: 26 },
+  quickActionBackdrop: { ...StyleSheet.absoluteFillObject },
+  quickActionMenu: { position: 'absolute', left: 58, bottom: 64, minWidth: 118, borderRadius: 12, overflow: 'hidden', backgroundColor: '#fffdf7', borderWidth: 1, borderColor: colors.border, shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 8 },
+  quickActionItem: { minHeight: 42, paddingHorizontal: 13, alignItems: 'center', justifyContent: 'center' },
+  quickActionText: { color: colors.text, fontSize: 14, lineHeight: 18, fontWeight: '900' },
+  quickActionDivider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
   composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 10, backgroundColor: '#f7f2e9', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   stickerTray: { maxHeight: 144, paddingHorizontal: 10, paddingVertical: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 8, backgroundColor: '#f7f2e9', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   stickerTrayItem: { width: 72, borderRadius: 10, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', padding: 6, alignItems: 'center' },

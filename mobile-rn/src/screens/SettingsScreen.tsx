@@ -14,6 +14,7 @@ import { fetchGrokAccounts, fetchGrokBilling, fetchGrokStatus, GrokBilling, Grok
 import { createBackupPayload } from '../logic/backup';
 import { DEFAULT_USER_APPEARANCE_PROMPT } from '../logic/prompts';
 import { MAX_CONTEXT_MESSAGES } from '../logic/limits';
+import { editableForbiddenPromptRules } from '../logic/imagePromptRules';
 
 const PROVIDERS: ApiProvider[] = ['vertex', 'gemini', 'openai', 'anthropic', 'custom'];
 const PROVIDER_PRESETS: Partial<Record<ApiProvider, { endpoint: string; model: string }[]>> = {
@@ -257,6 +258,8 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   const [fontScale, setFontScale] = useState(String(state.config.fontScale || 1));
   const [snsAutoChance, setSnsAutoChance] = useState(String(state.config.snsAutoChance ?? 40));
   const [snsStartCount, setSnsStartCount] = useState(String(state.config.snsStartCount ?? 6));
+  const [datingAppRefreshHours, setDatingAppRefreshHours] = useState(String(state.config.datingAppRefreshHours ?? state.datingApp?.refreshIntervalHours ?? 12));
+  const [datingAppAcceptanceChance, setDatingAppAcceptanceChance] = useState(String(state.config.datingAppAcceptanceChancePercent ?? state.datingApp?.acceptanceChancePercent ?? 50));
   const [snsIncludeUserInDM, setSnsIncludeUserInDM] = useState((state.config.sns || {}).includeUserInDM !== false);
   const [autoEnabled, setAutoEnabled] = useState(state.config.autoEnabled !== false);
   const [privateFirst, setPrivateFirst] = useState(state.config.privateFirst === true);
@@ -282,6 +285,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   const [grokAspectRatio, setGrokAspectRatio] = useState(String(imageConfig.grokAspectRatio || 'auto'));
   const [imagePrefix, setImagePrefix] = useState(String(imageConfig.promptPrefix || ''));
   const [imageNegative, setImageNegative] = useState(String(imageConfig.negativePrompt || ''));
+  const [imageForbiddenRules, setImageForbiddenRules] = useState(editableForbiddenPromptRules(imageConfig.forbiddenPromptRules));
   const [imageNsfw, setImageNsfw] = useState(imageConfig.nsfw === true);
   const [imageIllustration, setImageIllustration] = useState(imageConfig.illustrationMode === true);
   const [grokStatus, setGrokStatus] = useState<GrokLocalStatus | undefined>();
@@ -725,6 +729,10 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     const phoneGlobalCooldown = Number(characterPhoneCallGlobalCooldownMinutes);
     const phoneCharacterCooldownMinutes = Math.max(1, Math.min(10080, Math.round(Number.isFinite(phoneCharacterCooldown) ? phoneCharacterCooldown : 360)));
     const phoneGlobalCooldownMinutes = Math.max(0, Math.min(10080, Math.round(Number.isFinite(phoneGlobalCooldown) ? phoneGlobalCooldown : 180)));
+    const datingRefresh = Math.max(1, Math.min(168, Math.round(Number(datingAppRefreshHours) || 12)));
+    const datingChance = Math.max(0, Math.min(100, Math.round(Number(datingAppAcceptanceChance) || 50)));
+    const previousDatingRefresh = Math.max(1, Math.min(168, Math.round(Number(state.config.datingAppRefreshHours ?? state.datingApp?.refreshIntervalHours ?? 12) || 12)));
+    const datingRefreshChanged = previousDatingRefresh !== datingRefresh;
     try {
       await onChange({
         ...state,
@@ -742,15 +750,23 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           characterPhoneCallGlobalCooldownMinutes: phoneGlobalCooldownMinutes,
           characterPhoneCallMinCooldownHours: phoneCharacterCooldownMinutes / 60,
           characterPhoneCallGlobalCooldownHours: phoneGlobalCooldownMinutes / 60,
+          datingAppRefreshHours: datingRefresh,
+          datingAppAcceptanceChancePercent: datingChance,
           snsAutoChance: Math.max(0, Math.min(100, Math.round(Number(snsAutoChance) || 0))),
           snsStartCount: Math.max(1, Math.round(Number(snsStartCount) || 6)),
           sns: {
             ...(state.config.sns || {}),
             includeUserInDM: snsIncludeUserInDM
           }
+        },
+        datingApp: {
+          ...(datingRefreshChanged ? {} : (state.datingApp || {})),
+          refreshIntervalHours: datingRefresh,
+          acceptanceChancePercent: datingChance,
+          requestStatus: datingRefreshChanged ? 'none' : state.datingApp?.requestStatus
         }
       });
-      setStatus('자동화 저장 완료');
+      setStatus(datingRefreshChanged ? '자동화 저장 완료: 데이트 어플 갱신 주기가 바뀌어 후보 라운드를 초기화했어요.' : '자동화 저장 완료');
     } catch (error) {
       setStatus(`자동화 저장 실패: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -781,6 +797,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
             quality: imageQuality.trim() || 'auto',
             promptPrefix: imagePrefix,
             negativePrompt: imageNegative,
+            forbiddenPromptRules: imageForbiddenRules,
             nsfw: imageNsfw,
             illustrationMode: imageIllustration
           }
@@ -1514,6 +1531,9 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           <TextInput value={imagePrefix} onChangeText={setImagePrefix} style={[styles.input, styles.textarea]} multiline textAlignVertical="top" />
           <Text style={styles.label}>네거티브 프롬프트</Text>
           <TextInput value={imageNegative} onChangeText={setImageNegative} style={[styles.input, styles.textareaSmall]} multiline textAlignVertical="top" />
+          <Text style={styles.label}>AI 생성 금지 프롬프트 및 규칙</Text>
+          <TextInput value={imageForbiddenRules} onChangeText={setImageForbiddenRules} style={[styles.input, styles.textarea]} multiline textAlignVertical="top" />
+          <Text style={styles.help}>모든 이미지 생성 프롬프트 본문에 전역 규칙으로 추가됩니다. 접두 지시와 네거티브 프롬프트처럼 프로필, 채팅, SNS, 만남 이미지에 공통 적용됩니다.</Text>
           <Text style={styles.help}>Grok OAuth는 PC의 Grok Local Studio 서버를 통해 Hermes xAI OAuth를 사용합니다. 휴대폰에서는 PC IP:5000 주소를 입력하세요.</Text>
           <Pressable onPress={saveImageGeneration} style={styles.primary}><Text style={styles.primaryText}>이미지 설정 저장</Text></Pressable>
         </View>
@@ -1574,6 +1594,20 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
               <Text style={styles.label}>SNS 시작 메시지 수</Text>
               <TextInput value={snsStartCount} onChangeText={setSnsStartCount} style={styles.input} keyboardType="number-pad" />
             </View>
+          </View>
+          <View style={styles.subPanel}>
+            <Text style={styles.cardTitle}>데이트 어플</Text>
+            <View style={styles.twoCols}>
+              <View style={styles.col}>
+                <Text style={styles.label}>갱신 주기(시간)</Text>
+                <TextInput value={datingAppRefreshHours} onChangeText={setDatingAppRefreshHours} style={styles.input} keyboardType="number-pad" />
+              </View>
+              <View style={styles.col}>
+                <Text style={styles.label}>수락 확률(%)</Text>
+                <TextInput value={datingAppAcceptanceChance} onChangeText={setDatingAppAcceptanceChance} style={styles.input} keyboardType="number-pad" />
+              </View>
+            </View>
+            <Text style={styles.help}>ETC의 데이트 어플 후보 갱신과 대화신청 수락/거절 확률에 적용됩니다.</Text>
           </View>
           <Pressable onPress={saveAutomation} style={styles.primary}><Text style={styles.primaryText}>자동화 저장</Text></Pressable>
         </View>

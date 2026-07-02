@@ -38,6 +38,7 @@ export type ImageGenerationConfig = {
   quality?: string;
   promptPrefix?: string;
   negativePrompt?: string;
+  forbiddenPromptRules?: string;
   referenceFaceChancePercent?: number;
   nsfw?: boolean;
   illustrationMode?: boolean;
@@ -92,6 +93,8 @@ export type SNSGodConfig = {
   characterPhoneCallGlobalCooldownMinutes?: number;
   characterPhoneCallMinCooldownHours?: number;
   characterPhoneCallGlobalCooldownHours?: number;
+  datingAppRefreshHours?: number;
+  datingAppAcceptanceChancePercent?: number;
   imageGeneration?: ImageGenerationConfig;
   sns?: {
     platform?: 'instagram' | 'twitter';
@@ -492,6 +495,85 @@ export type BlindDateProgress = {
   archives?: BlindDateCandidateArchive[];
 };
 
+export type DatingAppRequestStatus = 'none' | 'pending' | 'accepted' | 'rejected';
+export type DatingAppDecision = 'liked' | 'passed';
+
+export type DatingAppPhoto = {
+  id: string;
+  uri?: string;
+  prompt: string;
+  label: string;
+  createdAt: number;
+  error?: string;
+};
+
+export type DatingAppProfileQuestionCard = {
+  question: string;
+  lockedText: string;
+};
+
+export type DatingAppProfile = {
+  id: string;
+  name: string;
+  age: number;
+  job: string;
+  location: string;
+  distanceKm: number;
+  heightCm: number;
+  bodyLabel: string;
+  alcohol: string;
+  smoking: string;
+  religion: string;
+  education?: string;
+  mbti?: string;
+  verified: boolean;
+  lastActiveLabel: string;
+  bio: string;
+  traits: string[];
+  interests: string[];
+  datingStyle: string[];
+  lifestyle: string[];
+  profileQuestionCards: DatingAppProfileQuestionCard[];
+  personalitySummary: string;
+  speechStyle: string;
+  relationshipStyle: string;
+  likes: string[];
+  dislikes: string[];
+  hobbies: string[];
+  snsStyle: string;
+  firstMessage: string;
+  callPreview: string;
+  identityPrompt: string;
+  imagePrompts: string[];
+  photos: DatingAppPhoto[];
+  createdAt: number;
+  expiresAt: number;
+};
+
+export type DatingAppProgress = {
+  currentProfile?: DatingAppProfile;
+  profiles?: DatingAppProfile[];
+  activeProfileIndex?: number;
+  decisions?: Array<{
+    profileId: string;
+    decision: DatingAppDecision;
+    decidedAt: number;
+  }>;
+  finalProfileId?: string;
+  selectedReferencePhotoIds?: string[];
+  completedAt?: number;
+  lastGeneratedAt?: number;
+  refreshIntervalHours?: number;
+  acceptanceChancePercent?: number;
+  requestStatus?: DatingAppRequestStatus;
+  requestedAt?: number;
+  resolveAt?: number;
+  resolvedAt?: number;
+  rejectedReason?: string;
+  acceptedRoomId?: string;
+  acceptedCharacterId?: string;
+};
+
 export type Sticker = {
   id: string;
   name: string;
@@ -691,6 +773,7 @@ export type SNSGodState = {
   meetingEventSessions?: MeetingEventSession[];
   activeMeetingEventId?: string;
   blindDate?: BlindDateProgress;
+  datingApp?: DatingAppProgress;
   sumGod?: SumGodProgress;
   selectedRoomId?: string;
   __importedAt?: number;

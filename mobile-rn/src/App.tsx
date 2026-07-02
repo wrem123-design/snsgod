@@ -13,6 +13,7 @@ import { SNSScreen } from './screens/SNSScreen';
 import { RandomChatScreen } from './screens/RandomChatScreen';
 import { SumGodScreen } from './screens/SumGodScreen';
 import { BlindDateScreen } from './screens/BlindDateScreen';
+import { DatingAppScreen } from './screens/DatingAppScreen';
 import { IdealWorldcupScreen } from './screens/IdealWorldcupScreen';
 import { ReferenceFaceScreen } from './screens/ReferenceFaceScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
@@ -68,6 +69,7 @@ type Route =
   | { name: 'sumgod' }
   | { name: 'streetEncounter' }
   | { name: 'blindDate' }
+  | { name: 'datingApp' }
   | { name: 'idealWorldcup' }
   | { name: 'references' }
   | { name: 'profile'; characterId: string; returnRoomId?: string }
@@ -527,11 +529,11 @@ export default function App() {
   function activeBottomTab(): BottomTab {
     if (route.name === 'sns') return route.platform === 'twitter' ? 'twitter' : 'instagram';
     if (route.name === 'random' || route.name === 'randomHub' || route.name === 'randomChatRoom') return 'random';
-    if (route.name === 'etc' || route.name === 'streetEncounter' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'notifications' || route.name === 'references') return 'etc';
+    if (route.name === 'etc' || route.name === 'streetEncounter' || route.name === 'datingApp' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'notifications' || route.name === 'references') return 'etc';
     return 'friends';
   }
 
-  const showBottomNav = route.name === 'chatList' || route.name === 'sns' || route.name === 'random' || route.name === 'etc' || route.name === 'streetEncounter' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'references';
+  const showBottomNav = route.name === 'chatList' || route.name === 'sns' || route.name === 'random' || route.name === 'etc' || route.name === 'streetEncounter' || route.name === 'datingApp' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'references';
 
   async function leaveRandomRoom(roomId: string) {
     const current = stateRef.current;
@@ -624,6 +626,7 @@ export default function App() {
           mode="etc"
           onOpenEncounter={() => navigate({ name: 'streetEncounter' })}
           onOpenBlindDate={() => navigate({ name: 'blindDate' })}
+          onOpenDatingApp={() => navigate({ name: 'datingApp' })}
           onOpenIdealWorldcup={() => navigate({ name: 'idealWorldcup' })}
           onOpenReferences={() => navigate({ name: 'references' })}
           onOpenSumGod={() => navigate({ name: 'sumgod' })}
@@ -644,6 +647,8 @@ export default function App() {
         <BlindDateScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'chatRoom', roomId }, { replace: true })} entryMode="encounter" />
       ) : route.name === 'blindDate' ? (
         <BlindDateScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'chatRoom', roomId }, { replace: true })} />
+      ) : route.name === 'datingApp' ? (
+        <DatingAppScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'chatRoom', roomId }, { replace: true })} />
       ) : route.name === 'idealWorldcup' ? (
         <IdealWorldcupScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'chatRoom', roomId }, { replace: true })} />
       ) : route.name === 'references' ? (

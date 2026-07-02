@@ -1,6 +1,6 @@
 import { SNSGodCharacter } from '../types';
 
-const RENDERABLE_URI_PATTERN = /^(data:|file:|content:|asset:)/i;
+const RENDERABLE_URI_PATTERN = /^(data:|file:|content:|asset:|https?:\/\/)/i;
 
 export function characterReferenceImageForPrompt(character: SNSGodCharacter | undefined, imagePrompt: string): string | undefined {
   const referenceImages = characterReferenceImages(character);

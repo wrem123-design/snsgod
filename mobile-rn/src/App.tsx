@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as Application from 'expo-application';
 import * as FileSystem from 'expo-file-system';
-import { ActivityIndicator, Alert, AppState, BackHandler, DevSettings, Keyboard, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { Alert, AppState, BackHandler, DevSettings, Keyboard, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { ChatListScreen } from './screens/ChatListScreen';
 import { ChatRoomScreen } from './screens/ChatRoomScreen';
 import { CharacterSettingsScreen } from './screens/CharacterSettingsScreen';
@@ -587,8 +587,10 @@ export default function App() {
   if (!state) {
     return (
       <SafeAreaView style={styles.loading}>
-        <ActivityIndicator color={colors.accent} />
-        <Text style={styles.loadingText}>SNSGod 준비 중</Text>
+        <View style={styles.loadingBrandMark}>
+          <Text style={styles.loadingBrandText}>sns</Text>
+        </View>
+        <Text style={styles.loadingSystemText}>시스템 초기화 중</Text>
       </SafeAreaView>
     );
   }
@@ -792,8 +794,10 @@ function IncomingCallOverlay({ state, incoming, onAccept, onReject }: {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#fff' },
   content: { flex: 1 },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#050b16' },
-  loadingText: { marginTop: 12, color: '#fff', fontWeight: '900' },
+  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0877f2' },
+  loadingBrandMark: { alignItems: 'center', justifyContent: 'center' },
+  loadingBrandText: { color: '#fff', fontSize: 86, lineHeight: 96, fontWeight: '900', letterSpacing: 0 },
+  loadingSystemText: { position: 'absolute', bottom: 42, left: 24, right: 24, color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '700', textAlign: 'center' },
   incomingOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 50, backgroundColor: 'rgba(5,11,22,0.76)', alignItems: 'center', justifyContent: 'center', padding: 24 },
   incomingPanel: { width: '100%', maxWidth: 420, borderRadius: 18, padding: 24, backgroundColor: '#f7f2e9', alignItems: 'center', borderWidth: 1, borderColor: '#dbcdb9' },
   incomingKicker: { color: colors.sub, fontSize: 12, fontWeight: '900' },

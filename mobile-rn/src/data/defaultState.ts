@@ -36,6 +36,16 @@ export function createDefaultState(): SNSGodState {
       userName: '나',
       userDescription: '',
       userAppearancePrompt: DEFAULT_USER_APPEARANCE_PROMPT,
+      activeUserProfilePresetId: 'default_user_profile',
+      userProfilePresets: [{
+        id: 'default_user_profile',
+        label: '기본 프로필',
+        userName: '나',
+        userDescription: '',
+        userAppearancePrompt: DEFAULT_USER_APPEARANCE_PROMPT,
+        createdAt: now,
+        updatedAt: now
+      }],
       roomName: '채팅',
       language: 'Korean',
       snsTheme: 'kakao',

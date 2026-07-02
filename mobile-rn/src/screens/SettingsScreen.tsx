@@ -111,6 +111,33 @@ function apiKeySlotsFromProfile(profile: SNSGodState['config']['apiProfiles'][Ap
   return [primary, extras[0] || '', extras[1] || ''];
 }
 
+type UserProfilePreset = NonNullable<SNSGodState['config']['userProfilePresets']>[number];
+
+function normalizedUserProfilePresets(config: SNSGodState['config']): UserProfilePreset[] {
+  const existing = Array.isArray(config.userProfilePresets) ? config.userProfilePresets : [];
+  const cleaned = existing
+    .map((item, index) => ({
+      id: String(item.id || `user_profile_${index}`),
+      label: String(item.label || item.userName || `프로필 ${index + 1}`),
+      userName: String(item.userName || '나'),
+      userDescription: String(item.userDescription || ''),
+      userAppearancePrompt: String(item.userAppearancePrompt || DEFAULT_USER_APPEARANCE_PROMPT),
+      createdAt: Number(item.createdAt || Date.now()),
+      updatedAt: Number(item.updatedAt || Date.now())
+    }))
+    .filter(item => item.id);
+  if (cleaned.length) return cleaned;
+  return [{
+    id: 'default_user_profile',
+    label: '기본 프로필',
+    userName: config.userName || '나',
+    userDescription: config.userDescription || '',
+    userAppearancePrompt: config.userAppearancePrompt || DEFAULT_USER_APPEARANCE_PROMPT,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  }];
+}
+
 const EVENT_PRESETS = [
   { title: "나's birthday", date: '1985-02-08', type: '유저 생일', prompt: "Event type: the user's birthday. The celebrant is 나. Write as the character directly to 나 in a private DM." },
   { title: '연인 기념일', date: 'MM-DD', type: '연인', prompt: 'Event type: relationship anniversary. The character remembers it naturally and may contact the user first.' },
@@ -217,6 +244,11 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   const [vertexFetchModels, setVertexFetchModels] = useState(profile.fetchModels === true);
   const [vertexThinkingLevel, setVertexThinkingLevel] = useState(String(profile.thinkingLevel || 'off'));
   const [vertexThinkingBudget, setVertexThinkingBudget] = useState(String(profile.thinkingBudgetTokens || 0));
+  const userProfilePresets = normalizedUserProfilePresets(state.config);
+  const activeUserProfileIndex = Math.max(0, userProfilePresets.findIndex(item => item.id === state.config.activeUserProfilePresetId));
+  const activeUserProfile = userProfilePresets[activeUserProfileIndex] || userProfilePresets[0];
+  const [userProfilePresetId, setUserProfilePresetId] = useState(activeUserProfile?.id || 'default_user_profile');
+  const [userProfileLabel, setUserProfileLabel] = useState(activeUserProfile?.label || '기본 프로필');
   const [userName, setUserName] = useState(state.config.userName || '나');
   const [roomName, setRoomName] = useState(state.config.roomName || '채팅');
   const [language, setLanguage] = useState(state.config.language || 'Korean');
@@ -293,6 +325,18 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     setSnsAutoImage(options.autoImage !== false);
   }, [snsDefaultPlatform, state.config.sns]);
 
+  useEffect(() => {
+    const presets = normalizedUserProfilePresets(state.config);
+    const index = Math.max(0, presets.findIndex(item => item.id === state.config.activeUserProfilePresetId));
+    const preset = presets[index] || presets[0];
+    if (!preset) return;
+    setUserProfilePresetId(preset.id);
+    setUserProfileLabel(preset.label || '기본 프로필');
+    setUserName(state.config.userName || preset.userName || '나');
+    setUserDescription(state.config.userDescription || preset.userDescription || '');
+    setUserAppearancePrompt(String(state.config.userAppearancePrompt || preset.userAppearancePrompt || DEFAULT_USER_APPEARANCE_PROMPT));
+  }, [state.config.activeUserProfilePresetId, state.config.userName, state.config.userDescription, state.config.userAppearancePrompt]);
+
   async function openSection(section: SettingsSection) {
     if (section === 'prompts' && onOpenPrompts) {
       onOpenPrompts();
@@ -306,6 +350,44 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     setEventDate(preset.date);
     setEventType(preset.type);
     setEventPrompt(preset.prompt);
+  }
+
+  async function selectUserProfilePreset(offset: number) {
+    if (!userProfilePresets.length || saving) return;
+    const currentIndex = Math.max(0, userProfilePresets.findIndex(item => item.id === userProfilePresetId));
+    const nextIndex = (currentIndex + offset + userProfilePresets.length) % userProfilePresets.length;
+    const preset = userProfilePresets[nextIndex];
+    setUserProfilePresetId(preset.id);
+    setUserProfileLabel(preset.label);
+    setUserName(preset.userName || '나');
+    setUserDescription(preset.userDescription || '');
+    setUserAppearancePrompt(String(preset.userAppearancePrompt || DEFAULT_USER_APPEARANCE_PROMPT));
+    try {
+      await onChange({
+        ...state,
+        config: {
+          ...state.config,
+          activeUserProfilePresetId: preset.id,
+          userName: preset.userName || '나',
+          userDescription: preset.userDescription || '',
+          userAppearancePrompt: preset.userAppearancePrompt || DEFAULT_USER_APPEARANCE_PROMPT,
+          userProfilePresets
+        }
+      });
+      setStatus(`프로필 전환 완료: ${preset.label}`);
+    } catch (error) {
+      setStatus(`프로필 전환 실패: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  function newUserProfilePreset() {
+    const id = makeId('userprofile');
+    setUserProfilePresetId(id);
+    setUserProfileLabel(`새 프로필 ${userProfilePresets.length + 1}`);
+    setUserName('나');
+    setUserDescription('');
+    setUserAppearancePrompt(DEFAULT_USER_APPEARANCE_PROMPT);
+    setStatus('새 프로필 초안입니다. 내용을 입력한 뒤 프로필 저장을 누르세요.');
   }
 
   function selectProvider(nextProvider: ApiProvider) {
@@ -448,19 +530,37 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     if (saving) return;
     setSaving(true);
     try {
-      await onChange({
-      ...state,
-      config: {
-        ...state.config,
+      const now = Date.now();
+      const nextPreset: UserProfilePreset = {
+        id: userProfilePresetId || makeId('userprofile'),
+        label: userProfileLabel.trim() || userName.trim() || '내 프로필',
         userName: userName.trim() || '나',
-        roomName: roomName.trim() || '채팅',
-        language: language.trim() || 'Korean',
-        fontScale: Math.max(0.7, Math.min(1.6, Number(fontScale) || 1)),
         userDescription,
-        userAppearancePrompt: userAppearancePrompt.trim() || DEFAULT_USER_APPEARANCE_PROMPT
-      }
+        userAppearancePrompt: userAppearancePrompt.trim() || DEFAULT_USER_APPEARANCE_PROMPT,
+        createdAt: userProfilePresets.find(item => item.id === userProfilePresetId)?.createdAt || now,
+        updatedAt: now
+      };
+      const nextPresets = [
+        nextPreset,
+        ...userProfilePresets.filter(item => item.id !== nextPreset.id)
+      ];
+      await onChange({
+        ...state,
+        config: {
+          ...state.config,
+          activeUserProfilePresetId: nextPreset.id,
+          userProfilePresets: nextPresets,
+          userName: nextPreset.userName,
+          roomName: roomName.trim() || '채팅',
+          language: language.trim() || 'Korean',
+          fontScale: Math.max(0.7, Math.min(1.6, Number(fontScale) || 1)),
+          userDescription: nextPreset.userDescription,
+          userAppearancePrompt: nextPreset.userAppearancePrompt
+        }
       });
-      setStatus('내 프로필 저장 완료');
+      setUserProfilePresetId(nextPreset.id);
+      setUserProfileLabel(nextPreset.label);
+      setStatus(`내 프로필 저장 완료: ${nextPreset.label}`);
     } catch (error) {
       setStatus(`내 프로필 저장 실패: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -969,6 +1069,20 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
         </View>
         <View style={[styles.card, activeSection !== 'user' && styles.hidden]}>
           <Text style={styles.cardTitle}>내 기본 프로필</Text>
+          <Text style={styles.label}>프로필 프리셋</Text>
+          <View style={styles.profilePresetSwitcher}>
+            <Pressable onPress={() => void selectUserProfilePreset(-1)} disabled={saving || userProfilePresets.length < 2} style={[styles.profileArrow, (saving || userProfilePresets.length < 2) && styles.disabled]}>
+              <Text style={styles.profileArrowText}>‹</Text>
+            </Pressable>
+            <View style={styles.profilePresetCenter}>
+              <TextInput value={userProfileLabel} onChangeText={setUserProfileLabel} style={[styles.input, styles.profilePresetInput]} placeholder="프로필 이름" />
+              <Text style={styles.profilePresetMeta}>{userProfilePresets.findIndex(item => item.id === userProfilePresetId) >= 0 ? `${Math.max(1, userProfilePresets.findIndex(item => item.id === userProfilePresetId) + 1)} / ${userProfilePresets.length}` : '신규 프로필'}</Text>
+            </View>
+            <Pressable onPress={() => void selectUserProfilePreset(1)} disabled={saving || userProfilePresets.length < 2} style={[styles.profileArrow, (saving || userProfilePresets.length < 2) && styles.disabled]}>
+              <Text style={styles.profileArrowText}>›</Text>
+            </Pressable>
+          </View>
+          <Pressable onPress={newUserProfilePreset} disabled={saving} style={[styles.secondary, saving && styles.disabled]}><Text style={styles.secondaryText}>새 프로필 만들기</Text></Pressable>
           <Text style={styles.label}>서비스 이름</Text>
           <TextInput value={roomName} onChangeText={setRoomName} style={styles.input} />
           <Text style={styles.label}>내 이름</Text>
@@ -1456,6 +1570,12 @@ const styles = StyleSheet.create({
   presetRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
   presetButton: { minHeight: 34, paddingHorizontal: 10, borderRadius: 17, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', justifyContent: 'center' },
   presetText: { color: colors.text, fontWeight: '800', fontSize: 12 },
+  profilePresetSwitcher: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  profileArrow: { width: 44, height: 44, borderRadius: 22, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
+  profileArrowText: { color: colors.text, fontSize: 30, lineHeight: 32, fontWeight: '900' },
+  profilePresetCenter: { flex: 1 },
+  profilePresetInput: { marginTop: 0 },
+  profilePresetMeta: { marginTop: 4, color: colors.sub, fontSize: 12, fontWeight: '800', textAlign: 'center' },
   keyToggle: { alignSelf: 'flex-start', marginTop: 10, minHeight: 34, paddingHorizontal: 12, borderRadius: 17, backgroundColor: '#eee8dc', justifyContent: 'center' },
   keyToggleText: { color: colors.text, fontWeight: '900' },
   twoCols: { flexDirection: 'row', gap: 10 },

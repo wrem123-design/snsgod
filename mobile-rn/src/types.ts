@@ -62,6 +62,16 @@ export type SNSGodConfig = {
   userName: string;
   userDescription: string;
   userAppearancePrompt?: string;
+  activeUserProfilePresetId?: string;
+  userProfilePresets?: Array<{
+    id: string;
+    label: string;
+    userName: string;
+    userDescription: string;
+    userAppearancePrompt?: string;
+    createdAt: number;
+    updatedAt: number;
+  }>;
   roomName: string;
   language: string;
   snsTheme?: 'default' | 'kakao';

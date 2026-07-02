@@ -497,12 +497,31 @@ export type BlindDateProgress = {
 
 export type DatingAppRequestStatus = 'none' | 'pending' | 'accepted' | 'rejected';
 export type DatingAppDecision = 'liked' | 'passed';
+export type DatingAppPhotoStatus = 'pending' | 'generating' | 'success' | 'failed';
+export type DatingAppPhotoType = 'main' | 'daily' | 'outing' | 'hobby' | 'mood';
+export type DatingAppGenerationStatus = 'profile_ready' | 'generating_anchor' | 'anchor_failed' | 'generating_variations' | 'partial_failed' | 'ready';
+
+export type DatingAppIdentity = {
+  identityId: string;
+  identityPrompt: string;
+  identityAnchorUri?: string;
+  identityAnchorPhotoId?: string;
+  identityLocked: boolean;
+  referenceProvider: 'grok-local' | 'grok-cloud' | 'none';
+  generationSessionId?: string;
+};
 
 export type DatingAppPhoto = {
   id: string;
+  index?: number;
+  type?: DatingAppPhotoType;
   uri?: string;
   prompt: string;
   label: string;
+  status?: DatingAppPhotoStatus;
+  referenceUri?: string;
+  requiresReference?: boolean;
+  retryCount?: number;
   createdAt: number;
   error?: string;
 };
@@ -544,6 +563,8 @@ export type DatingAppProfile = {
   firstMessage: string;
   callPreview: string;
   identityPrompt: string;
+  identity?: DatingAppIdentity;
+  generationStatus?: DatingAppGenerationStatus;
   imagePrompts: string[];
   photos: DatingAppPhoto[];
   createdAt: number;

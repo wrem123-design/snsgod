@@ -1,8 +1,8 @@
-import { CandidateAppearance, DatingAppPhoto, DatingAppProfile, DatingAppProgress, SNSGodCharacter, SNSGodMessage, SNSGodState } from '../types';
+import { CandidateAppearance, DatingAppGenerationStatus, DatingAppPhoto, DatingAppPhotoType, DatingAppProfile, DatingAppProgress, SNSGodCharacter, SNSGodMessage, SNSGodState } from '../types';
 import { callLLMText, generateImageDataUri, parseJsonObject } from './api';
 import { appendDebugLog } from './debugLog';
 import { makeId } from './ids';
-import { buildRandomCategorizedImagePrompt } from './randomImagePrompt';
+import { buildRandomCategorizedImagePrompt, buildRandomOutfitSceneVariationPrompt } from './randomImagePrompt';
 import { createRoom } from './stateHelpers';
 
 export const DEFAULT_DATING_APP_REFRESH_HOURS = 12;
@@ -70,22 +70,27 @@ const DATING_MARKS = [['tiny mole under one eye'], ['faint dimples'], ['subtle a
 const DATING_SLOT_CUES = [
   {
     label: '대표 사진',
+    type: 'main' as DatingAppPhotoType,
     cue: 'dating app representative profile photo, half-body portrait, upper-body or waist-up shot only, face centered, shoulders visible, looking at camera, head fully included, profile photo crop'
   },
   {
     label: '일상',
+    type: 'daily' as DatingAppPhotoType,
     cue: 'daily-life candid photo, upper-body or three-quarter body snapshot, ordinary Korean daily setting, the woman is present with face clearly visible, head fully included, natural phone-photo realism'
   },
   {
     label: '외출',
+    type: 'outing' as DatingAppPhotoType,
     cue: 'going-out snapshot, three-quarter or full-body street photo, Seoul neighborhood background, stylish but believable outfit, face clearly visible, head included, not a scenery photo'
   },
   {
     label: '취향',
+    type: 'hobby' as DatingAppPhotoType,
     cue: 'hobby and interest photo, realistic place matching her interests, the woman is visible in the scene, face clearly visible, head included, not an empty interior or object photo'
   },
   {
     label: '분위기',
+    type: 'mood' as DatingAppPhotoType,
     cue: 'atmospheric evening dating app photo, waist-up portrait, face visible, different outfit and lighting, city light or warm indoor mood, head fully included'
   }
 ];
@@ -413,77 +418,148 @@ function randomDatingFaceReference(state: SNSGodState, usedReferences?: Set<stri
   return selected;
 }
 
+const DATING_REFERENCE_LOCK_PROMPT = [
+  'Use the provided reference image as the exact same person.',
+  'Preserve the same facial identity, age, hair color, hair length, skin tone, and body proportions.',
+  'Only change outfit, pose, background, lighting, and camera angle.',
+  'Do not redesign the face. Do not create a different person.'
+].join(' ');
+
 function datingPhotoPrompts(profile: DatingAppProfile) {
   const baseSeed = stableProfileSeed(profile);
   const appearance = datingAppearanceFor(profile, baseSeed);
   const usedOutfitIds: string[] = [];
   return DATING_SLOT_CUES.map((slot, index) => {
     const seedIndex = baseSeed + index * 113;
-    const categorizedPrompt = buildRandomCategorizedImagePrompt({
-      mode: 'profile',
-      age: profile.age,
-      nationality: 'Korean',
-      appearance,
-      seedIndex,
-      outfitSlot: baseSeed + index * 131,
-      usedOutfitIds
-    });
+    const sceneCue = slot.cue;
+    const categorizedPrompt = index === 0
+      ? buildRandomCategorizedImagePrompt({
+        mode: 'profile',
+        age: profile.age,
+        nationality: 'Korean',
+        appearance,
+        seedIndex,
+        outfitSlot: baseSeed + index * 131,
+        usedOutfitIds
+      })
+      : buildRandomOutfitSceneVariationPrompt({
+        mode: 'profile',
+        age: profile.age,
+        seedIndex,
+        outfitSlot: baseSeed + index * 131,
+        usedOutfitIds,
+        sceneCue
+      });
     const interestCue = index === 3 && profile.interests.length
       ? `interests to express visually: ${profile.interests.slice(0, 4).join(', ')}`
       : '';
     return {
       label: slot.label,
-      prompt: [
-        categorizedPrompt,
-        profile.identityPrompt,
-        `fictional adult Korean dating app profile for ${profile.name}, ${profile.age}, ${profile.job}`,
-        'same woman identity across the dating app album, realistic ordinary person, not a celebrity clone',
-        'use the app global prompt rules, outfit presets, body silhouette, makeup, lighting, background, and negative prompt rules',
-        slot.cue,
-        interestCue,
-        `photo slot ${index + 1} of 5, use a different outfit preset, different outfit color, different fit, different background, and different pose from every other slot`,
-        'never repeat the same clothing combination across this album, avoid duplicate outfit, avoid same top, same skirt, same dress, same jacket, same color styling',
-        'face must be clearly visible, eyes visible, head fully included, no face cropped out, no faceless body crop',
-        'no empty room, no scenery-only photo, no object-only photo, no clothing-only crop',
-        'no extra people, no text overlay, no watermark, no logo, no bag, no handbag, no backpack, no boots, no coffee cup, no mug, no drink cup, no handheld drink props'
-      ].filter(Boolean).join(', ')
+      type: slot.type,
+      prompt: index === 0
+        ? [
+          categorizedPrompt,
+          profile.identityPrompt,
+          `fictional adult Korean dating app profile for ${profile.name}, ${profile.age}, ${profile.job}`,
+          'create the identity anchor image for this candidate, realistic ordinary person, not a celebrity clone',
+          'use the app global prompt rules, outfit presets, body silhouette, makeup, lighting, background, and negative prompt rules',
+          slot.cue,
+          `photo slot ${index + 1} of 5, identity anchor, profile photo`,
+          'face must be clearly visible, eyes visible, head fully included, no face cropped out, no faceless body crop',
+          'no empty room, no scenery-only photo, no object-only photo, no clothing-only crop',
+          'no extra people, no text overlay, no watermark, no logo, no bag, no handbag, no backpack, no boots, no coffee cup, no mug, no drink cup, no handheld drink props'
+        ].filter(Boolean).join(', ')
+        : [
+          DATING_REFERENCE_LOCK_PROMPT,
+          categorizedPrompt,
+          `fictional adult Korean dating app profile variation for ${profile.name}`,
+          'use the app global prompt rules, outfit presets, lighting, background, and negative prompt rules',
+          interestCue,
+          `photo slot ${index + 1} of 5, use a different outfit preset, different outfit color, different fit, different background, and different pose from every other slot`,
+          'never repeat the same clothing combination across this album, avoid duplicate outfit, avoid same top, same skirt, same dress, same jacket, same color styling',
+          'face must be clearly visible, eyes visible, head fully included, no face cropped out, no faceless body crop',
+          'no empty room, no scenery-only photo, no object-only photo, no clothing-only crop',
+          'no extra people, no text overlay, no watermark, no logo, no bag, no handbag, no backpack, no boots, no coffee cup, no mug, no drink cup, no handheld drink props'
+        ].filter(Boolean).join(', ')
     };
   });
 }
 
-async function generateDatingPhotos(state: SNSGodState, profile: DatingAppProfile): Promise<{ photos: DatingAppPhoto[]; imagePrompts: string[] }> {
+function datingReferenceProvider(state: SNSGodState): 'grok-local' | 'grok-cloud' | 'none' {
+  const provider = state.config.imageGeneration?.provider || 'openai';
+  return provider === 'grok-local' || provider === 'grok-cloud' ? provider : 'none';
+}
+
+async function generateDatingPhotos(state: SNSGodState, profile: DatingAppProfile): Promise<{ photos: DatingAppPhoto[]; imagePrompts: string[]; generationStatus: DatingAppGenerationStatus; identity: NonNullable<DatingAppProfile['identity']> }> {
   const prompts = datingPhotoPrompts(profile);
   const photos: DatingAppPhoto[] = [];
   const supportsReference = datingImageProviderSupportsReference(state);
-  const usedReferences = new Set<string>();
-  const seedReferenceImage = randomDatingFaceReference(state, usedReferences);
-  let generatedReferenceImage: string | undefined;
+  const referenceProvider = datingReferenceProvider(state);
+  const identityId = profile.identity?.identityId || makeId('dating_identity');
+  const generationSessionId = makeId('dating_generation');
+  let identityAnchorUri: string | undefined;
+  let identityAnchorPhotoId: string | undefined;
+  let generationStatus: DatingAppGenerationStatus = 'generating_anchor';
   for (const [index, item] of prompts.entries()) {
+    if (index > 0 && !identityAnchorUri) break;
     const photo: DatingAppPhoto = {
       id: makeId('dating_photo'),
+      index,
+      type: item.type,
       label: item.label,
       prompt: item.prompt,
+      status: 'generating',
+      requiresReference: index > 0,
+      referenceUri: index > 0 ? identityAnchorUri : undefined,
+      retryCount: 0,
       createdAt: Date.now()
     };
     try {
-      const referenceImage = supportsReference
-        ? index === 0
-          ? seedReferenceImage
-          : generatedReferenceImage || seedReferenceImage
-        : undefined;
+      if (index > 0 && !supportsReference) {
+        throw new Error('현재 이미지 provider는 레퍼런스 기반 동일 인물 variation 생성을 지원하지 않습니다.');
+      }
+      const referenceImage = index > 0 ? identityAnchorUri : undefined;
       const uri = await generateImageDataUri(state, item.prompt, undefined, {
         referenceImage,
         kind: referenceImage ? 'profile-reference-face' : 'profile'
       });
       photo.uri = uri;
-      if (supportsReference && index === 0) generatedReferenceImage = uri;
+      photo.status = 'success';
+      if (index === 0) {
+        identityAnchorUri = uri;
+        identityAnchorPhotoId = photo.id;
+        generationStatus = 'generating_variations';
+      }
     } catch (error) {
+      photo.status = 'failed';
       photo.error = error instanceof Error ? error.message : String(error);
       void appendDebugLog('datingApp.image', `image failed ${profile.name}/${item.label}: ${photo.error}`, 'warn');
     }
     photos.push(photo);
+    if (index === 0 && photo.status !== 'success') {
+      generationStatus = 'anchor_failed';
+      break;
+    }
   }
-  return { photos, imagePrompts: prompts.map(item => item.prompt) };
+  if (generationStatus !== 'anchor_failed') {
+    generationStatus = photos.length === prompts.length && photos.every(photo => photo.status === 'success' && photo.uri)
+      ? 'ready'
+      : 'partial_failed';
+  }
+  return {
+    photos,
+    imagePrompts: prompts.map(item => item.prompt),
+    generationStatus,
+    identity: {
+      identityId,
+      identityPrompt: profile.identityPrompt,
+      identityAnchorUri,
+      identityAnchorPhotoId,
+      identityLocked: Boolean(identityAnchorUri),
+      referenceProvider,
+      generationSessionId
+    }
+  };
 }
 
 async function generateDatingAppProfileBundle(state: SNSGodState, now: number, refreshIntervalHours: number): Promise<DatingAppProfile> {
@@ -492,6 +568,8 @@ async function generateDatingAppProfileBundle(state: SNSGodState, now: number, r
   const generated = await generateDatingPhotos(state, profileSeed);
   return {
     ...profileSeed,
+    identity: generated.identity,
+    generationStatus: generated.generationStatus,
     imagePrompts: generated.imagePrompts,
     photos: generated.photos
   };
@@ -560,6 +638,89 @@ export async function recordDatingAppDecision(state: SNSGodState, profileId: str
       completedAt: completed ? (progress.completedAt || now) : progress.completedAt
     }
   };
+}
+
+function replaceDatingProfileInState(state: SNSGodState, updatedProfile: DatingAppProfile): SNSGodState {
+  const progress = datingAppProgress(state);
+  const profiles = datingAppProfiles(progress).map(profile => profile.id === updatedProfile.id ? updatedProfile : profile);
+  return {
+    ...state,
+    datingApp: {
+      ...progress,
+      profiles,
+      currentProfile: progress.currentProfile?.id === updatedProfile.id ? updatedProfile : progress.currentProfile
+    }
+  };
+}
+
+async function retryDatingVariationSlot(state: SNSGodState, profile: DatingAppProfile, slotIndex: number): Promise<DatingAppProfile> {
+  const prompts = datingPhotoPrompts(profile);
+  const item = prompts[slotIndex];
+  const anchorUri = profile.identity?.identityAnchorUri || profile.photos[0]?.uri;
+  if (!item || slotIndex <= 0 || !anchorUri) return profile;
+  const photos = [...profile.photos];
+  const previous = photos[slotIndex];
+  const retryCount = Number(previous?.retryCount || 0) + 1;
+  const photo: DatingAppPhoto = {
+    id: previous?.id || makeId('dating_photo'),
+    index: slotIndex,
+    type: item.type,
+    label: item.label,
+    prompt: item.prompt,
+    status: 'generating',
+    referenceUri: anchorUri,
+    requiresReference: true,
+    retryCount,
+    createdAt: Date.now()
+  };
+  try {
+    if (!datingImageProviderSupportsReference(state)) {
+      throw new Error('현재 이미지 provider는 레퍼런스 기반 동일 인물 variation 생성을 지원하지 않습니다.');
+    }
+    photo.uri = await generateImageDataUri(state, item.prompt, undefined, {
+      referenceImage: anchorUri,
+      kind: 'profile-reference-face'
+    });
+    photo.status = 'success';
+  } catch (error) {
+    photo.status = 'failed';
+    photo.error = error instanceof Error ? error.message : String(error);
+    void appendDebugLog('datingApp.image', `retry failed ${profile.name}/${item.label}: ${photo.error}`, 'warn');
+  }
+  photos[slotIndex] = photo;
+  const generationStatus: DatingAppGenerationStatus = photos.length >= DATING_SLOT_CUES.length && photos.slice(0, DATING_SLOT_CUES.length).every(item => item.status === 'success' && item.uri)
+    ? 'ready'
+    : 'partial_failed';
+  return {
+    ...profile,
+    generationStatus,
+    photos
+  };
+}
+
+export async function retryDatingAppProfileImages(state: SNSGodState, profileId: string): Promise<SNSGodState> {
+  const progress = datingAppProgress(state);
+  const profile = datingAppProfiles(progress).find(item => item.id === profileId);
+  if (!profile) return state;
+  const anchor = profile.photos[0];
+  if (!anchor?.uri || anchor.status === 'failed' || profile.generationStatus === 'anchor_failed') {
+    const generated = await generateDatingPhotos(state, { ...profile, photos: [], imagePrompts: [] });
+    return replaceDatingProfileInState(state, {
+      ...profile,
+      identity: generated.identity,
+      generationStatus: generated.generationStatus,
+      imagePrompts: generated.imagePrompts,
+      photos: generated.photos
+    });
+  }
+
+  let updatedProfile = profile;
+  for (let index = 1; index < DATING_SLOT_CUES.length; index += 1) {
+    const photo = updatedProfile.photos[index];
+    if (photo?.status === 'success' && photo.uri) continue;
+    updatedProfile = await retryDatingVariationSlot(state, updatedProfile, index);
+  }
+  return replaceDatingProfileInState(state, updatedProfile);
 }
 
 export function selectDatingAppFinalProfile(state: SNSGodState, profileId: string): SNSGodState {

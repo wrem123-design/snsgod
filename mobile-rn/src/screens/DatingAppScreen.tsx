@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, BackHandler, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme';
 import { DatingAppPhoto, DatingAppProfile, DatingAppProgress, SNSGodState } from '../types';
 import {
@@ -15,6 +15,7 @@ import {
   recordDatingAppDecision,
   requestDatingAppChat,
   resolveDatingAppRequest,
+  retryDatingAppProfileImages,
   selectDatingAppFinalProfile,
   toggleDatingAppReferencePhoto
 } from '../logic/datingApp';
@@ -26,6 +27,22 @@ type Props = {
   onBack: () => void;
   onOpenRoom: (roomId: string) => void;
 };
+
+const REQUIRED_DATING_PHOTO_COUNT = 5;
+
+function isDatingPhotoReady(photo?: DatingAppPhoto) {
+  if (photo?.status === 'failed') return false;
+  return Boolean(photo?.uri && isRenderableMediaUri(photo.uri));
+}
+
+function isDatingProfileReady(profile?: DatingAppProfile) {
+  if (!profile) return false;
+  return profile.photos.length >= REQUIRED_DATING_PHOTO_COUNT && profile.photos.slice(0, REQUIRED_DATING_PHOTO_COUNT).every(isDatingPhotoReady);
+}
+
+function hasDatingPhotoFailure(profile?: DatingAppProfile) {
+  return Boolean(profile?.photos.some(photo => photo.error));
+}
 
 export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) {
   const progress = datingAppProgress(state);
@@ -49,6 +66,14 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
     : 0;
   const expiryLabel = remainingMs <= 0 ? '갱신 가능' : `${formatRemaining(remainingMs)} 후 갱신`;
   const currentNumber = Math.min(Number(progress.activeProfileIndex || 0) + 1, 3);
+  const profileReady = isDatingProfileReady(profile);
+  const profileImageFailed = hasDatingPhotoFailure(profile) && !profileReady;
+  const needsInitialProfile = !profiles.length && progress.requestStatus !== 'pending' && progress.requestStatus !== 'accepted';
+  const imageGateOpen = Boolean(profile && !roundCompleted && !profileReady);
+  const blockingLoad = loading || needsInitialProfile;
+  const canUseCurrentProfile = Boolean(profile && !imageGateOpen && !loading);
+  const loadingTitle = currentNumber >= 3 && busyText.includes('결과') ? '결과 정리 중' : '이미지 생성 중';
+  const loadingBody = busyText || '프로필 사진 5장을 모두 확인하는 중...';
 
   useEffect(() => {
     const timer = setInterval(() => setNowTick(Date.now()), 1000);
@@ -56,10 +81,20 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
   }, []);
 
   useEffect(() => {
+    if (profile && !roundCompleted && !isDatingProfileReady(profile)) {
+      void retryProfileImages(profile.id);
+      return;
+    }
     if (profiles.length && remainingMs > 0) return;
     if (progress.requestStatus === 'pending' || progress.requestStatus === 'accepted') return;
     void generateRound(false);
   }, []);
+
+  useEffect(() => {
+    if (!blockingLoad) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => subscription.remove();
+  }, [blockingLoad]);
 
   useEffect(() => {
     if (progress.requestStatus !== 'pending') return;
@@ -86,6 +121,10 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
 
   async function refreshIfReady() {
     if (loading || progress.requestStatus === 'pending') return;
+    if (imageGateOpen && profile) {
+      await retryProfileImages(profile.id);
+      return;
+    }
     const left = datingAppRemainingMs(state);
     if (profiles.length && left > 0) {
       setMessage(`${formatRemaining(left)} 남았어요`);
@@ -95,7 +134,7 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
   }
 
   async function decide(decision: 'liked' | 'passed') {
-    if (!profile || loading || progress.requestStatus === 'pending') return;
+    if (!profile || !profileReady || loading || progress.requestStatus === 'pending') return;
     setLoading(true);
     setBusyText(currentNumber >= 3 ? '결과를 정리하는 중...' : '다음 소개팅 후보를 불러오는 중...');
     try {
@@ -107,8 +146,22 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
     }
   }
 
+  async function retryProfileImages(profileId: string) {
+    if (loading) return;
+    setLoading(true);
+    setMessage('');
+    setBusyText('같은 후보의 실패한 사진만 다시 준비하는 중...');
+    try {
+      const next = await retryDatingAppProfileImages(state, profileId);
+      if (next !== state) await onChange(next);
+    } finally {
+      setBusyText('');
+      setLoading(false);
+    }
+  }
+
   async function pickFinal(profileId: string) {
-    if (progress.requestStatus === 'pending' || progress.requestStatus === 'accepted') return;
+    if (loading || progress.requestStatus === 'pending' || progress.requestStatus === 'accepted') return;
     await onChange(selectDatingAppFinalProfile(state, profileId));
   }
 
@@ -132,6 +185,7 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
   }
 
   async function toggleReference(photoId: string) {
+    if (loading) return;
     await onChange(toggleDatingAppReferencePhoto(state, photoId));
   }
 
@@ -146,7 +200,7 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
-        <Pressable onPress={onBack} style={styles.backButton} accessibilityLabel="뒤로가기">
+        <Pressable onPress={blockingLoad ? undefined : onBack} disabled={blockingLoad} style={[styles.backButton, blockingLoad && styles.disabled]} accessibilityLabel="뒤로가기">
           <Text style={styles.backText}>‹</Text>
         </Pressable>
         <View style={styles.headerBody}>
@@ -200,8 +254,27 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
               <View style={styles.onlinePill}><Text style={styles.onlinePillText}>{profile.lastActiveLabel}</Text></View>
             </View>
 
+            {imageGateOpen && !loading ? (
+              <View style={styles.imageGatePanel}>
+                <Text style={styles.imageGateTitle}>사진 준비가 끝나지 않았어요</Text>
+                <Text style={styles.imageGateText}>
+                  {profileImageFailed
+                    ? '일부 사진 생성에 실패해서 후보를 다시 불러와야 진행할 수 있어요.'
+                    : '프로필 사진 5장을 모두 확인한 뒤 선택을 진행할 수 있어요.'}
+                </Text>
+                <View style={styles.imageGateActions}>
+                  <Pressable onPress={() => retryProfileImages(profile.id)} style={styles.imageGateButton}>
+                    <Text style={styles.imageGateButtonText}>실패 사진 다시 생성</Text>
+                  </Pressable>
+                  <Pressable onPress={() => generateRound(true)} style={[styles.imageGateButton, styles.imageGateSecondaryButton]}>
+                    <Text style={styles.imageGateSecondaryText}>이 후보 새로 뽑기</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+
             <View style={styles.heroCard}>
-              <Pressable onPress={() => hero && setPreview(hero)} style={styles.heroImageWrap}>
+              <Pressable onPress={() => canUseCurrentProfile && hero && setPreview(hero)} disabled={!canUseCurrentProfile} style={styles.heroImageWrap}>
                 {hero?.uri && isRenderableMediaUri(hero.uri) ? (
                   <Image source={{ uri: hero.uri }} style={styles.heroImage} />
                 ) : (
@@ -221,10 +294,10 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
             </View>
 
             <View style={styles.actions}>
-              <Pressable onPress={() => decide('passed')} disabled={loading} style={[styles.circleAction, styles.passAction, loading && styles.disabled]} accessibilityLabel="패스">
+              <Pressable onPress={() => decide('passed')} disabled={!canUseCurrentProfile} style={[styles.circleAction, styles.passAction, !canUseCurrentProfile && styles.disabled]} accessibilityLabel="패스">
                 <Text style={styles.passActionText}>×</Text>
               </Pressable>
-              <Pressable onPress={() => decide('liked')} disabled={loading} style={[styles.circleAction, styles.likeAction, loading && styles.disabled]} accessibilityLabel="선택">
+              <Pressable onPress={() => decide('liked')} disabled={!canUseCurrentProfile} style={[styles.circleAction, styles.likeAction, !canUseCurrentProfile && styles.disabled]} accessibilityLabel="선택">
                 <Text style={styles.likeActionText}>♥</Text>
               </Pressable>
             </View>
@@ -265,16 +338,20 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
               ))}
             </Section>
             <Section title="사진">
-              <Gallery photos={photos} onPreview={setPreview} />
+              <Gallery photos={photos} onPreview={canUseCurrentProfile ? setPreview : () => undefined} onRetry={() => profile && retryProfileImages(profile.id)} />
             </Section>
           </>
         ) : null}
       </ScrollView>
 
-      {loading && profiles.length ? (
-        <View style={styles.busyOverlay}>
-          <ActivityIndicator color={colors.datingHeart} />
-          <Text style={styles.busyText}>{busyText}</Text>
+      {blockingLoad ? (
+        <View style={styles.blockingOverlay}>
+          <View style={styles.centerLoadingCard}>
+            <ActivityIndicator size="large" color={colors.datingHeart} />
+            <Text style={styles.centerLoadingTitle}>{loadingTitle}</Text>
+            <Text style={styles.centerLoadingText}>{loadingBody}</Text>
+            <Text style={styles.centerLoadingSub}>후보 {currentNumber}/3 · 사진 5장 준비 완료 후 진행 가능</Text>
+          </View>
         </View>
       ) : null}
 
@@ -499,7 +576,7 @@ function InfoCell({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Gallery({ photos, onPreview }: { photos: DatingAppPhoto[]; onPreview: (photo: DatingAppPhoto) => void }) {
+function Gallery({ photos, onPreview, onRetry }: { photos: DatingAppPhoto[]; onPreview: (photo: DatingAppPhoto) => void; onRetry?: () => void }) {
   return (
     <View style={styles.galleryGrid}>
       {photos.map(photo => (
@@ -509,6 +586,12 @@ function Gallery({ photos, onPreview }: { photos: DatingAppPhoto[]; onPreview: (
           ) : (
             <View style={styles.galleryPlaceholder}>
               <Text style={styles.galleryPlaceholderText}>{photo.label}</Text>
+              {photo.status === 'failed' ? <Text style={styles.galleryErrorText}>생성 실패</Text> : null}
+              {photo.status === 'failed' && onRetry ? (
+                <Pressable onPress={onRetry} style={styles.galleryRetryButton}>
+                  <Text style={styles.galleryRetryText}>다시 생성</Text>
+                </Pressable>
+              ) : null}
             </View>
           )}
           <Text style={styles.galleryLabel}>{photo.label}</Text>
@@ -533,6 +616,14 @@ const styles = StyleSheet.create({
   toastText: { color: colors.datingHeart, fontWeight: '900' },
   loadingPanel: { minHeight: 300, borderRadius: 12, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panel, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 18 },
   loadingText: { color: colors.sub, fontWeight: '900' },
+  imageGatePanel: { borderRadius: 12, borderWidth: 1, borderColor: colors.datingHeart, backgroundColor: colors.datingHeartSoft, padding: 14, gap: 8 },
+  imageGateTitle: { color: colors.datingHeart, fontSize: 17, fontWeight: '900' },
+  imageGateText: { color: colors.text, lineHeight: 20, fontWeight: '800' },
+  imageGateActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  imageGateButton: { alignSelf: 'flex-start', minHeight: 38, paddingHorizontal: 14, borderRadius: 19, backgroundColor: colors.datingHeart, alignItems: 'center', justifyContent: 'center' },
+  imageGateButtonText: { color: colors.white, fontWeight: '900' },
+  imageGateSecondaryButton: { backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border },
+  imageGateSecondaryText: { color: colors.text, fontWeight: '900' },
   statusStrip: { minHeight: 58, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
   statusLabel: { color: colors.text, fontSize: 15, fontWeight: '900' },
   statusText: { marginTop: 3, color: colors.sub, fontSize: 12, fontWeight: '800' },
@@ -578,6 +669,9 @@ const styles = StyleSheet.create({
   galleryImage: { width: '100%', aspectRatio: 0.76, borderRadius: 10, backgroundColor: colors.surfaceAlt },
   galleryPlaceholder: { width: '100%', aspectRatio: 0.76, borderRadius: 10, backgroundColor: colors.surfaceAlt, alignItems: 'center', justifyContent: 'center', padding: 8 },
   galleryPlaceholderText: { color: colors.sub, fontWeight: '900', textAlign: 'center' },
+  galleryErrorText: { marginTop: 6, color: colors.datingHeart, fontSize: 12, fontWeight: '900', textAlign: 'center' },
+  galleryRetryButton: { marginTop: 8, minHeight: 30, paddingHorizontal: 10, borderRadius: 15, backgroundColor: colors.datingHeart, alignItems: 'center', justifyContent: 'center' },
+  galleryRetryText: { color: colors.white, fontSize: 12, fontWeight: '900' },
   galleryLabel: { marginTop: 5, color: colors.sub, fontSize: 12, fontWeight: '900' },
   resultHero: { borderRadius: 12, backgroundColor: colors.text, padding: 16 },
   resultTitle: { color: colors.white, fontSize: 24, fontWeight: '900' },
@@ -619,8 +713,11 @@ const styles = StyleSheet.create({
   waitPanel: { borderRadius: 12, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panel, padding: 18, alignItems: 'center' },
   waitTitle: { color: colors.text, fontSize: 20, fontWeight: '900' },
   waitText: { marginTop: 8, color: colors.sub, lineHeight: 20, fontWeight: '800', textAlign: 'center' },
-  busyOverlay: { position: 'absolute', left: 18, right: 18, bottom: 22, minHeight: 56, borderRadius: 12, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
-  busyText: { color: colors.text, fontWeight: '900' },
+  blockingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(250,247,241,0.94)', alignItems: 'center', justifyContent: 'center', padding: 24, zIndex: 20, elevation: 20 },
+  centerLoadingCard: { width: '100%', maxWidth: 360, minHeight: 210, borderRadius: 18, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panel, alignItems: 'center', justifyContent: 'center', padding: 22, gap: 10, shadowColor: colors.datingShadow, shadowOpacity: 1, shadowRadius: 18, shadowOffset: { width: 0, height: 10 }, elevation: 6 },
+  centerLoadingTitle: { color: colors.text, fontSize: 24, lineHeight: 29, fontWeight: '900', textAlign: 'center' },
+  centerLoadingText: { color: colors.text, fontSize: 15, lineHeight: 22, fontWeight: '900', textAlign: 'center' },
+  centerLoadingSub: { color: colors.sub, fontSize: 12, lineHeight: 18, fontWeight: '800', textAlign: 'center' },
   disabled: { opacity: 0.48 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.88)', alignItems: 'center', justifyContent: 'center', padding: 14 },
   modalImageFrame: { width: '100%', height: '82%', alignItems: 'center', justifyContent: 'center' },

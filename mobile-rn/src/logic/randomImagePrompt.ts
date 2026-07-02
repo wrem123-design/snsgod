@@ -297,3 +297,45 @@ export function buildRandomCategorizedImagePrompt(options: RandomPromptOptions):
     'realistic Korean personal snapshot, natural skin texture, face clearly visible'
   ].filter(Boolean).join(', ');
 }
+
+export function buildRandomOutfitSceneVariationPrompt(options: {
+  mode?: BlindDateMode;
+  age?: number;
+  seedIndex: number;
+  outfitSlot?: number;
+  usedOutfitIds?: string[];
+  sceneCue?: string;
+}): string {
+  const index = options.seedIndex;
+  const outfitIndex = options.outfitSlot ?? index;
+  const outfitPool = allowedOutfits(options.mode, index);
+  const freshOutfits = options.usedOutfitIds?.length
+    ? outfitPool.filter(item => !options.usedOutfitIds?.includes(item.id))
+    : outfitPool;
+  const outfit = pick(freshOutfits.length ? freshOutfits : outfitPool, mixedIndex(outfitIndex, index, options.outfitSlot === undefined ? 23 : 0));
+  if (options.usedOutfitIds && !options.usedOutfitIds.includes(outfit.id)) {
+    options.usedOutfitIds.push(outfit.id);
+  }
+  return [
+    'adult Korean woman, age 19 or older',
+    options.age ? `age ${options.age}` : '',
+    `outfit preset ${outfit.id}: ${outfit.prompt}`,
+    `fit detail: ${outfit.fit}`,
+    pick([
+      'light daily makeup mood',
+      'soft natural makeup mood',
+      'clean ordinary makeup mood',
+      'warm coral makeup mood',
+      'muted rose makeup mood',
+      'subtle evening makeup mood'
+    ], index * 13),
+    pick(EXPRESSIONS, index * 17),
+    pick(POSES, index * 19),
+    options.sceneCue || `background: ${pick(BACKGROUNDS, index * 23)}`,
+    pick(LIGHTING, index * 29),
+    pick(COMPOSITIONS, index * 31),
+    weightedQuality(index),
+    'realistic Korean dating app snapshot, natural smartphone photography',
+    'no bag, no handbag, no backpack, no boots, no coffee cup, no mug, no drink cup, no handheld drink props'
+  ].filter(Boolean).join(', ');
+}

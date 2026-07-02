@@ -18,6 +18,8 @@ import { forceUpdateRoomMemory, groupMemoryPromptBlock, updateRoomMemoryAfterApp
 import { dateGroundingInstruction } from '../logic/prompts';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const GROUP_REPLY_TIMEOUT_MS = 120000;
+const GROUP_IMAGE_TIMEOUT_MS = 120000;
 
 type GroupReplyPayload = {
   messages?: Array<{ characterId?: string; speakerId?: string; name?: string; handle?: string; content?: string; sticker?: string; imagePrompt?: string; imageCaption?: string; delay?: number }>;
@@ -44,6 +46,22 @@ function bubbleDelayMs(character: SNSGodCharacter, delay?: number) {
   const thinking = Math.max(1, Math.min(10, Number(character.thinkingTime || 6)));
   const base = Number.isFinite(Number(delay)) && Number(delay) > 0 ? Number(delay) * 1000 : 650 + thinking * 130;
   return Math.max(450, Math.min(8000, base));
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} 시간이 너무 오래 걸려 중단했습니다. 네트워크/API 상태를 확인한 뒤 다시 보내주세요.`)), ms);
+    promise.then(
+      value => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      error => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
 }
 
 function markUserMessagesRead(state: SNSGodState, roomId: string) {
@@ -234,11 +252,15 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
         if (!isCurrentChatJob(roomId, jobId)) return;
         await commitCurrent(current => markUserMessagesRead(current, roomId));
       }
-      if (!tryLockGeneratingRoom(roomId, jobId)) return;
+      if (!tryLockGeneratingRoom(roomId, jobId)) {
+        const systemMessage: SNSGodMessage = { id: makeId('msg'), role: 'system', content: '이전 그룹 답장 생성이 아직 정리되지 않아 이번 요청을 중단했습니다. 잠시 후 다시 보내주세요.', createdAt: Date.now(), failed: true };
+        await commitCurrent(current => clearGroupReadState(appendGroupMessage(current, roomId, systemMessage), roomId));
+        return;
+      }
       const promptState = stateRef.current;
       const promptParticipants = groupParticipants(promptState, roomId);
       const prompt = buildGroupPrompt(promptState, roomId, promptParticipants, content);
-      const { text: rawText, keyIndex } = await callLLMText(promptState, prompt);
+      const { text: rawText, keyIndex } = await withTimeout(callLLMText(promptState, prompt), GROUP_REPLY_TIMEOUT_MS, '그룹 답장 생성');
       if (!isCurrentChatJob(roomId, jobId)) return;
       await commitCurrent(current => {
         const profile = current.config.apiProfiles[current.config.apiType] || {};
@@ -287,10 +309,10 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
         if (item.imagePrompt && imageAllowed) {
           item.imagePrompt = imagePromptWithoutCharacterName(item.imagePrompt, speaker);
           try {
-            mediaData = await generateImageDataUri(imageState, item.imagePrompt, speaker, {
+            mediaData = await withTimeout(generateImageDataUri(imageState, item.imagePrompt, speaker, {
               referenceImage: characterReferenceImageForPrompt(speaker, item.imagePrompt),
               kind: 'general'
-            });
+            }), GROUP_IMAGE_TIMEOUT_MS, '그룹 이미지 생성');
           } catch (error) {
             item.imageCaption = `${item.imageCaption || ''}\n이미지 생성 실패: ${error instanceof Error ? error.message : String(error)}`.trim();
           }

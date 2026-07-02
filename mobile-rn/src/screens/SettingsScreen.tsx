@@ -310,6 +310,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   const [eventDate, setEventDate] = useState('');
   const [eventType, setEventType] = useState('');
   const [eventPrompt, setEventPrompt] = useState('');
+  const hasUnsavedUserProfilePreset = !userProfilePresets.some(item => item.id === userProfilePresetId);
 
   useEffect(() => {
     const options = snsPlatformOptions(state.config.sns, snsDefaultPlatform);
@@ -352,9 +353,9 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     setEventPrompt(preset.prompt);
   }
 
-  async function selectUserProfilePreset(offset: number) {
+  async function selectPersistedUserProfilePreset(offset: number, basePresetId = userProfilePresetId) {
     if (!userProfilePresets.length || saving) return;
-    const currentIndex = Math.max(0, userProfilePresets.findIndex(item => item.id === userProfilePresetId));
+    const currentIndex = Math.max(0, userProfilePresets.findIndex(item => item.id === basePresetId));
     const nextIndex = (currentIndex + offset + userProfilePresets.length) % userProfilePresets.length;
     const preset = userProfilePresets[nextIndex];
     setUserProfilePresetId(preset.id);
@@ -380,6 +381,29 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     }
   }
 
+  async function selectUserProfilePreset(offset: number) {
+    if (!userProfilePresets.length || saving) return;
+    if (hasUnsavedUserProfilePreset) {
+      const basePresetId = state.config.activeUserProfilePresetId || userProfilePresets[0]?.id || userProfilePresetId;
+      Alert.alert(
+        '저장하지 않은 프로필',
+        '새 프로필이 아직 저장되지 않았습니다. 저장하지 않고 다른 프로필로 이동할까요?',
+        [
+          { text: '취소', style: 'cancel' },
+          {
+            text: '이동',
+            style: 'destructive',
+            onPress: () => {
+              void selectPersistedUserProfilePreset(offset, basePresetId);
+            }
+          }
+        ]
+      );
+      return;
+    }
+    await selectPersistedUserProfilePreset(offset);
+  }
+
   function newUserProfilePreset() {
     const id = makeId('userprofile');
     setUserProfilePresetId(id);
@@ -392,6 +416,30 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
 
   function deleteCurrentUserProfilePreset() {
     if (saving) return;
+    if (hasUnsavedUserProfilePreset) {
+      const fallbackPreset = userProfilePresets[activeUserProfileIndex] || userProfilePresets[0];
+      if (!fallbackPreset) return;
+      Alert.alert(
+        '새 프로필 버리기',
+        '저장하지 않은 새 프로필을 버리고 이전 프로필로 돌아갈까요?',
+        [
+          { text: '취소', style: 'cancel' },
+          {
+            text: '버리기',
+            style: 'destructive',
+            onPress: () => {
+              setUserProfilePresetId(fallbackPreset.id);
+              setUserProfileLabel(fallbackPreset.label);
+              setUserName(fallbackPreset.userName || '나');
+              setUserDescription(fallbackPreset.userDescription || '');
+              setUserAppearancePrompt(String(fallbackPreset.userAppearancePrompt || DEFAULT_USER_APPEARANCE_PROMPT));
+              setStatus('새 프로필 초안을 버렸습니다.');
+            }
+          }
+        ]
+      );
+      return;
+    }
     if (userProfilePresets.length <= 1) {
       setStatus('프로필은 최소 1개 이상 필요합니다.');
       return;
@@ -1124,24 +1172,24 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           <Text style={styles.cardTitle}>내 기본 프로필</Text>
           <Text style={styles.label}>프로필 프리셋</Text>
           <View style={styles.profilePresetSwitcher}>
-            <Pressable onPress={() => void selectUserProfilePreset(-1)} disabled={saving || userProfilePresets.length < 2} style={[styles.profileArrow, (saving || userProfilePresets.length < 2) && styles.disabled]}>
+            <Pressable onPress={() => void selectUserProfilePreset(-1)} disabled={saving || (!hasUnsavedUserProfilePreset && userProfilePresets.length < 2)} style={[styles.profileArrow, (saving || (!hasUnsavedUserProfilePreset && userProfilePresets.length < 2)) && styles.disabled]}>
               <Text style={styles.profileArrowText}>‹</Text>
             </Pressable>
             <View style={styles.profilePresetCenter}>
               <View style={styles.profilePresetNameBox}>
                 <TextInput value={userProfileLabel} onChangeText={setUserProfileLabel} style={[styles.input, styles.profilePresetInput]} placeholder="프로필 이름" />
                 <View style={styles.profilePresetActions}>
-                  <Pressable onPress={newUserProfilePreset} disabled={saving} style={[styles.profilePresetAction, saving && styles.disabled]}>
+                  <Pressable onPress={newUserProfilePreset} disabled={saving || hasUnsavedUserProfilePreset} style={[styles.profilePresetAction, (saving || hasUnsavedUserProfilePreset) && styles.profilePresetActionDisabled]}>
                     <Text style={styles.profilePresetActionText}>+</Text>
                   </Pressable>
-                  <Pressable onPress={deleteCurrentUserProfilePreset} disabled={saving || userProfilePresets.length <= 1} style={[styles.profilePresetAction, styles.profilePresetDeleteAction, (saving || userProfilePresets.length <= 1) && styles.profilePresetActionDisabled]}>
+                  <Pressable onPress={deleteCurrentUserProfilePreset} disabled={saving || (!hasUnsavedUserProfilePreset && userProfilePresets.length <= 1)} style={[styles.profilePresetAction, styles.profilePresetDeleteAction, (saving || (!hasUnsavedUserProfilePreset && userProfilePresets.length <= 1)) && styles.profilePresetActionDisabled]}>
                     <Text style={[styles.profilePresetActionText, styles.profilePresetDeleteText]}>-</Text>
                   </Pressable>
                 </View>
               </View>
-              <Text style={styles.profilePresetMeta}>{userProfilePresets.findIndex(item => item.id === userProfilePresetId) >= 0 ? `${Math.max(1, userProfilePresets.findIndex(item => item.id === userProfilePresetId) + 1)} / ${userProfilePresets.length}` : '신규 프로필'}</Text>
+              <Text style={styles.profilePresetMeta}>{userProfilePresets.findIndex(item => item.id === userProfilePresetId) >= 0 ? `${Math.max(1, userProfilePresets.findIndex(item => item.id === userProfilePresetId) + 1)} / ${userProfilePresets.length}` : `신규 / ${userProfilePresets.length + 1}`}</Text>
             </View>
-            <Pressable onPress={() => void selectUserProfilePreset(1)} disabled={saving || userProfilePresets.length < 2} style={[styles.profileArrow, (saving || userProfilePresets.length < 2) && styles.disabled]}>
+            <Pressable onPress={() => void selectUserProfilePreset(1)} disabled={saving || (!hasUnsavedUserProfilePreset && userProfilePresets.length < 2)} style={[styles.profileArrow, (saving || (!hasUnsavedUserProfilePreset && userProfilePresets.length < 2)) && styles.disabled]}>
               <Text style={styles.profileArrowText}>›</Text>
             </Pressable>
           </View>

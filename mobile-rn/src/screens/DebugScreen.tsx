@@ -67,7 +67,7 @@ export function DebugScreen({ state, onBack, onReloadState, onReloadBundle, onSa
     try {
       if (!state) throw new Error('현재 state가 아직 준비되지 않았습니다.');
       await onSaveNow();
-      await saveState(state);
+      await saveState(state, { backup: 'force', verify: 'full', reason: 'debug save integrity test' });
       setStatus('즉시 저장 테스트 완료: SQLite와 백업 검증까지 통과했습니다.');
       await refresh();
     } catch (error) {
@@ -117,7 +117,7 @@ export function DebugScreen({ state, onBack, onReloadState, onReloadBundle, onSa
         __persistenceMarker: marker,
         __revision: Number(state.__revision || 0) + 1
       };
-      await saveState(testState);
+      await saveState(testState, { backup: 'force', verify: 'full', reason: 'debug persistence marker test' });
       const next = await getStorageDiagnostics(testState);
       setDiagnostics(next);
       const sqlite = next.stores.find(item => item.source === 'sqlite')?.summary;
@@ -162,7 +162,7 @@ export function DebugScreen({ state, onBack, onReloadState, onReloadBundle, onSa
       const picked = await DocumentPicker.getDocumentAsync({ type: ['application/zip', 'application/x-zip-compressed', '*/*'], copyToCacheDirectory: true });
       if (picked.canceled || !picked.assets?.[0]) return;
       const imported = await importFullBackupZip(picked.assets[0].uri);
-      await saveState({ ...imported, __importedAt: Date.now(), __revision: Number(imported.__revision || 0) + 1 });
+      await saveState({ ...imported, __importedAt: Date.now(), __revision: Number(imported.__revision || 0) + 1 }, { backup: 'force', verify: 'full', reason: 'full backup import' });
       setStatus('전체 백업에서 복구했습니다. 저장 데이터 다시 읽기를 눌러 화면 state를 갱신하세요.');
       await refresh();
     } catch (error) {
@@ -308,18 +308,21 @@ function StorageDiagnostics({ diagnostics, advanced }: { diagnostics: Awaited<Re
   const latest = diagnostics.stores.find(store => store.source === 'backupLatest')?.summary;
   const previous = diagnostics.stores.find(store => store.source === 'backupPrevious')?.summary;
   const pointer = diagnostics.stores.find(store => store.source === 'asyncStorage')?.pointer;
-  const hashOk = Boolean(sqlite?.hash && latest?.hash && pointer?.hash && sqlite.hash === latest.hash && latest.hash === pointer.hash);
-  const revisionOk = Boolean(sqlite && latest && pointer && sqlite.revision === latest.revision && latest.revision === pointer.revision);
-  const countOk = Boolean(sqlite && latest && pointer && sqlite.messageCount === latest.messageCount && latest.messageCount === pointer.messageCount);
+  const sqlitePointerOk = Boolean(sqlite?.hash && pointer?.hash && sqlite.hash === pointer.hash && sqlite.revision === pointer.revision);
+  const backupNotAhead = Boolean(!sqlite || !latest || latest.revision <= sqlite.revision);
+  const backupFresh = Boolean(sqlite && latest && sqlite.revision === latest.revision && sqlite.hash === latest.hash);
   return (
     <View style={styles.diagnostics}>
       <Text style={styles.diagTitle}>저장 상태</Text>
       <Text style={styles.diagSub}>복구 기준: {diagnostics.selected.source}</Text>
       <Text style={styles.diagSub}>마지막 저장: {diagnostics.save.lastSuccessfulSaveTime ? new Date(diagnostics.save.lastSuccessfulSaveTime).toLocaleString() : '없음'}</Text>
+      <Text style={styles.diagSub}>마지막 SQLite 저장: {diagnostics.save.lastSQLiteSaveTime ? new Date(diagnostics.save.lastSQLiteSaveTime).toLocaleString() : '없음'}</Text>
+      <Text style={styles.diagSub}>마지막 backup snapshot: {diagnostics.save.lastBackupSnapshotTime ? `${new Date(diagnostics.save.lastBackupSnapshotTime).toLocaleString()} · rev ${diagnostics.save.lastBackupSnapshotRevision}` : '없음'}</Text>
+      <Text style={styles.diagSub}>backup reason: {diagnostics.save.lastBackupSnapshotReason || 'none'}</Text>
       <View style={styles.healthRow}>
-        <HealthPill label="hash" ok={hashOk} />
-        <HealthPill label="revision" ok={revisionOk} />
-        <HealthPill label="count" ok={countOk} />
+        <HealthPill label="sqlite-pointer" ok={sqlitePointerOk} />
+        <HealthPill label="backup not ahead" ok={backupNotAhead} />
+        <HealthPill label="backup fresh" ok={backupFresh} />
       </View>
       {diagnostics.legacyAsyncStorageFullStateExists ? <Text style={styles.diagError}>legacy AsyncStorage full state remains</Text> : null}
       {diagnostics.save.lastSaveError ? <Text style={styles.diagError}>last save error: {diagnostics.save.lastSaveError}</Text> : null}

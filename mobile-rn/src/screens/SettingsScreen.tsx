@@ -181,7 +181,7 @@ async function requestTermuxRunPermission(): Promise<boolean> {
 
 export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpenPrompts, onOpenCharacterSettings }: {
   state: SNSGodState;
-  onChange: (next: SNSGodState) => Promise<void> | void;
+  onChange: (next: SNSGodState, options?: { persist?: boolean }) => Promise<void> | void;
   onBack: () => void;
   onOpenLorebook?: () => void;
   onOpenPrompts?: () => void;
@@ -293,7 +293,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     setActiveSection(section);
     if (state.config.lastSettingsSection === section) return;
     try {
-      await onChange({ ...state, config: { ...state.config, lastSettingsSection: section } });
+      await onChange({ ...state, config: { ...state.config, lastSettingsSection: section } }, { persist: false });
     } catch (error) {
       setStatus(`설정 위치 저장 실패: ${error instanceof Error ? error.message : String(error)}`);
     }

@@ -29,7 +29,7 @@ import { DebugScreen } from './screens/DebugScreen';
 import { BottomNav, BottomTab } from './components/BottomNav';
 import { Avatar } from './components/Avatar';
 import { MenuHubScreen } from './screens/MenuHubScreen';
-import { flushSaveState, getStoragePaths, loadState, recordSkippedSaveBeforeHydration, saveStateDebounced } from './storage/persist';
+import { flushSaveState, getStoragePaths, loadState, recordSkippedSaveBeforeHydration, saveStateDebounced, SaveStateOptions } from './storage/persist';
 import { colors } from './theme';
 import { SNSGodCharacter, SNSGodState, SNSPost } from './types';
 import { isAutomationQueueBusy, runAutomationQueueTick } from './logic/automationQueue';
@@ -114,6 +114,11 @@ type Route =
   | { name: 'call'; characterId: string; roomId?: string; sourceMessageId?: string; returnRoute?: Route }
   | { name: 'meeting'; sessionId: string; returnRoute?: Route }
   | { name: 'notifications' };
+
+type CommitOptions = {
+  persist?: boolean;
+  save?: SaveStateOptions;
+};
 
 export default function App() {
   const [route, setRoute] = useState<Route>({ name: 'chatList' });
@@ -200,7 +205,7 @@ export default function App() {
         const snapshot = summarized === current ? current : withNextRevision(summarized, current);
         stateRef.current = snapshot;
         setState(snapshot);
-        void flushSaveState(snapshot);
+        void flushSaveState(snapshot, { backup: 'force', verify: 'full', reason: 'app background' });
       }
     });
     return () => subscription.remove();
@@ -408,7 +413,12 @@ export default function App() {
     };
   }
 
-  async function commit(next: SNSGodState) {
+  async function commit(next: SNSGodState, options: CommitOptions = {}) {
+    if (options.persist === false) {
+      setState(next);
+      stateRef.current = next;
+      return;
+    }
     const previous = stateRef.current;
     const committed = withNextRevision(withUnreadForNewMessages(previous, next, visibleRoomIdForRoute(routeRef.current)), previous);
     setState(committed);
@@ -418,18 +428,14 @@ export default function App() {
       void appendDebugLog('storage', 'skip save before hydration', 'warn');
       return;
     }
-    saveStateDebounced(committed);
-    void flushSaveState(committed).catch(error => {
-      void appendDebugLog('storage', `state flush failed: ${error instanceof Error ? error.message : String(error)}`, 'warn');
-    });
-    void appendDebugLog('storage', `state saved: characters=${committed.characters.length}, notifications=${(committed.notifications || []).length}`);
+    saveStateDebounced(committed, options.save);
   }
 
-  async function commitCurrent(patch: (current: SNSGodState) => SNSGodState) {
+  async function commitCurrent(patch: (current: SNSGodState) => SNSGodState, options?: CommitOptions) {
     const current = stateRef.current;
     if (!current) return;
     const next = patch(current);
-    await commit(next);
+    await commit(next, options);
   }
 
   async function commitCurrentForScreen(patch: (current: SNSGodState) => SNSGodState) {
@@ -438,8 +444,8 @@ export default function App() {
   }
 
   async function commitAndFlush(next: SNSGodState) {
-    await commit(next);
-    await flushSaveState(stateRef.current || next);
+    await commit(next, { save: { important: true, reason: 'important screen change' } });
+    await flushSaveState(stateRef.current || next, { backup: 'force', verify: 'full', important: true, reason: 'important screen flush' });
   }
 
   function requestReply(roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean; userMessageCreatedAt?: number; latestUserImageData?: string }) {
@@ -511,7 +517,7 @@ export default function App() {
 
   async function reloadSavedState() {
     const current = stateRef.current;
-    if (current) await flushSaveState(current);
+    if (current) await flushSaveState(current, { backup: 'force', verify: 'full', reason: 'reload saved state' });
     const next = clearRuntimeOnlyState(await loadState());
     setState(next);
     stateRef.current = next;
@@ -521,7 +527,7 @@ export default function App() {
   async function reloadBundle() {
     void appendDebugLog('debug', 'JS bundle reload requested');
     const current = stateRef.current;
-    if (current) await flushSaveState(current);
+    if (current) await flushSaveState(current, { backup: 'force', verify: 'full', reason: 'reload bundle' });
     try {
       DevSettings.reload();
     } catch (error) {
@@ -660,7 +666,7 @@ export default function App() {
       ) : route.name === 'gallery' ? (
         <GalleryScreen state={state} onChange={commit} onBack={goBack} />
       ) : route.name === 'debug' ? (
-        <DebugScreen state={state} onBack={goBack} onReloadState={reloadSavedState} onReloadBundle={reloadBundle} onSaveNow={() => flushSaveState(stateRef.current || undefined)} />
+        <DebugScreen state={state} onBack={goBack} onReloadState={reloadSavedState} onReloadBundle={reloadBundle} onSaveNow={() => flushSaveState(stateRef.current || undefined, { backup: 'force', verify: 'full', reason: 'debug manual save' })} />
       ) : route.name === 'random' ? (
         <RandomChatScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'randomChatRoom', roomId })} />
       ) : route.name === 'sumgod' ? (

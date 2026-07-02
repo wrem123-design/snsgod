@@ -357,7 +357,15 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
             ) : null}
 
             {(session.mode === 'question' || session.mode === 'rotation') && (session.status === 'revealing' || session.finalRanking?.length) ? (
-              <RankingBlock mode={session.mode} candidates={session.candidates} ranking={session.finalRanking || []} selectedCandidateId={session.selectedCandidateId} onSelect={chooseCandidate} onArchive={archiveCandidate} onOpenDetails={setDetailCandidate} />
+              <RankingBlock
+                mode={session.mode}
+                candidates={session.candidates}
+                ranking={session.finalRanking || []}
+                selectedCandidateId={session.selectedCandidateId}
+                onSelect={chooseCandidate}
+                onArchive={session.mode === 'rotation' ? archiveCandidate : undefined}
+                onOpenDetails={setDetailCandidate}
+              />
             ) : null}
 
             {session.mode !== 'encounter' && importCandidate ? (
@@ -1134,7 +1142,7 @@ function CandidateDetailModal({ candidate, onClose }: { candidate: BlindDateCand
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.detailOverlay}>
         <View style={styles.detailPanel}>
-          <ScrollView contentContainerStyle={styles.detailContent}>
+          <ScrollView style={styles.detailScroll} contentContainerStyle={styles.detailContent} showsVerticalScrollIndicator>
             <View style={styles.detailTop}>
               <View style={styles.detailTitleWrap}>
                 <Text style={styles.detailTitle}>{candidate.name} · {candidate.age}</Text>
@@ -1166,6 +1174,7 @@ function CandidateDetailModal({ candidate, onClose }: { candidate: BlindDateCand
               <Text style={styles.detailText}>{candidate.callPreview || candidate.relationshipStyle}</Text>
             </View>
             <View style={styles.tags}>{tags.map(tag => <Text key={tag} style={styles.tag}>#{tag}</Text>)}</View>
+            <View style={styles.detailBottomSpacer} />
           </ScrollView>
         </View>
       </View>
@@ -1396,9 +1405,10 @@ const styles = StyleSheet.create({
   importSub: { marginTop: 6, color: '#d8d8d8', fontSize: 13, lineHeight: 19, fontWeight: '700' },
   importButton: { marginTop: 14, minHeight: 48, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
   importButtonText: { color: '#241a00', fontWeight: '900', fontSize: 16 },
-  detailOverlay: { flex: 1, padding: 16, backgroundColor: 'rgba(0,0,0,0.62)', justifyContent: 'center' },
-  detailPanel: { maxHeight: '88%', borderRadius: 8, overflow: 'hidden', backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
-  detailContent: { padding: 14, paddingBottom: 20 },
+  detailOverlay: { flex: 1, paddingHorizontal: 16, paddingTop: 36, paddingBottom: 48, backgroundColor: 'rgba(0,0,0,0.62)', justifyContent: 'center' },
+  detailPanel: { maxHeight: '100%', borderRadius: 8, overflow: 'hidden', backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
+  detailScroll: { maxHeight: '100%' },
+  detailContent: { padding: 14, paddingBottom: 56 },
   detailTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   detailTitleWrap: { flex: 1 },
   detailTitle: { color: colors.text, fontSize: 22, fontWeight: '900' },
@@ -1410,5 +1420,6 @@ const styles = StyleSheet.create({
   detailQuote: { marginTop: 12, color: colors.text, fontSize: 15, lineHeight: 22, fontWeight: '900' },
   detailSection: { marginTop: 12, padding: 10, borderRadius: 8, backgroundColor: '#f7f2e9', borderWidth: 1, borderColor: colors.border },
   detailLabel: { color: colors.text, fontSize: 12, fontWeight: '900' },
-  detailText: { marginTop: 5, color: colors.sub, fontSize: 13, lineHeight: 19, fontWeight: '800' }
+  detailText: { marginTop: 5, color: colors.sub, fontSize: 13, lineHeight: 19, fontWeight: '800' },
+  detailBottomSpacer: { height: 34 }
 });

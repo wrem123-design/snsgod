@@ -1847,6 +1847,18 @@ export function importBlindDateCandidate(state: SNSGodState, sessionId: string, 
     `${candidate.name}은 ${candidate.personalitySummary}. 말투는 ${candidate.speechStyle}.`,
     session.mode === 'encounter' ? '우연한 만남을 사용자와의 첫 실제 만남처럼 기억한다.' : '블라인드 데이트를 사용자와의 첫 의미 있는 만남으로 기억한다.'
   ].filter(Boolean).join('\n');
+  const matchMemory = [
+    session.mode === 'encounter'
+      ? `${candidate.name}은 ${session.encounterLocation || candidate.locationBase}에서 사용자와 우연히 만나 대화했고, 호감이 생겨 연락처를 교환했다.`
+      : `${candidate.name}은 블라인드 데이트 질문 소개팅/선택 과정에서 사용자와 매칭되어 연락을 시작했다.`,
+    session.mode === 'question' && winningAnswers.length ? `사용자는 특히 ${candidate.name}의 답변 중 "${winningAnswers.slice(-2).join('", "')}"에 끌렸다.` : '',
+    session.mode === 'rotation' && rotationAnswers.length ? `사용자는 로테이션 대화에서 ${candidate.name}의 말투와 반응을 보고 연락을 이어가기로 했다.` : '',
+    candidate.profileImageUri ? '현재 프로필 사진과 레퍼런스 사진은 소개팅 당시 사용자가 확인했던 같은 사진이다.' : '',
+    '앞으로의 대화에서는 서로 소개팅에서 매칭되어 연락을 시작한 사이로 자연스럽게 이어간다.'
+  ].filter(Boolean).join('\n');
+  const firstChatMessage = session.mode === 'encounter'
+    ? `${candidate.firstDm}\n\n아까 ${session.encounterLocation || candidate.locationBase}에서 만난 거, 생각보다 계속 기억나서 먼저 연락 남겨.`
+    : `${candidate.firstDm}\n\n아까 블라인드 데이트에서 매칭돼서 이렇게 연락 시작하는 거라 조금 신기하다. 그래도 대화 이어가보고 싶어.`;
   const prompt = [
     session.mode === 'encounter'
       ? `이 캐릭터는 우연한 만남 미니게임에서 사용자가 ${session.encounterLocation || candidate.locationBase}에서 처음 만나 연락처를 교환한 인물이다.`
@@ -1863,6 +1875,7 @@ export function importBlindDateCandidate(state: SNSGodState, sessionId: string, 
     `SNS 예시 문구: ${candidate.snsPreview || '(없음)'}`,
     `첫 통화 예시: ${candidate.callPreview || '(없음)'}`,
     session.mode === 'encounter' ? `첫 만남 기억: ${encounterSummary}` : '첫 소개팅에서 사용자가 어떤 답변과 첫인상을 좋아했는지 기억한다.',
+    `연락 시작 기억: ${matchMemory}`,
     'AI가 랜덤으로 생성되었다는 메타 발언은 하지 않는다.',
     session.mode === 'encounter' ? '우연한 만남을 사용자와의 첫 의미 있는 접점으로 취급한다.' : '블라인드 데이트를 사용자와의 첫 의미 있는 만남으로 취급한다.'
   ].join('\n');
@@ -1873,10 +1886,11 @@ export function importBlindDateCandidate(state: SNSGodState, sessionId: string, 
     id: characterId,
     name: candidate.name,
     handle: candidate.name.toLowerCase().replace(/\s+/g, '_'),
+    avatar: candidate.profileImageUri || undefined,
     avatarText: candidate.name.slice(0, 1),
     color: ['#f5d76e', '#8bd3dd', '#f7a8b8', '#b8d8a8', '#cbb7ff'][state.characters.length % 5],
     prompt,
-    firstMessage: candidate.firstDm,
+    firstMessage: firstChatMessage,
     profileMessage,
     profileImage: candidate.profileImageUri,
     profileReferenceImages: candidate.profileImageUri ? [candidate.profileImageUri] : [],
@@ -1922,6 +1936,7 @@ export function importBlindDateCandidate(state: SNSGodState, sessionId: string, 
     statusMessageChangeChance: 35,
     memories: [
       `[blind_date_memory] ${memory}`,
+      `[blind_date_match_memory] ${matchMemory}`,
       `[profile_seed] ${candidate.name} / ${candidate.age}세 / ${candidate.job} / ${candidate.locationBase}`,
       `[appearance_seed] ${appearanceText}`,
       `[speech_seed] ${candidate.speechStyle}`,
@@ -1972,8 +1987,22 @@ export function importBlindDateCandidate(state: SNSGodState, sessionId: string, 
     },
     messages: {
       ...state.messages,
-      [roomId]: [{ id: makeId('msg'), role: 'character', characterId, content: candidate.firstDm, createdAt: now }]
+      [roomId]: [
+        {
+          id: makeId('msg'),
+          role: 'system',
+          characterId,
+          content: `소개팅 매칭 기억: ${matchMemory}`,
+          createdAt: now,
+          sourceMode: 'blind_date'
+        },
+        { id: makeId('msg'), role: 'character', characterId, content: firstChatMessage, createdAt: now + 1 }
+      ]
     },
+    referenceFaceSlots: candidate.profileImageUri ? [
+      { id: makeId('ref'), image: candidate.profileImageUri, name: `${candidate.name} 소개팅 사진`, createdAt: now },
+      ...(state.referenceFaceSlots || []).filter(slot => String(slot.image || '') !== candidate.profileImageUri)
+    ].slice(0, 80) : state.referenceFaceSlots,
     blindDate: {
       ...progress,
       activeSessionId: sessionId,

@@ -5,6 +5,15 @@ const MAX_ROOM_SUMMARIES = 180;
 const MAX_CHARACTER_MEMORIES = 400;
 
 type RoomKind = 'private' | 'group';
+type PrivateSummaryContext = {
+  characterId: string;
+  characterName: string;
+  roomId: string;
+  summary: string;
+  topics: string[];
+  followUps: string[];
+  updatedAt: number;
+};
 
 export function updateRoomMemoryAfterAppend(state: SNSGodState, roomId: string): SNSGodState {
   const messages = state.messages[roomId] || [];
@@ -21,10 +30,14 @@ export function updateRoomMemoryAfterAppend(state: SNSGodState, roomId: string):
 
 export function forceUpdateRoomMemory(state: SNSGodState, roomId: string): SNSGodState {
   const messages = state.messages[roomId] || [];
+  const group = groupRoomById(state, roomId);
+  if (group) {
+    const privateContexts = privateSummaryContextsForParticipants(state, group.participantIds || []);
+    if (messages.length < 2 && !privateContexts.length) return state;
+    return upsertGroupSummaryAndMemories(state, roomId, messages, privateContexts);
+  }
   if (messages.length < 2) return state;
-  return groupRoomById(state, roomId)
-    ? upsertGroupSummaryAndMemories(state, roomId, messages)
-    : upsertPrivateSummaryAndMemory(state, roomId, messages);
+  return upsertPrivateSummaryAndMemory(state, roomId, messages);
 }
 
 export function privateMemoryPromptBlock(state: SNSGodState, room: SNSGodRoom, character: SNSGodCharacter, latestText: string): string {
@@ -59,11 +72,15 @@ export function groupMemoryPromptBlock(state: SNSGodState, roomId: string, parti
     .slice(0, 8);
   const privateHints = participants
     .map(character => {
-      const memories = selectRelevantMemories(state, character.id, latestText, {
+      const relevant = selectRelevantMemories(state, character.id, latestText, {
         includePrivate: true,
         includeGroupPublic: false,
         roomId
-      }).filter(memory => memory.visibility === 'private_with_user').slice(0, 3);
+      }).filter(memory => memory.visibility === 'private_with_user');
+      const recent = (state.characterMemories || [])
+        .filter(memory => memory.characterId === character.id && memory.visibility === 'private_with_user')
+        .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+      const memories = uniqueMemories([...relevant, ...recent]).slice(0, 3);
       if (!memories.length) return '';
       return `${character.name}: ${memories.map(memory => memory.content).join(' / ')}`;
     })
@@ -108,17 +125,32 @@ function upsertPrivateSummaryAndMemory(state: SNSGodState, roomId: string, messa
   };
 }
 
-function upsertGroupSummaryAndMemories(state: SNSGodState, roomId: string, messages: SNSGodMessage[]): SNSGodState {
+function upsertGroupSummaryAndMemories(state: SNSGodState, roomId: string, messages: SNSGodMessage[], privateContexts?: PrivateSummaryContext[]): SNSGodState {
   const group = groupRoomById(state, roomId);
   if (!group) return state;
   const participantIds = group.participantIds || [];
-  const base = buildRoomSummary(state, roomId, 'group', participantIds, messages);
+  const bridgeContexts = privateContexts || privateSummaryContextsForParticipants(state, participantIds);
+  const base = messages.length
+    ? buildRoomSummary(state, roomId, 'group', participantIds, messages)
+    : buildPrivateBridgeSummary(roomId, participantIds, bridgeContexts);
   const groupSummary: GroupRoomSummary = {
     ...base,
     roomType: 'group',
-    publicInfo: publicInfoFromMessages(state, messages, participantIds),
-    characterTakeaways: Object.fromEntries(participantIds.map(id => [id, characterTakeaways(state, id, messages)])),
-    relationshipChanges: relationshipChangesFromMessages(state, messages)
+    publicInfo: [
+      ...publicInfoFromMessages(state, messages, participantIds),
+      ...privateBridgePublicInfo(bridgeContexts)
+    ].slice(-8),
+    characterTakeaways: Object.fromEntries(participantIds.map(id => [
+      id,
+      [
+        ...characterTakeaways(state, id, messages),
+        ...privateBridgeTakeaways(id, bridgeContexts)
+      ].slice(-6)
+    ])),
+    relationshipChanges: [
+      ...relationshipChangesFromMessages(state, messages),
+      ...bridgeContexts.flatMap(context => context.followUps.map(item => `${context.characterName} 개인톡 후속 맥락: ${item}`))
+    ].slice(-8)
   };
   const memories = participantIds.map(characterId => buildCharacterMemory({
     characterId,
@@ -134,6 +166,27 @@ function upsertGroupSummaryAndMemories(state: SNSGodState, roomId: string, messa
     roomSummaries: upsertByRoom(state.roomSummaries || [], groupSummary).slice(0, MAX_ROOM_SUMMARIES),
     groupRoomSummaries: upsertGroupByRoom(state.groupRoomSummaries || [], groupSummary).slice(0, MAX_ROOM_SUMMARIES),
     characterMemories: memories.reduce((list, memory) => upsertMemory(list, memory), state.characterMemories || [])
+  };
+}
+
+function buildPrivateBridgeSummary(roomId: string, participantIds: string[], contexts: PrivateSummaryContext[]): RoomSummary {
+  const latestAt = contexts.reduce((max, context) => Math.max(max, Number(context.updatedAt || 0)), 0) || Date.now();
+  const topicText = [...new Set(contexts.flatMap(context => context.topics || []))].slice(0, 6);
+  const summaryText = contexts.length
+    ? `단톡방 기억 연결: ${contexts.map(context => `${context.characterName} 개인톡 요약`).join(', ')}이 연결되어 있다. 각 캐릭터는 자기 개인톡 기억을 말투와 반응 힌트로 참고하고, 다른 캐릭터의 개인톡 세부 내용은 단톡에서 직접 공개하지 않는다.`
+    : '단톡방 기억 연결 준비됨. 아직 가져올 개인톡 요약이 없다.';
+  return {
+    id: `summary_${roomId}`,
+    roomId,
+    roomType: 'group',
+    characterIds: participantIds,
+    messageCount: 0,
+    summary: summaryText,
+    topics: topicText,
+    mood: '개인톡 기억을 단톡 맥락에 조심스럽게 연결하는 상태',
+    followUps: contexts.flatMap(context => context.followUps || []).slice(-6),
+    updatedAt: Date.now(),
+    lastMessageAt: latestAt
   };
 }
 
@@ -199,6 +252,52 @@ function scoreMemory(memory: CharacterMemory, latestText: string): number {
   const overlap = tokenOverlap(memory.content, latestText);
   const recency = Math.max(0, 4 - Math.floor((Date.now() - Number(memory.createdAt || 0)) / 86_400_000));
   return overlap * 4 + Number(memory.importance || 0) + recency;
+}
+
+function uniqueMemories(memories: CharacterMemory[]): CharacterMemory[] {
+  const seen = new Set<string>();
+  return memories.filter(memory => {
+    const key = memory.id || `${memory.characterId}_${memory.sourceRoomId}_${memory.content}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function privateSummaryContextsForParticipants(state: SNSGodState, participantIds: string[]): PrivateSummaryContext[] {
+  return participantIds
+    .map(characterId => {
+      const character = state.characters.find(item => item.id === characterId);
+      const summaries = (state.roomSummaries || [])
+        .filter(summary => summary.roomType === 'private' && summary.characterIds.includes(characterId))
+        .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+      const summary = summaries[0];
+      if (!summary) return undefined;
+      return {
+        characterId,
+        characterName: character?.name || '캐릭터',
+        roomId: summary.roomId,
+        summary: summary.summary,
+        topics: summary.topics || [],
+        followUps: summary.followUps || [],
+        updatedAt: Number(summary.updatedAt || 0)
+      };
+    })
+    .filter((item): item is PrivateSummaryContext => Boolean(item));
+}
+
+function privateBridgePublicInfo(contexts: PrivateSummaryContext[]): string[] {
+  if (!contexts.length) return [];
+  return [
+    `참여 캐릭터 ${contexts.map(context => context.characterName).join(', ')}의 개인톡 요약이 단톡 맥락 힌트로 연결됨`
+  ];
+}
+
+function privateBridgeTakeaways(characterId: string, contexts: PrivateSummaryContext[]): string[] {
+  return contexts
+    .filter(context => context.characterId === characterId)
+    .map(context => `${context.characterName}는 사용자와의 개인톡 요약을 단톡 말투/반응 힌트로 참고한다: ${context.summary}`)
+    .slice(-3);
 }
 
 function tokenOverlap(a: string, b: string): number {

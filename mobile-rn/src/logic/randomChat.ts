@@ -223,6 +223,10 @@ export function removeRandomChatRoom(state: SNSGodState, roomId: string): SNSGod
     messages,
     unreadCounts,
     randomChats: randomChatRooms(state).filter(item => item.id !== roomId),
+    roomSummaries: (state.roomSummaries || []).filter(summary => summary.roomId !== roomId),
+    groupRoomSummaries: (state.groupRoomSummaries || []).filter(summary => summary.roomId !== roomId),
+    characterMemories: (state.characterMemories || []).filter(memory => memory.sourceRoomId !== roomId),
+    notifications: (state.notifications || []).filter(item => item.roomId !== roomId && item.target?.roomId !== roomId),
     selectedRoomId: state.selectedRoomId === roomId ? undefined : state.selectedRoomId
   };
 }

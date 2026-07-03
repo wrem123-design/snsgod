@@ -118,6 +118,10 @@ export function deleteRoom(state: SNSGodState, roomId: string): SNSGodState {
     chatRooms,
     messages,
     unreadCounts,
+    roomSummaries: (state.roomSummaries || []).filter(summary => summary.roomId !== roomId),
+    groupRoomSummaries: (state.groupRoomSummaries || []).filter(summary => summary.roomId !== roomId),
+    characterMemories: (state.characterMemories || []).filter(memory => memory.sourceRoomId !== roomId),
+    notifications: (state.notifications || []).filter(item => item.roomId !== roomId && item.target?.roomId !== roomId),
     selectedRoomId: state.selectedRoomId === roomId ? undefined : state.selectedRoomId
   };
 }
@@ -206,6 +210,9 @@ export function deleteCharacter(state: SNSGodState, characterId: string): SNSGod
     messages,
     unreadCounts,
     groupRooms,
+    roomSummaries: (state.roomSummaries || []).filter(summary => !removedRoomIds.has(summary.roomId) && !summary.characterIds.includes(characterId)),
+    groupRoomSummaries: (state.groupRoomSummaries || []).filter(summary => !removedRoomIds.has(summary.roomId) && !summary.characterIds.includes(characterId)),
+    characterMemories: (state.characterMemories || []).filter(memory => memory.characterId !== characterId && !memory.knownByCharacterIds.includes(characterId) && !removedRoomIds.has(memory.sourceRoomId)),
     loreEntries: (state.loreEntries || []).filter(entry => entry.characterId !== characterId),
     snsPosts: (state.snsPosts || []).filter(post => post.characterId !== characterId),
     snsDmThreads: (state.snsDmThreads || []).filter(thread => thread.characterId !== characterId && !removedPostIds.has(String(thread.postId || ''))),

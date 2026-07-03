@@ -5,9 +5,7 @@ import { SNSGodRoom, SNSGodState } from '../types';
 import { deleteRoom, findCharacter, findRoom, updateRoom } from '../logic/stateHelpers';
 import { isRandomRoom, removeRandomChatRoom } from '../logic/randomChat';
 import { callLLMText } from '../logic/api';
-
-const SUMMARY_START = '[자동 대화 요약]';
-const SUMMARY_END = '[/자동 대화 요약]';
+import { replaceAutoSummaryBlock } from '../logic/memoryBridge';
 
 export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
   state: SNSGodState;
@@ -302,16 +300,8 @@ function summaryLabelFor(key: string) {
 function normalizeRoomPromptForSave(prompt: string) {
   return String(prompt || '').replace(
     /\[자동 대화 요약\]([\s\S]*?)\[\/자동 대화 요약\]/g,
-    (_match, body) => `${SUMMARY_START}\n${cleanSummary(String(body || ''))}\n${SUMMARY_END}`
+    (_match, body) => replaceAutoSummaryBlock('', cleanSummary(String(body || '')))
   ).trim();
-}
-
-function replaceAutoSummaryBlock(prompt: string, summary: string) {
-  const block = `${SUMMARY_START}\n${summary.trim()}\n${SUMMARY_END}`;
-  const cleaned = String(prompt || '')
-    .replace(/\n?\[자동 대화 요약\][\s\S]*?\[\/자동 대화 요약\]\n?/g, '\n')
-    .trim();
-  return [cleaned, block].filter(Boolean).join('\n\n');
 }
 
 function Field({ label, value, onChangeText, help, multiline }: { label: string; value: string; onChangeText: (value: string) => void; help?: string; multiline?: boolean }) {

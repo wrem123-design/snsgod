@@ -35,7 +35,7 @@ export function MenuHubScreen({ mode, onOpenEncounter, onOpenBlindDate, onOpenDa
   const items: MenuItem[] = [
     { title: '우연한 만남', image: menuImages.encounter, onPress: onOpenEncounter },
     { title: '블라인드 데이트', image: menuImages.blindDate, onPress: onOpenBlindDate },
-    { title: '데이트 어플', subtitle: '3명 중 최종 선택', image: menuImages.datingApp, onPress: onOpenDatingApp },
+    { title: 'GLAM', subtitle: '3명 중 2명까지 하트', image: menuImages.datingApp, onPress: onOpenDatingApp },
     { title: '이상형 월드컵', image: menuImages.worldcup, onPress: onOpenIdealWorldcup },
     { title: 'SumGod', subtitle: '커플 질문 다이어리', image: menuImages.sumgod, onPress: onOpenSumGod },
     { title: '갤러리', subtitle: '저장된 이미지 보기', image: menuImages.gallery, onPress: onOpenGallery }

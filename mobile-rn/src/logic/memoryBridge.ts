@@ -3,6 +3,8 @@ import { CharacterMemory, GroupRoom, GroupRoomSummary, RoomSummary, SNSGodCharac
 const SUMMARY_INTERVAL = 20;
 const MAX_ROOM_SUMMARIES = 180;
 const MAX_CHARACTER_MEMORIES = 400;
+const AUTO_SUMMARY_START = '[자동 대화 요약]';
+const AUTO_SUMMARY_END = '[/자동 대화 요약]';
 
 type RoomKind = 'private' | 'group';
 type PrivateSummaryContext = {
@@ -118,11 +120,11 @@ function upsertPrivateSummaryAndMemory(state: SNSGodState, roomId: string, messa
     content: summary.summary,
     importance: summaryImportance(summary)
   });
-  return {
+  return syncPrivateRoomPromptSummary({
     ...state,
     roomSummaries: upsertByRoom(state.roomSummaries || [], summary).slice(0, MAX_ROOM_SUMMARIES),
     characterMemories: upsertMemory(state.characterMemories || [], memory)
-  };
+  }, roomId, summary.summary);
 }
 
 function upsertGroupSummaryAndMemories(state: SNSGodState, roomId: string, messages: SNSGodMessage[], privateContexts?: PrivateSummaryContext[]): SNSGodState {
@@ -252,6 +254,31 @@ function scoreMemory(memory: CharacterMemory, latestText: string): number {
   const overlap = tokenOverlap(memory.content, latestText);
   const recency = Math.max(0, 4 - Math.floor((Date.now() - Number(memory.createdAt || 0)) / 86_400_000));
   return overlap * 4 + Number(memory.importance || 0) + recency;
+}
+
+export function stripAutoSummaryBlock(prompt: string): string {
+  return String(prompt || '')
+    .replace(/\n?\[자동 대화 요약\][\s\S]*?\[\/자동 대화 요약\]\n?/g, '\n')
+    .trim();
+}
+
+export function replaceAutoSummaryBlock(prompt: string, summary: string): string {
+  const cleanedSummary = String(summary || '').trim();
+  const cleaned = stripAutoSummaryBlock(prompt);
+  if (!cleanedSummary) return cleaned;
+  const block = `${AUTO_SUMMARY_START}\n${cleanedSummary}\n${AUTO_SUMMARY_END}`;
+  return [cleaned, block].filter(Boolean).join('\n\n');
+}
+
+function syncPrivateRoomPromptSummary(state: SNSGodState, roomId: string, summary: string): SNSGodState {
+  const room = allRooms(state).find(item => item.id === roomId);
+  if (!room || !room.characterId || room.type === 'random') return state;
+  const chatRooms = { ...state.chatRooms };
+  const rooms = (chatRooms[room.characterId] || []).map(item => (
+    item.id === roomId ? { ...item, roomPrompt: replaceAutoSummaryBlock(String(item.roomPrompt || ''), summary) } : item
+  ));
+  chatRooms[room.characterId] = rooms;
+  return { ...state, chatRooms };
 }
 
 function uniqueMemories(memories: CharacterMemory[]): CharacterMemory[] {

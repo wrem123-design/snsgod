@@ -4,7 +4,7 @@ import { lorePromptBlock, resolveActiveLore } from './loreEngine';
 import { buildTimeRealityInstruction } from './timeReality';
 import { characterWithConversationRhythm, conversationRhythmInstruction } from './conversationRhythm';
 import { formatMessageDateTimeLabel } from './time';
-import { privateMemoryPromptBlock } from './memoryBridge';
+import { privateMemoryPromptBlock, stripAutoSummaryBlock } from './memoryBridge';
 
 export type ChatPromptMode = 'reply' | 'proactive' | 'reroll';
 
@@ -323,7 +323,8 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
   const bridgedMemoryText = privateMemoryPromptBlock(state, room, character, latestUserText);
   const groupBridgeText = groupBridgeContextForPrivateRoom(state, character, room.id);
   const stickerText = availableStickerText(state, character);
-  const roomNote = [room.relationshipNote, room.roomPrompt].filter(Boolean).join('\n');
+  const manualRoomPrompt = stripAutoSummaryBlock(String(room.roomPrompt || ''));
+  const roomNote = [room.relationshipNote, manualRoomPrompt].filter(Boolean).join('\n');
   const imageInstruction = state.config.imageGeneration?.enabled === false
     ? 'Image sending is disabled. Do not include imagePrompt or imageCaption.'
     : [

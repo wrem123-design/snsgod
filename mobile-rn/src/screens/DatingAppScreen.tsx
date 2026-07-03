@@ -12,6 +12,7 @@ import {
   datingAppRoundCompleted,
   ensureDatingAppProfile,
   finalizeAcceptedDatingAppChat,
+  MAX_DATING_APP_LIKES_PER_ROUND,
   recordDatingAppDecision,
   regenerateActiveDatingAppFailedPhotos,
   replaceActiveDatingAppProfile,
@@ -36,6 +37,7 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
   const roundCompleted = datingAppRoundCompleted(progress);
   const decisions = progress.decisions || [];
   const likedIds = decisions.filter(item => item.decision === 'liked').map(item => item.profileId);
+  const likesLeft = Math.max(0, MAX_DATING_APP_LIKES_PER_ROUND - likedIds.length);
   const selectedFinalId = progress.finalProfileId || (likedIds.length === 1 ? likedIds[0] : undefined);
   const selectedFinalProfile = profiles.find(item => item.id === selectedFinalId);
   const [loading, setLoading] = useState(false);
@@ -105,6 +107,10 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
 
   async function decide(decision: 'liked' | 'passed') {
     if (!profile || loading || progress.requestStatus === 'pending') return;
+    if (decision === 'liked' && likesLeft <= 0) {
+      setMessage(`하트는 3명 중 ${MAX_DATING_APP_LIKES_PER_ROUND}명까지만 보낼 수 있어요.`);
+      return;
+    }
     setLoading(true);
     setBusyText(currentNumber >= 3 ? '결과를 정리하는 중...' : '다음 소개팅 후보를 불러오는 중...');
     try {
@@ -229,8 +235,8 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
           <Text style={styles.backText}>‹</Text>
         </Pressable>
         <View style={styles.headerBody}>
-          <Text style={styles.title}>데이트 어플</Text>
-          <Text style={styles.subtitle}>정해진 시간마다 후보 3명을 소개받아요</Text>
+          <Text style={styles.title}>GLAM</Text>
+          <Text style={styles.subtitle}>후보 3명 중 하트는 2명까지만 보낼 수 있어요</Text>
         </View>
         <Pressable onPress={refreshIfReady} disabled={loading || progress.requestStatus === 'pending'} style={[styles.refreshButton, (loading || progress.requestStatus === 'pending') && styles.disabled]}>
           <Text style={styles.refreshText}>갱신</Text>
@@ -274,9 +280,8 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
             <View style={styles.statusStrip}>
               <View>
                 <Text style={styles.statusLabel}>오늘의 후보 {currentNumber}/3</Text>
-                <Text style={styles.statusText}>{expiryLabel}</Text>
+                <Text style={styles.statusText}>{expiryLabel} · 남은 하트 {likesLeft}/{MAX_DATING_APP_LIKES_PER_ROUND}</Text>
               </View>
-              <View style={styles.onlinePill}><Text style={styles.onlinePillText}>{profile.lastActiveLabel}</Text></View>
             </View>
 
             {failedPhotos.length ? (
@@ -318,7 +323,7 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
               <Pressable onPress={() => decide('passed')} disabled={loading} style={[styles.circleAction, styles.passAction, loading && styles.disabled]} accessibilityLabel="패스">
                 <Text style={styles.passActionText}>×</Text>
               </Pressable>
-              <Pressable onPress={() => decide('liked')} disabled={loading} style={[styles.circleAction, styles.likeAction, loading && styles.disabled]} accessibilityLabel="선택">
+              <Pressable onPress={() => decide('liked')} disabled={loading || likesLeft <= 0} style={[styles.circleAction, styles.likeAction, (loading || likesLeft <= 0) && styles.disabled]} accessibilityLabel="선택">
                 <Text style={styles.likeActionText}>♥</Text>
               </Pressable>
             </View>
@@ -577,13 +582,13 @@ function ProfileHistoryContent({
               <Text style={styles.photoPlaceholderSub}>저장된 대표 사진이 없습니다.</Text>
             </View>
           )}
-          <View style={styles.heroGradient}>
-            <View style={styles.heroBadge}><Text style={styles.heroBadgeText}>{profile.verified ? '인증됨' : '프로필'}</Text></View>
-            <Text style={styles.heroName}>{profile.name}, {profile.age}</Text>
-            <Text style={styles.heroMeta}>{profile.job}</Text>
-            <Text style={styles.heroMeta}>{profile.location} · {profile.distanceKm.toFixed(1)}km</Text>
-          </View>
         </View>
+      </View>
+
+      <View style={[styles.historyResultPanel, styles.historyModalBlock]}>
+        <Text style={styles.historyResultKicker}>매칭 결과</Text>
+        <Text style={styles.historyResultTitle}>{historyMatchResultTitle(item.requestStatus)}</Text>
+        <Text style={styles.historyResultText}>{historyMatchResultText(item)}</Text>
       </View>
 
       <Section title="자기소개" style={styles.historyModalBlock}>
@@ -646,6 +651,21 @@ function historyStatusLabel(status: DatingAppProgress['requestStatus']) {
   if (status === 'rejected') return '거절';
   if (status === 'pending') return '대기';
   return '선택';
+}
+
+function historyMatchResultTitle(status: DatingAppProgress['requestStatus']) {
+  if (status === 'accepted') return '매칭 성공';
+  if (status === 'rejected') return '매칭 실패';
+  if (status === 'pending') return '답장 대기';
+  return '최종 선택';
+}
+
+function historyMatchResultText(item: DatingAppHistoryEntry) {
+  const name = item.finalProfile.name;
+  if (item.requestStatus === 'accepted') return `${name}님이 대화 신청을 수락했어요.`;
+  if (item.requestStatus === 'rejected') return item.rejectedReason || `${name}님과는 이번 매칭이 이어지지 않았어요.`;
+  if (item.requestStatus === 'pending') return `${name}님에게 보낸 대화 신청 답장을 기다리는 중이에요.`;
+  return `${name}님을 이 턴의 최종 후보로 선택했어요.`;
 }
 
 function requestLabel(status: DatingAppProgress['requestStatus'], pendingSeconds: number, hasAcceptedRoom = false, selectedReferenceCount = 0) {
@@ -841,6 +861,10 @@ const styles = StyleSheet.create({
   historyDetailContent: { padding: 18, paddingBottom: 160 },
   historyModalBlock: { marginBottom: 14 },
   historyHeroImageWrap: { height: 440 },
+  historyResultPanel: { borderRadius: 12, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panel, padding: 14 },
+  historyResultKicker: { color: colors.sub, fontSize: 12, fontWeight: '900' },
+  historyResultTitle: { marginTop: 6, color: colors.datingHeart, fontSize: 20, lineHeight: 25, fontWeight: '900' },
+  historyResultText: { marginTop: 7, color: colors.text, fontSize: 14, lineHeight: 21, fontWeight: '800' },
   resultBadge: { minHeight: 28, paddingHorizontal: 9, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceAlt },
   resultBadgeLike: { backgroundColor: colors.datingHeart },
   resultBadgePass: { backgroundColor: colors.surfaceAlt },

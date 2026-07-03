@@ -8,6 +8,7 @@ import { createRoom } from './stateHelpers';
 
 export const DEFAULT_DATING_APP_REFRESH_HOURS = 12;
 export const DEFAULT_DATING_APP_ACCEPTANCE_CHANCE = 50;
+export const MAX_DATING_APP_LIKES_PER_ROUND = 2;
 
 const MIN_REFRESH_HOURS = 1;
 const MAX_REFRESH_HOURS = 168;
@@ -26,7 +27,8 @@ let lastDatingImageRequestAt = 0;
 
 type GeneratedDatingAppProfile = Record<string, unknown> & Partial<Omit<DatingAppProfile, 'id' | 'photos' | 'createdAt' | 'expiresAt' | 'imagePrompts'>>;
 
-const DEFAULT_NAMES = ['서윤', '하린', '지안', '유나', '가은', '다희', '채원', '민서', '수아', '나린'];
+const KOREAN_SURNAMES = ['김', '이', '박', '최', '정', '강', '조', '윤', '장', '임', '한', '오', '서', '신', '권', '황', '안', '송', '전', '홍', '유', '고', '문', '양', '손', '배', '백', '허', '남', '심', '노', '하', '곽', '성', '차', '주', '우', '구', '민', '류', '나', '진', '지', '엄', '채', '원', '천', '방', '공', '현'];
+const KOREAN_GIVEN_NAMES = ['서연', '서윤', '지우', '하윤', '지민', '서현', '민서', '하은', '윤서', '지아', '수아', '예은', '다은', '채원', '유진', '시은', '나연', '소율', '예린', '서아', '다인', '가은', '유나', '하린', '아린', '세은', '도연', '가현', '소민', '채린', '나현', '지안', '예나', '유림', '수빈', '민지', '은서', '지현', '다희', '소현', '채아', '예솔', '연우', '주아', '라희', '이안', '태린', '서하', '하영', '나경', '유정', '아영', '보라', '혜린', '수연', '지윤', '세아', '나율', '도희', '은채', '세영', '채영', '윤아', '가영', '소윤', '지율', '예지', '유빈', '다솜', '수민', '혜원', '시현', '하나', '은별', '미소', '아라', '다연', '서율', '가윤', '지수'];
 const JOBS = ['브랜드 마케터', '피부관리사', '공간 디자이너', '요가 강사', '주얼리 디자이너', '카페 매니저', '영상 편집자', '플로리스트', '성인 연애 칼럼니스트', '라운지 바 매니저', '범죄심리 콘텐츠 작가', '프라이빗 클럽 매니저'];
 const LOCATIONS = ['서울 성수동', '서울 연남동', '부산 전포동', '대구 삼덕동', '인천 송도', '경기 판교', '대전 둔산동', '광주 동명동'];
 const EDUCATIONS = ['대학교 졸업', '전문대 졸업', '대학원 재학', '대학원 졸업', '고등학교 졸업', '휴학 중', '프리랜서 과정 수료'];
@@ -141,6 +143,21 @@ function uniqueList(value: unknown, fallback: string[], limit: number) {
 function stringValue(value: unknown, fallback: string) {
   const text = String(value || '').trim();
   return text || fallback;
+}
+
+function randomKoreanFullName(seed = Math.random()) {
+  const surname = pick(KOREAN_SURNAMES, seed);
+  const given = pick(KOREAN_GIVEN_NAMES, seed * 1.61803398875 + Math.random() * 0.17);
+  return `${surname}${given}`;
+}
+
+function normalizeKoreanFullName(value: unknown, fallbackSeed = Math.random()) {
+  const raw = String(value || '').replace(/\s+/g, '').replace(/[^\p{Script=Hangul}]/gu, '').trim();
+  const fallback = randomKoreanFullName(fallbackSeed);
+  if (/^[가-힣]{3}$/.test(raw)) return raw;
+  if (/^[가-힣]{2}$/.test(raw)) return `${pick(KOREAN_SURNAMES, fallbackSeed)}${raw}`;
+  if (/^[가-힣]{4,}$/.test(raw)) return raw.slice(0, 3);
+  return fallback;
 }
 
 function delay(ms: number) {
@@ -429,7 +446,7 @@ function rejectExpiredUnrequestedDatingAppSelection(state: SNSGodState, now = Da
 
 function fallbackProfile(state: SNSGodState, now: number, refreshHours: number): DatingAppProfile {
   const edgePreset = Math.random() < 0.42 ? pick(EDGE_PROFILE_PRESETS) : undefined;
-  const name = pick(DEFAULT_NAMES);
+  const name = randomKoreanFullName();
   const job = edgePreset?.job || pick(JOBS);
   const location = pick(LOCATIONS);
   const interests = uniqueList([], INTERESTS.sort(() => Math.random() - 0.5), 5);
@@ -484,7 +501,7 @@ function datingAgeIdentityPrompt(name: string, age: number, job: string, locatio
 function normalizeProfile(state: SNSGodState, parsed: GeneratedDatingAppProfile | undefined, now: number, refreshHours: number): DatingAppProfile {
   const fallback = fallbackProfile(state, now, refreshHours);
   const ageRange = datingAppAgeRange(state);
-  const name = stringValue(parsed?.name, fallback.name);
+  const name = normalizeKoreanFullName(parsed?.name, stableProfileSeed(fallback));
   const age = clampNumber(parsed?.age, fallback.age, ageRange.min, ageRange.max);
   const job = stringValue(parsed?.job, fallback.job);
   const location = stringValue(parsed?.location, fallback.location);
@@ -551,6 +568,7 @@ async function generateProfileJson(state: SNSGodState): Promise<GeneratedDatingA
       content: [
         'Create one fictional adult Korean dating app profile for a simulation app.',
         `Return compact JSON only. The woman must be a fictional adult age ${ageRange.label}, not a real person, and not a celebrity clone.`,
+        'name must be a diverse 3-syllable Korean full name with one common Korean family name plus a two-syllable given name, such as 김서연, 정하윤, 문채린, 한지우. Do not return two-syllable given names like 서윤, 지안, 유나. Avoid repeating common small pools.',
         `Choose age randomly across the full ${ageRange.label} range; do not cluster every profile in the 20s unless the configured range is only 20s.`,
         'Make her personality specific, not generic. Include friction, quirks, and dating preferences.',
         'Write bio like a realistic Korean dating app self-introduction. It may be short, medium, or long depending on personality. Ban boring essays, philosophical writing, self-help tone, and overexplained profile copy.',
@@ -568,7 +586,7 @@ async function generateProfileJson(state: SNSGodState): Promise<GeneratedDatingA
     },
     {
       role: 'user' as const,
-      content: '한국어 값으로 작성해. profileQuestionCards는 question/lockedText 4~5개이며 lockedText는 실제로 보이는 답변 내용이다. identityPrompt만 영어 이미지용 묘사로 작성해.'
+      content: '한국어 값으로 작성해. name은 반드시 성 포함 3글자 한국 이름으로 작성해. profileQuestionCards는 question/lockedText 4~5개이며 lockedText는 실제로 보이는 답변 내용이다. identityPrompt만 영어 이미지용 묘사로 작성해.'
     }
   ];
   try {
@@ -813,6 +831,8 @@ export async function recordDatingAppDecision(state: SNSGodState, profileId: str
   if (!profiles.some(profile => profile.id === profileId) || datingAppRoundCompleted(progress)) return state;
   const now = Date.now();
   const previous = progress.decisions || [];
+  const likedCountWithoutCurrent = previous.filter(item => item.profileId !== profileId && item.decision === 'liked').length;
+  if (decision === 'liked' && likedCountWithoutCurrent >= MAX_DATING_APP_LIKES_PER_ROUND) return state;
   const decisions = [
     ...previous.filter(item => item.profileId !== profileId),
     { profileId, decision, decidedAt: now }

@@ -872,7 +872,7 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
   if (options.kind === 'meeting') {
     return [
       options.usesReference
-        ? 'Use the attached reference image only for the female character visual identity. Preserve her face, hairstyle, and likeness from the reference. Do not apply the reference face to the male user.'
+        ? 'MANDATORY FEMALE IDENTITY REFERENCE: use the attached reference image only for the female character visual identity. Preserve her face, face shape, eye spacing, nose, lips, jawline, hairstyle, hair length, bangs or no bangs, hair color, and recognizable likeness from the reference. Do not invent a new woman. Do not apply the reference face to the male user.'
         : '',
       'Create a realistic horizontal cinematic still from an in-person meeting event, not a phone call, not a messenger screenshot, not SNS.',
       'Show the fictional female character and the male user as two distinct people when the scene calls for both. Keep their clothing and posture grounded in the recent conversation, time, place, and mood.',
@@ -935,9 +935,10 @@ async function fetchImageAsDataUri(url: string): Promise<string> {
 }
 
 async function dataUriToCacheFile(dataUri: string, name: string): Promise<{ uri: string; name: string; type: string }> {
-  const mime = dataUri.match(/^data:([^;]+);base64,/)?.[1] || 'image/png';
-  const base64 = dataUri.replace(/^data:[^;]+;base64,/, '');
-  const extension = mime.includes('jpeg') ? 'jpg' : mime.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'png';
+  const rawMime = dataUri.match(/^data:([^;]+);base64,/)?.[1] || '';
+  const base64 = dataUri.replace(/^data:[^;]+;base64,/, '').replace(/\s/g, '');
+  const mime = normalizeUploadImageMime(rawMime, base64);
+  const extension = extensionForImageMime(mime);
   const safeName = name.replace(/\.[^.]+$/, '').replace(/[^a-z0-9_-]/gi, '_') || 'reference';
   const uri = `${FileSystem.cacheDirectory || ''}${safeName}-${Date.now()}.${extension}`;
   await FileSystem.writeAsStringAsync(uri, base64, { encoding: FileSystem.EncodingType.Base64 });
@@ -947,6 +948,22 @@ async function dataUriToCacheFile(dataUri: string, name: string): Promise<{ uri:
 async function appendDataUriImage(form: FormData, field: string, dataUri: string, name: string) {
   const file = await dataUriToCacheFile(dataUri, name);
   form.append(field, file as unknown as Blob);
+}
+
+function normalizeUploadImageMime(rawMime: string, base64: string): string {
+  const mime = String(rawMime || '').toLowerCase();
+  if (mime === 'image/jpg') return 'image/jpeg';
+  if (mime === 'image/jpeg' || mime === 'image/png' || mime === 'image/webp') return mime;
+  if (base64.startsWith('/9j/')) return 'image/jpeg';
+  if (base64.startsWith('iVBOR')) return 'image/png';
+  if (base64.startsWith('UklGR')) return 'image/webp';
+  return 'image/png';
+}
+
+function extensionForImageMime(mime: string): string {
+  if (mime === 'image/jpeg') return 'jpg';
+  if (mime === 'image/webp') return 'webp';
+  return 'png';
 }
 
 function mediaTypeForUri(uri: string): string {

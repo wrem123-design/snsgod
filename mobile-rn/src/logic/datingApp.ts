@@ -1,5 +1,6 @@
 import { CandidateAppearance, DatingAppPhoto, DatingAppProfile, DatingAppProgress, SNSGodCharacter, SNSGodMessage, SNSGodState } from '../types';
 import { callLLMText, generateImageDataUri, parseJsonObject } from './api';
+import { completeGeneratedCharacter } from './characterCompletion';
 import { appendDebugLog } from './debugLog';
 import { makeId } from './ids';
 import { buildRandomCategorizedImagePrompt } from './randomImagePrompt';
@@ -13,6 +14,15 @@ const MAX_REFRESH_HOURS = 168;
 const REQUEST_MIN_DELAY_MS = 2 * 60 * 1000;
 const REQUEST_MAX_DELAY_MS = 8 * 60 * 1000;
 const DATING_APP_BATCH_SIZE = 3;
+const DEFAULT_DATING_APP_MIN_AGE = 19;
+const DEFAULT_DATING_APP_MAX_AGE = 43;
+const ABSOLUTE_DATING_APP_MIN_AGE = 19;
+const ABSOLUTE_DATING_APP_MAX_AGE = 80;
+const DATING_IMAGE_COOLDOWN_MS = 8500;
+const DATING_IMAGE_RETRY_DELAYS_MS = [12000, 26000];
+
+let datingImageQueue = Promise.resolve();
+let lastDatingImageRequestAt = 0;
 
 type GeneratedDatingAppProfile = Record<string, unknown> & Partial<Omit<DatingAppProfile, 'id' | 'photos' | 'createdAt' | 'expiresAt' | 'imagePrompts'>>;
 
@@ -67,26 +77,43 @@ const DATING_HAIRS = ['long dark brown layered hair', 'short black bob hair', 'm
 const DATING_MAKEUPS = ['natural Korean daily makeup', 'clean office makeup', 'soft pink romantic makeup', 'chic cat-eye makeup', 'warm coral makeup', 'muted rose matte makeup', 'glossy influencer makeup', 'elegant hotel-lounge makeup', 'night-out shimmer eye makeup'];
 const DATING_BODY_TYPES: CandidateAppearance['bodyType'][] = ['slender', 'slim_glamorous', 'petite_slim', 'tall_slender', 'soft_slim', 'athletic_slim'];
 const DATING_MARKS = [['tiny mole under one eye'], ['faint dimples'], ['subtle aegyo-sal under eyes'], ['clear skin texture'], ['gentle smile lines'], ['tiny beauty mark near lip'], ['natural under-eye shadows'], ['soft freckles on nose bridge']];
+const REGION_COORDS = [
+  { keys: ['강남', '서초', '잠실', '송파', '역삼', '논현', '삼성'], lat: 37.4979, lon: 127.0276 },
+  { keys: ['홍대', '마포', '합정', '상수', '연남', '망원'], lat: 37.5563, lon: 126.9220 },
+  { keys: ['성수', '건대', '뚝섬', '왕십리'], lat: 37.5446, lon: 127.0557 },
+  { keys: ['용산', '이태원', '한남'], lat: 37.5326, lon: 126.9905 },
+  { keys: ['종로', '광화문', '을지로', '시청'], lat: 37.5665, lon: 126.9780 },
+  { keys: ['서울'], lat: 37.5665, lon: 126.9780 },
+  { keys: ['분당', '판교', '성남'], lat: 37.3948, lon: 127.1112 },
+  { keys: ['수원'], lat: 37.2636, lon: 127.0286 },
+  { keys: ['일산', '고양'], lat: 37.6584, lon: 126.8320 },
+  { keys: ['인천', '송도'], lat: 37.4563, lon: 126.7052 },
+  { keys: ['부산', '해운대', '서면'], lat: 35.1796, lon: 129.0756 },
+  { keys: ['대구'], lat: 35.8714, lon: 128.6014 },
+  { keys: ['대전'], lat: 36.3504, lon: 127.3845 },
+  { keys: ['광주'], lat: 35.1595, lon: 126.8526 },
+  { keys: ['제주'], lat: 33.4996, lon: 126.5312 }
+];
 const DATING_SLOT_CUES = [
   {
     label: '대표 사진',
-    cue: 'dating app representative profile photo, half-body portrait, upper-body or waist-up shot only, face centered, shoulders visible, looking at camera, head fully included, profile photo crop'
+    cue: 'dating app representative profile photo, vertical close upper-body portrait, eye-level phone camera, face centered but not passport-stiff, shoulders visible, gentle head tilt, one hand loosely touching hair or collarbone, head fully included, clean profile photo crop'
   },
   {
     label: '일상',
-    cue: 'daily-life candid photo, upper-body or three-quarter body snapshot, ordinary Korean daily setting, the woman is present with face clearly visible, head fully included, natural phone-photo realism'
+    cue: 'daily-life candid photo, seated at a cafe table or leaning near a window, three-quarter body snapshot, phone camera from slightly above, natural candid smile, one arm resting on table, ordinary Korean daily setting, face clearly visible, head fully included'
   },
   {
     label: '외출',
-    cue: 'going-out snapshot, three-quarter or full-body street photo, Seoul neighborhood background, stylish but believable outfit, face clearly visible, head included, not a scenery photo'
+    cue: 'going-out snapshot, full-body or knees-up street photo, camera held by a friend from a few meters away, walking pose or one foot forward, Seoul neighborhood background, stylish believable outfit, face clearly visible, head included, not a scenery photo'
   },
   {
     label: '취향',
-    cue: 'hobby and interest photo, realistic place matching her interests, the woman is visible in the scene, face clearly visible, head included, not an empty interior or object photo'
+    cue: 'hobby and interest photo, environmental candid composition, the woman is doing a simple activity related to her interests, hands visible, three-quarter angle from the side, realistic place matching her interests, face clearly visible, head included, not an empty interior or object photo'
   },
   {
     label: '분위기',
-    cue: 'atmospheric evening dating app photo, waist-up portrait, face visible, different outfit and lighting, city light or warm indoor mood, head fully included'
+    cue: 'atmospheric evening dating app photo, waist-up portrait from a diagonal angle, warm indoor or city light mood, looking slightly away from camera then back, relaxed shoulders, different outfit and lighting, head fully included'
   }
 ];
 
@@ -114,6 +141,42 @@ function uniqueList(value: unknown, fallback: string[], limit: number) {
 function stringValue(value: unknown, fallback: string) {
   const text = String(value || '').trim();
   return text || fallback;
+}
+
+function delay(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function isTransientImageError(error: unknown) {
+  const message = String(error instanceof Error ? error.message : error || '').toLowerCase();
+  return /429|rate|quota|timeout|timed out|network|fetch|socket|econn|503|502|500|busy|overload|temporar/.test(message);
+}
+
+function datingImageScope(profile: DatingAppProfile, label: string, attempt: number) {
+  return `${profile.name}/${label}/attempt${attempt}`;
+}
+
+async function runQueuedDatingImage<T>(state: SNSGodState, scope: string, task: () => Promise<T>): Promise<T> {
+  const run = datingImageQueue
+    .catch(() => undefined)
+    .then(async () => {
+      const elapsed = Date.now() - lastDatingImageRequestAt;
+      const waitMs = Math.max(0, DATING_IMAGE_COOLDOWN_MS - elapsed);
+      if (waitMs > 0) {
+        void appendDebugLog('datingApp.image.queue', `wait ${waitMs}ms before ${scope}`);
+        await delay(waitMs);
+      }
+      void appendDebugLog('datingApp.image.queue', `start ${scope}`);
+      try {
+        const result = await task();
+        void appendDebugLog('datingApp.image.queue', `success ${scope}`);
+        return result;
+      } finally {
+        lastDatingImageRequestAt = Date.now();
+      }
+    });
+  datingImageQueue = run.then(() => undefined, () => undefined);
+  return run;
 }
 
 function realisticBio(edgePreset: typeof EDGE_PROFILE_PRESETS[number] | undefined, interests: string[], job: string) {
@@ -178,6 +241,99 @@ export function datingAppAcceptanceChance(state: SNSGodState) {
   );
 }
 
+export function datingAppAgeRange(state: SNSGodState) {
+  const raw = String(state.config.datingAppAgeRange || '').trim();
+  const matches = raw.match(/\d{1,3}/g)?.map(value => Number(value)).filter(Number.isFinite) || [];
+  let min = matches[0] ?? DEFAULT_DATING_APP_MIN_AGE;
+  let max = matches[1] ?? matches[0] ?? DEFAULT_DATING_APP_MAX_AGE;
+  if (min > max) [min, max] = [max, min];
+  min = Math.max(ABSOLUTE_DATING_APP_MIN_AGE, Math.min(ABSOLUTE_DATING_APP_MAX_AGE, Math.round(min)));
+  max = Math.max(ABSOLUTE_DATING_APP_MIN_AGE, Math.min(ABSOLUTE_DATING_APP_MAX_AGE, Math.round(max)));
+  if (min > max) [min, max] = [max, min];
+  return { min, max, label: `${min}-${max}` };
+}
+
+export function datingAppEffectiveAcceptanceChance(state: SNSGodState, profile?: DatingAppProfile) {
+  const base = datingAppAcceptanceChance(state);
+  if (!profile) return base;
+  const distanceAdjustment = distanceAcceptanceAdjustment(profile.distanceKm);
+  const ageAdjustment = ageAcceptanceAdjustment(inferUserAge(state), profile.age);
+  return Math.max(0, Math.min(100, Math.round(base + distanceAdjustment + ageAdjustment)));
+}
+
+function userProfileText(state: SNSGodState) {
+  const activePreset = (state.config.userProfilePresets || []).find(item => item.id === state.config.activeUserProfilePresetId);
+  return [
+    activePreset?.userDescription,
+    activePreset?.userAppearancePrompt,
+    activePreset?.userName,
+    state.config.userDescription,
+    state.config.userAppearancePrompt,
+    state.config.userName
+  ].filter(Boolean).join(' ');
+}
+
+function inferUserRegion(state: SNSGodState) {
+  const text = userProfileText(state);
+  return regionCoordForText(text) || regionCoordForText('서울') || REGION_COORDS[0];
+}
+
+function inferUserAge(state: SNSGodState): number | undefined {
+  const text = userProfileText(state);
+  const patterns = [
+    /(\d{2})\s*세/,
+    /나이\s*[:：]?\s*(\d{2})/,
+    /(\d{2})\s*살/,
+    /(\d{2})\s*대/
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const value = Number(match?.[1]);
+    if (Number.isFinite(value) && value >= 18 && value <= 70) return pattern.source.includes('대') ? value + 5 : value;
+  }
+  return undefined;
+}
+
+function regionCoordForText(text: string) {
+  const source = String(text || '');
+  return REGION_COORDS.find(region => region.keys.some(key => source.includes(key)));
+}
+
+function distanceKmBetween(a: { lat: number; lon: number }, b: { lat: number; lon: number }) {
+  const toRad = (value: number) => value * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLon = toRad(b.lon - a.lon);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function plausibleDatingDistanceKm(state: SNSGodState, candidateLocation: string, seed = Math.random()) {
+  const userRegion = inferUserRegion(state);
+  const candidateRegion = regionCoordForText(candidateLocation);
+  if (!candidateRegion) return Number((1.2 + Math.abs(seed) * 18).toFixed(1));
+  const base = distanceKmBetween(userRegion, candidateRegion);
+  const jitter = 0.4 + (Math.abs(seed * 997) % 4.2);
+  return Number(Math.max(0.4, Math.min(60, base + jitter)).toFixed(1));
+}
+
+function distanceAcceptanceAdjustment(distanceKm: number) {
+  if (distanceKm <= 2) return 10;
+  if (distanceKm <= 20) return 10 * (1 - ((distanceKm - 2) / 18));
+  if (distanceKm <= 60) return -10 * ((distanceKm - 20) / 40);
+  return -10;
+}
+
+function ageAcceptanceAdjustment(userAge: number | undefined, candidateAge: number) {
+  if (!userAge) return 0;
+  const diff = Math.abs(userAge - candidateAge);
+  if (diff <= 2) return 10;
+  if (diff <= 10) return 10 * (1 - ((diff - 2) / 8));
+  if (diff <= 20) return -10 * ((diff - 10) / 10);
+  return -10;
+}
+
 export function datingAppProfiles(progress: DatingAppProgress): DatingAppProfile[] {
   if (Array.isArray(progress.profiles) && progress.profiles.length) return progress.profiles;
   return progress.currentProfile ? [progress.currentProfile] : [];
@@ -208,6 +364,43 @@ function finalDatingAppProfile(progress: DatingAppProgress): DatingAppProfile | 
   return profiles.find(profile => profile.id === targetId);
 }
 
+function withDatingAppHistory(progress: DatingAppProgress): DatingAppProgress {
+  const finalProfile = finalDatingAppProfile(progress);
+  const decisions = progress.decisions || [];
+  if (!finalProfile || !decisions.length) return progress;
+  const profiles = datingAppProfiles(progress);
+  const decisionSummaries = decisions.map(item => {
+    const profile = profiles.find(candidate => candidate.id === item.profileId);
+    return {
+      profileId: item.profileId,
+      name: profile?.name || item.profileId,
+      age: Number(profile?.age || 0),
+      decision: item.decision,
+      decidedAt: item.decidedAt
+    };
+  });
+  const id = `dating_history_${finalProfile.id}`;
+  const entry = {
+    id,
+    savedAt: Date.now(),
+    completedAt: progress.completedAt,
+    finalProfileId: finalProfile.id,
+    finalProfile,
+    decisions: decisionSummaries,
+    requestStatus: progress.requestStatus,
+    requestedAt: progress.requestedAt,
+    resolvedAt: progress.resolvedAt,
+    rejectedReason: progress.rejectedReason,
+    acceptedRoomId: progress.acceptedRoomId,
+    acceptedCharacterId: progress.acceptedCharacterId
+  };
+  const history = [
+    entry,
+    ...(progress.history || []).filter(item => item.id !== id && item.finalProfileId !== finalProfile.id)
+  ].slice(0, 80);
+  return { ...progress, history };
+}
+
 export function shouldRefreshDatingApp(state: SNSGodState, now = Date.now()) {
   const progress = datingAppProgress(state);
   const profiles = datingAppProfiles(progress);
@@ -216,7 +409,25 @@ export function shouldRefreshDatingApp(state: SNSGodState, now = Date.now()) {
   return Number(profiles[0]?.expiresAt || progress.currentProfile?.expiresAt || 0) <= now;
 }
 
-function fallbackProfile(now: number, refreshHours: number): DatingAppProfile {
+function rejectExpiredUnrequestedDatingAppSelection(state: SNSGodState, now = Date.now()): SNSGodState {
+  const progress = datingAppProgress(state);
+  const profile = finalDatingAppProfile(progress);
+  if (!profile || progress.requestStatus !== 'none') return state;
+  const expiresAt = Number(datingAppProfiles(progress)[0]?.expiresAt || progress.currentProfile?.expiresAt || 0);
+  if (!expiresAt || expiresAt > now) return state;
+  return {
+    ...state,
+    datingApp: withDatingAppHistory({
+      ...progress,
+      finalProfileId: profile.id,
+      requestStatus: 'rejected',
+      resolvedAt: now,
+      rejectedReason: '시간 안에 대화신청을 보내지 않아 자동으로 지나갔어요.'
+    })
+  };
+}
+
+function fallbackProfile(state: SNSGodState, now: number, refreshHours: number): DatingAppProfile {
   const edgePreset = Math.random() < 0.42 ? pick(EDGE_PROFILE_PRESETS) : undefined;
   const name = pick(DEFAULT_NAMES);
   const job = edgePreset?.job || pick(JOBS);
@@ -224,10 +435,11 @@ function fallbackProfile(now: number, refreshHours: number): DatingAppProfile {
   const interests = uniqueList([], INTERESTS.sort(() => Math.random() - 0.5), 5);
   const education = pick(EDUCATIONS);
   const mbti = pick(MBTIS);
+  const ageRange = datingAppAgeRange(state);
   return {
     id: makeId('dating'),
     name,
-    age: 24 + Math.floor(Math.random() * 10),
+    age: ageRange.min + Math.floor(Math.random() * (ageRange.max - ageRange.min + 1)),
     job,
     location,
     distanceKm: Number((0.8 + Math.random() * 18).toFixed(1)),
@@ -263,12 +475,20 @@ function fallbackProfile(now: number, refreshHours: number): DatingAppProfile {
   };
 }
 
-function normalizeProfile(parsed: GeneratedDatingAppProfile | undefined, now: number, refreshHours: number): DatingAppProfile {
-  const fallback = fallbackProfile(now, refreshHours);
+function datingAgeIdentityPrompt(name: string, age: number, job: string, location: string, identityPrompt: string) {
+  const ageLine = `Korean woman named ${name}, adult ${age} years old, age-appropriate face and styling for a ${age}-year-old, ${job}, ${location}`;
+  const cleaned = String(identityPrompt || '').trim();
+  return cleaned.includes(`${age}`) ? cleaned : `${ageLine}, ${cleaned || 'realistic dating app identity'}`;
+}
+
+function normalizeProfile(state: SNSGodState, parsed: GeneratedDatingAppProfile | undefined, now: number, refreshHours: number): DatingAppProfile {
+  const fallback = fallbackProfile(state, now, refreshHours);
+  const ageRange = datingAppAgeRange(state);
   const name = stringValue(parsed?.name, fallback.name);
-  const age = clampNumber(parsed?.age, fallback.age, 20, 39);
+  const age = clampNumber(parsed?.age, fallback.age, ageRange.min, ageRange.max);
   const job = stringValue(parsed?.job, fallback.job);
   const location = stringValue(parsed?.location, fallback.location);
+  const distanceKm = plausibleDatingDistanceKm(state, location, stableProfileSeed({ ...fallback, name, age, job, location }));
   const traits = uniqueList(parsed?.traits, fallback.traits, 5);
   const interests = uniqueList(parsed?.interests, fallback.interests, 6);
   const datingStyle = uniqueList(parsed?.datingStyle, fallback.datingStyle, 6);
@@ -286,7 +506,7 @@ function normalizeProfile(parsed: GeneratedDatingAppProfile | undefined, now: nu
     age,
     job,
     location,
-    distanceKm: Math.max(0.1, Math.min(30, Number(parsed?.distanceKm || fallback.distanceKm))),
+    distanceKm,
     heightCm: clampNumber(parsed?.heightCm, fallback.heightCm, 145, 180),
     bodyLabel: stringValue(parsed?.bodyLabel, fallback.bodyLabel),
     alcohol: stringValue(parsed?.alcohol, fallback.alcohol),
@@ -311,19 +531,27 @@ function normalizeProfile(parsed: GeneratedDatingAppProfile | undefined, now: nu
     snsStyle: stringValue(parsed?.snsStyle, fallback.snsStyle),
     firstMessage: stringValue(parsed?.firstMessage, fallback.firstMessage),
     callPreview: stringValue(parsed?.callPreview, fallback.callPreview),
-    identityPrompt: stringValue(parsed?.identityPrompt, `Korean woman named ${name}, adult ${age} years old, ${job}, ${location}, realistic dating app identity`),
+    identityPrompt: datingAgeIdentityPrompt(
+      name,
+      age,
+      job,
+      location,
+      stringValue(parsed?.identityPrompt, fallback.identityPrompt)
+    ),
     createdAt: now,
     expiresAt: now + refreshHours * 60 * 60 * 1000
   };
 }
 
 async function generateProfileJson(state: SNSGodState): Promise<GeneratedDatingAppProfile | undefined> {
+  const ageRange = datingAppAgeRange(state);
   const messages = [
     {
       role: 'system' as const,
       content: [
         'Create one fictional adult Korean dating app profile for a simulation app.',
-        'Return compact JSON only. The woman must be 20 or older, not a real person, and not a celebrity clone.',
+        `Return compact JSON only. The woman must be a fictional adult age ${ageRange.label}, not a real person, and not a celebrity clone.`,
+        `Choose age randomly across the full ${ageRange.label} range; do not cluster every profile in the 20s unless the configured range is only 20s.`,
         'Make her personality specific, not generic. Include friction, quirks, and dating preferences.',
         'Write bio like a realistic Korean dating app self-introduction. It may be short, medium, or long depending on personality. Ban boring essays, philosophical writing, self-help tone, and overexplained profile copy.',
         'bio should sound like a person typed it on a phone: concrete daily habits, boundaries, humor, dating intent, recent breakup boundaries, contact style, or what kind of person she avoids. Do not make every bio polite or safe.',
@@ -334,6 +562,7 @@ async function generateProfileJson(state: SNSGodState): Promise<GeneratedDatingA
         'Do not write "대화신청이 수락되면 볼 수 있어요", hidden answers, locked content, generic compliments, or academic-sounding explanations.',
         'Stronger adult archetypes must appear often: sexually frank and provocative adult woman, direct attraction/skinship/chemistry talk, cold manipulative psychopathic traits, emotional testing, jealousy tests, controlled charm. Keep everything fictional and adult; never minors, coercion, or non-consensual framing.',
         'Do not sanitize provocative profiles into generic kindness. If the archetype is sensual or manipulative, make bio, traits, datingStyle, speechStyle, firstMessage, and callPreview visibly sharper.',
+        'identityPrompt must explicitly include her exact age and age-appropriate face, styling, outfit, and vibe for that age.',
         'Fields: name, age, job, location, distanceKm, heightCm, bodyLabel, alcohol, smoking, religion, education, mbti, verified, lastActiveLabel, bio, traits, interests, datingStyle, lifestyle, profileQuestionCards, personalitySummary, speechStyle, relationshipStyle, likes, dislikes, hobbies, snsStyle, firstMessage, callPreview, identityPrompt.'
       ].join('\n')
     },
@@ -417,6 +646,13 @@ function datingPhotoPrompts(profile: DatingAppProfile) {
   const baseSeed = stableProfileSeed(profile);
   const appearance = datingAppearanceFor(profile, baseSeed);
   const usedOutfitIds: string[] = [];
+  const compositionCues = [
+    'composition must be close upper-body, direct eye-level selfie-like portrait, relaxed head tilt, shoulders and hands visible',
+    'composition must be candid seated cafe snapshot, camera slightly above, table edge visible, one arm resting naturally',
+    'composition must be outdoor full-body or knees-up walking shot, camera several meters away, dynamic step-forward pose',
+    'composition must be side-angle environmental hobby candid, hands actively doing something, body turned 30-60 degrees from camera',
+    'composition must be warm evening diagonal waist-up portrait, looking slightly off-camera, softer expression and different framing'
+  ];
   return DATING_SLOT_CUES.map((slot, index) => {
     const seedIndex = baseSeed + index * 113;
     const categorizedPrompt = buildRandomCategorizedImagePrompt({
@@ -440,8 +676,10 @@ function datingPhotoPrompts(profile: DatingAppProfile) {
         'same woman identity across the dating app album, realistic ordinary person, not a celebrity clone',
         'use the app global prompt rules, outfit presets, body silhouette, makeup, lighting, background, and negative prompt rules',
         slot.cue,
+        compositionCues[index],
         interestCue,
         `photo slot ${index + 1} of 5, use a different outfit preset, different outfit color, different fit, different background, and different pose from every other slot`,
+        `mandatory variety: this slot must not reuse the same camera distance, same pose, same arm position, same background layout, or same crop as any other slot in this album`,
         'never repeat the same clothing combination across this album, avoid duplicate outfit, avoid same top, same skirt, same dress, same jacket, same color styling',
         'face must be clearly visible, eyes visible, head fully included, no face cropped out, no faceless body crop',
         'no empty room, no scenery-only photo, no object-only photo, no clothing-only crop',
@@ -471,10 +709,7 @@ async function generateDatingPhotos(state: SNSGodState, profile: DatingAppProfil
           ? seedReferenceImage
           : generatedReferenceImage || seedReferenceImage
         : undefined;
-      const uri = await generateImageDataUri(state, item.prompt, undefined, {
-        referenceImage,
-        kind: referenceImage ? 'profile-reference-face' : 'profile'
-      });
+      const uri = await generateDatingImageWithRetry(state, profile, item.label, item.prompt, referenceImage);
       photo.uri = uri;
       if (supportsReference && index === 0) generatedReferenceImage = uri;
     } catch (error) {
@@ -486,9 +721,51 @@ async function generateDatingPhotos(state: SNSGodState, profile: DatingAppProfil
   return { photos, imagePrompts: prompts.map(item => item.prompt) };
 }
 
+async function generateDatingImageWithRetry(state: SNSGodState, profile: DatingAppProfile, label: string, prompt: string, referenceImage?: string): Promise<string> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= DATING_IMAGE_RETRY_DELAYS_MS.length; attempt += 1) {
+    if (attempt > 0) {
+      const waitMs = DATING_IMAGE_RETRY_DELAYS_MS[attempt - 1];
+      void appendDebugLog('datingApp.image.retry', `wait ${waitMs}ms before retry ${datingImageScope(profile, label, attempt + 1)}`, 'warn');
+      await delay(waitMs);
+    }
+    try {
+      return await runQueuedDatingImage(state, datingImageScope(profile, label, attempt + 1), () =>
+        generateImageDataUri(state, prompt, undefined, {
+        referenceImage,
+        kind: referenceImage ? 'profile-reference-face' : 'profile'
+        })
+      );
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      void appendDebugLog('datingApp.image.retry', `failed ${datingImageScope(profile, label, attempt + 1)}: ${message}`, 'warn');
+      if (!isTransientImageError(error) || attempt >= DATING_IMAGE_RETRY_DELAYS_MS.length) break;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError || 'dating image generation failed'));
+}
+
+async function regenerateDatingPhoto(state: SNSGodState, profile: DatingAppProfile, photo: DatingAppPhoto, referenceImage?: string): Promise<DatingAppPhoto> {
+  const nextPhoto: DatingAppPhoto = {
+    ...photo,
+    createdAt: Date.now(),
+    uri: undefined,
+    error: undefined
+  };
+  try {
+    const uri = await generateDatingImageWithRetry(state, profile, photo.label, photo.prompt, referenceImage);
+    return { ...nextPhoto, uri };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    void appendDebugLog('datingApp.image.retry', `image retry failed ${profile.name}/${photo.label}: ${message}`, 'warn');
+    return { ...nextPhoto, error: message };
+  }
+}
+
 async function generateDatingAppProfileBundle(state: SNSGodState, now: number, refreshIntervalHours: number): Promise<DatingAppProfile> {
   const parsed = await generateProfileJson(state);
-  const profileSeed = normalizeProfile(parsed, now, refreshIntervalHours);
+  const profileSeed = normalizeProfile(state, parsed, now, refreshIntervalHours);
   const generated = await generateDatingPhotos(state, profileSeed);
   return {
     ...profileSeed,
@@ -500,12 +777,13 @@ async function generateDatingAppProfileBundle(state: SNSGodState, now: number, r
 export async function ensureDatingAppProfile(state: SNSGodState, force = false): Promise<SNSGodState> {
   const now = Date.now();
   if (!force && !shouldRefreshDatingApp(state, now)) return state;
+  const sourceState = rejectExpiredUnrequestedDatingAppSelection(state, now);
   const refreshIntervalHours = datingAppRefreshHours(state);
   const acceptanceChancePercent = datingAppAcceptanceChance(state);
-  const firstProfile = await generateDatingAppProfileBundle(state, now, refreshIntervalHours);
+  const firstProfile = await generateDatingAppProfileBundle(sourceState, now, refreshIntervalHours);
   const profiles: DatingAppProfile[] = [firstProfile];
   return {
-    ...state,
+    ...sourceState,
     datingApp: {
       profiles,
       currentProfile: profiles[0],
@@ -523,7 +801,8 @@ export async function ensureDatingAppProfile(state: SNSGodState, force = false):
       resolvedAt: undefined,
       rejectedReason: undefined,
       acceptedRoomId: undefined,
-      acceptedCharacterId: undefined
+      acceptedCharacterId: undefined,
+      history: sourceState.datingApp?.history || []
     }
   };
 }
@@ -546,18 +825,81 @@ export async function recordDatingAppDecision(state: SNSGodState, profileId: str
     nextProfiles = [...nextProfiles, nextProfile];
   }
   const activeProfileIndex = Math.min(decisions.length, Math.max(0, nextProfiles.length - 1));
+  const nextDatingApp = withDatingAppHistory({
+    ...progress,
+    profiles: nextProfiles,
+    currentProfile: nextProfiles[activeProfileIndex] || nextProfiles[nextProfiles.length - 1],
+    activeProfileIndex,
+    decisions,
+    finalProfileId: completed && decisions.filter(item => item.decision === 'liked').length === 1
+      ? decisions.find(item => item.decision === 'liked')?.profileId
+      : progress.finalProfileId,
+    completedAt: completed ? (progress.completedAt || now) : progress.completedAt
+  });
+  return {
+    ...state,
+    datingApp: nextDatingApp
+  };
+}
+
+export async function regenerateActiveDatingAppFailedPhotos(state: SNSGodState): Promise<SNSGodState> {
+  const progress = datingAppProgress(state);
+  if (progress.requestStatus === 'pending' || datingAppRoundCompleted(progress)) return state;
+  const profiles = datingAppProfiles(progress);
+  const activeIndex = Math.max(0, Math.min(Number(progress.activeProfileIndex || 0), Math.max(0, profiles.length - 1)));
+  const profile = profiles[activeIndex];
+  if (!profile) return state;
+  const failedPhotos = (profile.photos || []).filter(photo => !photo.uri);
+  if (!failedPhotos.length) return state;
+
+  const supportsReference = datingImageProviderSupportsReference(state);
+  const firstUsablePhoto = profile.photos.find(photo => photo.uri)?.uri;
+  const usedReferences = new Set<string>();
+  const seedReferenceImage = supportsReference && !firstUsablePhoto ? randomDatingFaceReference(state, usedReferences) : undefined;
+  const referenceImage = supportsReference ? firstUsablePhoto || seedReferenceImage : undefined;
+  const replacements = new Map<string, DatingAppPhoto>();
+  for (const photo of failedPhotos) {
+    replacements.set(photo.id, await regenerateDatingPhoto(state, profile, photo, referenceImage));
+  }
+  const nextProfile: DatingAppProfile = {
+    ...profile,
+    photos: profile.photos.map(photo => replacements.get(photo.id) || photo)
+  };
+  const nextProfiles = profiles.map((item, index) => index === activeIndex ? nextProfile : item);
   return {
     ...state,
     datingApp: {
       ...progress,
       profiles: nextProfiles,
-      currentProfile: nextProfiles[activeProfileIndex] || nextProfiles[nextProfiles.length - 1],
-      activeProfileIndex,
+      currentProfile: nextProfile,
+      activeProfileIndex: activeIndex
+    }
+  };
+}
+
+export async function replaceActiveDatingAppProfile(state: SNSGodState): Promise<SNSGodState> {
+  const progress = datingAppProgress(state);
+  if (progress.requestStatus === 'pending' || datingAppRoundCompleted(progress)) return state;
+  const profiles = datingAppProfiles(progress);
+  const activeIndex = Math.max(0, Math.min(Number(progress.activeProfileIndex || 0), Math.max(0, profiles.length - 1)));
+  const current = profiles[activeIndex];
+  if (!current) return state;
+  const decisions = (progress.decisions || []).filter(item => item.profileId !== current.id);
+  const refreshIntervalHours = progress.refreshIntervalHours || datingAppRefreshHours(state);
+  const nextProfile = await generateDatingAppProfileBundle(state, Date.now(), refreshIntervalHours);
+  const nextProfiles = profiles.map((item, index) => index === activeIndex ? nextProfile : item);
+  const nextActiveIndex = Math.max(0, Math.min(activeIndex, Math.max(0, nextProfiles.length - 1)));
+  const nextCurrentProfile = nextProfiles[nextActiveIndex] || nextProfile;
+  return {
+    ...state,
+    datingApp: {
+      ...progress,
+      profiles: nextProfiles,
+      currentProfile: nextCurrentProfile,
+      activeProfileIndex: nextActiveIndex,
       decisions,
-      finalProfileId: completed && decisions.filter(item => item.decision === 'liked').length === 1
-        ? decisions.find(item => item.decision === 'liked')?.profileId
-        : progress.finalProfileId,
-      completedAt: completed ? (progress.completedAt || now) : progress.completedAt
+      finalProfileId: progress.finalProfileId === current.id ? undefined : progress.finalProfileId,
+      selectedReferencePhotoIds: []
     }
   };
 }
@@ -568,11 +910,11 @@ export function selectDatingAppFinalProfile(state: SNSGodState, profileId: strin
   if (!likedIds.includes(profileId)) return state;
   return {
     ...state,
-    datingApp: {
+    datingApp: withDatingAppHistory({
       ...progress,
       finalProfileId: profileId,
       selectedReferencePhotoIds: []
-    }
+    })
   };
 }
 
@@ -605,7 +947,7 @@ export function requestDatingAppChat(state: SNSGodState): SNSGodState {
   const delay = REQUEST_MIN_DELAY_MS + Math.floor(Math.random() * (REQUEST_MAX_DELAY_MS - REQUEST_MIN_DELAY_MS));
   return {
     ...state,
-    datingApp: {
+    datingApp: withDatingAppHistory({
       ...progress,
       refreshIntervalHours: datingAppRefreshHours(state),
       acceptanceChancePercent: datingAppAcceptanceChance(state),
@@ -615,7 +957,7 @@ export function requestDatingAppChat(state: SNSGodState): SNSGodState {
       resolveAt: now + delay,
       resolvedAt: undefined,
       rejectedReason: undefined
-    }
+    })
   };
 }
 
@@ -630,12 +972,12 @@ export function finalizeAcceptedDatingAppChat(state: SNSGodState): { next: SNSGo
   return {
     next: {
       ...created.next,
-      datingApp: {
+      datingApp: withDatingAppHistory({
         ...progress,
         requestStatus: 'accepted',
         acceptedRoomId: created.roomId,
         acceptedCharacterId: created.characterId
-      }
+      })
     },
     roomId: created.roomId
   };
@@ -805,6 +1147,29 @@ function createAcceptedDatingRoom(state: SNSGodState, profile: DatingAppProfile,
     imageIdentityPrompt: profile.identityPrompt,
     datingAppProfile: profile
   };
+  const completedCharacter = completeGeneratedCharacter(character, {
+    state,
+    source: 'dating_app',
+    modeLabel: '소개팅 어플',
+    personalitySummary: profile.personalitySummary,
+    speechStyle: profile.speechStyle,
+    relationshipStyle: profile.relationshipStyle,
+    likes: profile.likes,
+    dislikes: profile.dislikes,
+    hobbies: profile.hobbies,
+    job: profile.job,
+    locationName: profile.location,
+    snsStyle: profile.snsStyle,
+    phonePrompt: profile.callPreview,
+    appearancePrompt: profile.identityPrompt,
+    imageIdentityPrompt: profile.identityPrompt,
+    profileImage: firstPhoto,
+    referenceImages: selectedReferenceImages,
+    profileAvatarPrompt: profile.imagePrompts[0] || profile.identityPrompt,
+    profileCoverPrompt: profile.imagePrompts[2] || profile.identityPrompt,
+    firstMessage: profile.firstMessage,
+    memory: profileMemory(profile)
+  });
   const room = {
     ...createRoom(characterId, '데이트앱 매칭'),
     relationshipNote: `${profile.name}은 데이트앱에서 사용자의 대화신청을 수락했다. 첫 대화는 프로필과 관심사에서 자연스럽게 시작한다.`,
@@ -828,7 +1193,7 @@ function createAcceptedDatingRoom(state: SNSGodState, profile: DatingAppProfile,
   };
   const next: SNSGodState = {
     ...state,
-    characters: [...state.characters, character],
+    characters: [...state.characters, completedCharacter],
     chatRooms: {
       ...state.chatRooms,
       [characterId]: [room]
@@ -861,18 +1226,18 @@ export function resolveDatingAppRequest(state: SNSGodState, force = false): { ne
   if (!profile || progress.requestStatus !== 'pending') return { next: state, accepted: false };
   const now = Date.now();
   if (!force && Number(progress.resolveAt || 0) > now) return { next: state, accepted: false };
-  const chance = datingAppAcceptanceChance(state);
+  const chance = datingAppEffectiveAcceptanceChance(state, profile);
   const accepted = Math.random() * 100 < chance;
   if (!accepted) {
     return {
       next: {
         ...state,
-        datingApp: {
+        datingApp: withDatingAppHistory({
           ...progress,
           requestStatus: 'rejected',
           resolvedAt: now,
           rejectedReason: pick(REJECT_REASONS)
-        }
+        })
       },
       accepted: false
     };
@@ -880,14 +1245,14 @@ export function resolveDatingAppRequest(state: SNSGodState, force = false): { ne
   return {
     next: {
       ...state,
-      datingApp: {
+      datingApp: withDatingAppHistory({
         ...progress,
         requestStatus: 'accepted',
         resolvedAt: now,
         acceptedRoomId: undefined,
         acceptedCharacterId: undefined,
         selectedReferencePhotoIds: []
-      }
+      })
     },
     accepted: true,
     roomId: undefined

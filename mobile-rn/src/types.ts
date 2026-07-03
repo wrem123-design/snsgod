@@ -95,6 +95,7 @@ export type SNSGodConfig = {
   characterPhoneCallGlobalCooldownHours?: number;
   datingAppRefreshHours?: number;
   datingAppAcceptanceChancePercent?: number;
+  datingAppAgeRange?: string;
   imageGeneration?: ImageGenerationConfig;
   sns?: {
     platform?: 'instagram' | 'twitter';
@@ -550,6 +551,27 @@ export type DatingAppProfile = {
   expiresAt: number;
 };
 
+export type DatingAppHistoryEntry = {
+  id: string;
+  savedAt: number;
+  completedAt?: number;
+  finalProfileId: string;
+  finalProfile: DatingAppProfile;
+  decisions: Array<{
+    profileId: string;
+    name: string;
+    age: number;
+    decision: DatingAppDecision;
+    decidedAt: number;
+  }>;
+  requestStatus?: DatingAppRequestStatus;
+  requestedAt?: number;
+  resolvedAt?: number;
+  rejectedReason?: string;
+  acceptedRoomId?: string;
+  acceptedCharacterId?: string;
+};
+
 export type DatingAppProgress = {
   currentProfile?: DatingAppProfile;
   profiles?: DatingAppProfile[];
@@ -572,6 +594,7 @@ export type DatingAppProgress = {
   rejectedReason?: string;
   acceptedRoomId?: string;
   acceptedCharacterId?: string;
+  history?: DatingAppHistoryEntry[];
 };
 
 export type Sticker = {

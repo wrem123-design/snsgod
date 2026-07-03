@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleProp, StyleSheet, Text, View, ViewStyle } from 'react-native';
 import { colors } from '../theme';
-import { DatingAppPhoto, DatingAppProfile, DatingAppProgress, SNSGodState } from '../types';
+import { DatingAppHistoryEntry, DatingAppPhoto, DatingAppProfile, DatingAppProgress, SNSGodState } from '../types';
 import {
   activeDatingAppProfile,
-  datingAppAcceptanceChance,
+  datingAppEffectiveAcceptanceChance,
   datingAppProgress,
   datingAppProfiles,
   datingAppRefreshHours,
@@ -13,6 +13,8 @@ import {
   ensureDatingAppProfile,
   finalizeAcceptedDatingAppChat,
   recordDatingAppDecision,
+  regenerateActiveDatingAppFailedPhotos,
+  replaceActiveDatingAppProfile,
   requestDatingAppChat,
   resolveDatingAppRequest,
   selectDatingAppFinalProfile,
@@ -40,9 +42,10 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
   const [busyText, setBusyText] = useState('');
   const [message, setMessage] = useState('');
   const [preview, setPreview] = useState<DatingAppPhoto | undefined>();
+  const [historyDetail, setHistoryDetail] = useState<DatingAppHistoryEntry | undefined>();
   const [nowTick, setNowTick] = useState(Date.now());
   const refreshHours = datingAppRefreshHours(state);
-  const acceptanceChance = datingAppAcceptanceChance(state);
+  const acceptanceChance = datingAppEffectiveAcceptanceChance(state, selectedFinalProfile);
   const remainingMs = datingAppRemainingMs(state, nowTick);
   const pendingSeconds = progress.requestStatus === 'pending'
     ? Math.max(0, Math.ceil((Number(progress.resolveAt || 0) - nowTick) / 1000))
@@ -60,6 +63,12 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
     if (progress.requestStatus === 'pending' || progress.requestStatus === 'accepted') return;
     void generateRound(false);
   }, []);
+
+  useEffect(() => {
+    if (loading || remainingMs > 0) return;
+    if (progress.requestStatus === 'pending' || progress.requestStatus === 'accepted') return;
+    void generateRound(false);
+  }, [loading, remainingMs, progress.requestStatus, progress.resolveAt, profiles.length]);
 
   useEffect(() => {
     if (progress.requestStatus !== 'pending') return;
@@ -107,6 +116,33 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
     }
   }
 
+  async function retryFailedPhotos() {
+    if (!profile || loading || progress.requestStatus === 'pending') return;
+    setLoading(true);
+    setBusyText('실패한 사진을 다시 생성하는 중...');
+    try {
+      const next = await regenerateActiveDatingAppFailedPhotos(state);
+      if (next !== state) await onChange(next);
+    } finally {
+      setBusyText('');
+      setLoading(false);
+    }
+  }
+
+  async function replaceCurrentProfile() {
+    if (!profile || loading || progress.requestStatus === 'pending') return;
+    setLoading(true);
+    setMessage('');
+    setBusyText('이 후보를 새로 뽑는 중...');
+    try {
+      const next = await replaceActiveDatingAppProfile(state);
+      if (next !== state) await onChange(next);
+    } finally {
+      setBusyText('');
+      setLoading(false);
+    }
+  }
+
   async function pickFinal(profileId: string) {
     if (progress.requestStatus === 'pending' || progress.requestStatus === 'accepted') return;
     await onChange(selectDatingAppFinalProfile(state, profileId));
@@ -137,11 +173,54 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
 
   const photos = profile?.photos || [];
   const hero = photos.find(photo => isRenderableMediaUri(photo.uri)) || photos[0];
+  const failedPhotos = photos.filter(photo => !isRenderableMediaUri(photo.uri));
   const resultPhotos = useMemo(() => {
     const map = new Map<string, DatingAppPhoto | undefined>();
     profiles.forEach(item => map.set(item.id, item.photos.find(photo => isRenderableMediaUri(photo.uri)) || item.photos[0]));
     return map;
   }, [profiles]);
+
+  const previewModal = (
+    <Modal visible={Boolean(preview)} transparent animationType="fade" onRequestClose={() => setPreview(undefined)}>
+      <Pressable style={styles.modalBackdrop} onPress={() => setPreview(undefined)}>
+        <View style={styles.modalImageFrame}>
+          {preview?.uri && isRenderableMediaUri(preview.uri) ? (
+            <Image source={{ uri: preview.uri }} style={styles.modalImage} resizeMode="contain" />
+          ) : (
+            <View style={styles.modalPlaceholder}><Text style={styles.modalPlaceholderText}>{preview?.error || '이미지가 아직 없습니다.'}</Text></View>
+          )}
+        </View>
+        <Text style={styles.modalLabel}>{preview?.label || ''}</Text>
+      </Pressable>
+    </Modal>
+  );
+
+  if (historyDetail) {
+    return (
+      <View style={styles.screen}>
+        <View style={styles.historyModalHeader}>
+          <View>
+            <Text style={styles.historyModalTitle}>선택 히스토리</Text>
+            <Text style={styles.historyModalSub}>{historyStatusLabel(historyDetail.requestStatus)} · {formatHistoryDate(historyDetail.savedAt)}</Text>
+          </View>
+          <Pressable onPress={() => setHistoryDetail(undefined)} style={styles.historyModalClose}>
+            <Text style={styles.historyModalCloseText}>닫기</Text>
+          </Pressable>
+        </View>
+        <ScrollView
+          style={styles.historyDetailScroll}
+          contentContainerStyle={styles.historyDetailContent}
+          keyboardShouldPersistTaps="handled"
+          overScrollMode="always"
+          scrollEventThrottle={16}
+          showsVerticalScrollIndicator
+        >
+          <ProfileHistoryContent item={historyDetail} onPreview={setPreview} />
+        </ScrollView>
+        {previewModal}
+      </View>
+    );
+  }
 
   return (
     <View style={styles.screen}>
@@ -195,12 +274,27 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
             <View style={styles.statusStrip}>
               <View>
                 <Text style={styles.statusLabel}>오늘의 후보 {currentNumber}/3</Text>
-                <Text style={styles.statusText}>{expiryLabel} · 최종 신청 수락 확률 {acceptanceChance}%</Text>
+                <Text style={styles.statusText}>{expiryLabel}</Text>
               </View>
               <View style={styles.onlinePill}><Text style={styles.onlinePillText}>{profile.lastActiveLabel}</Text></View>
             </View>
 
-            <View style={styles.heroCard}>
+            {failedPhotos.length ? (
+              <View style={styles.photoWarningPanel}>
+                <Text style={styles.photoWarningTitle}>사진 준비가 끝나지 않았어요</Text>
+                <Text style={styles.photoWarningText}>일부 사진 생성에 실패해서 후보를 다시 불러와야 진행할 수 있어요.</Text>
+                <View style={styles.photoWarningActions}>
+                  <Pressable onPress={retryFailedPhotos} disabled={loading} style={[styles.photoRetryButton, loading && styles.disabled]}>
+                    <Text style={styles.photoRetryText}>실패 사진 다시 생성</Text>
+                  </Pressable>
+                  <Pressable onPress={replaceCurrentProfile} disabled={loading} style={[styles.photoReplaceButton, loading && styles.disabled]}>
+                    <Text style={styles.photoReplaceText}>이 후보 새로 뽑기</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+
+            <View style={[styles.heroCard, styles.historyModalBlock]}>
               <Pressable onPress={() => hero && setPreview(hero)} style={styles.heroImageWrap}>
                 {hero?.uri && isRenderableMediaUri(hero.uri) ? (
                   <Image source={{ uri: hero.uri }} style={styles.heroImage} />
@@ -269,6 +363,14 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
             </Section>
           </>
         ) : null}
+
+        {(progress.history || []).length ? (
+          <Section title="선택 히스토리">
+            {(progress.history || []).slice(0, 30).map(item => (
+              <HistoryCard key={item.id} item={item} onPress={() => setHistoryDetail(item)} />
+            ))}
+          </Section>
+        ) : null}
       </ScrollView>
 
       {loading && profiles.length ? (
@@ -278,18 +380,7 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
         </View>
       ) : null}
 
-      <Modal visible={Boolean(preview)} transparent animationType="fade" onRequestClose={() => setPreview(undefined)}>
-        <Pressable style={styles.modalBackdrop} onPress={() => setPreview(undefined)}>
-          <View style={styles.modalImageFrame}>
-            {preview?.uri && isRenderableMediaUri(preview.uri) ? (
-              <Image source={{ uri: preview.uri }} style={styles.modalImage} resizeMode="contain" />
-            ) : (
-              <View style={styles.modalPlaceholder}><Text style={styles.modalPlaceholderText}>{preview?.error || '이미지가 아직 없습니다.'}</Text></View>
-            )}
-          </View>
-          <Text style={styles.modalLabel}>{preview?.label || ''}</Text>
-        </Pressable>
-      </Modal>
+      {previewModal}
     </View>
   );
 }
@@ -443,6 +534,120 @@ function ResultView({
   );
 }
 
+function HistoryCard({ item, onPress }: { item: DatingAppHistoryEntry; onPress: () => void }) {
+  const photo = item.finalProfile.photos.find(candidate => candidate.uri && isRenderableMediaUri(candidate.uri));
+  const summary = profileHistorySummary(item.finalProfile);
+  return (
+    <Pressable onPress={onPress} style={styles.historyCard}>
+      {photo?.uri ? (
+        <Image source={{ uri: photo.uri }} style={styles.historyPhoto} />
+      ) : (
+        <View style={styles.historyPhotoPlaceholder}><Text style={styles.historyPhotoText}>{item.finalProfile.name.slice(0, 1)}</Text></View>
+      )}
+      <View style={styles.historyBody}>
+        <View style={styles.historyTopLine}>
+          <Text style={styles.historyName}>{item.finalProfile.name}, {item.finalProfile.age}</Text>
+          <Text style={styles.historyStatus}>{historyStatusLabel(item.requestStatus)}</Text>
+        </View>
+        <Text style={styles.historyMeta}>{item.finalProfile.job} · {item.finalProfile.location}</Text>
+        <Text style={styles.historySummary} numberOfLines={2}>{summary}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
+function ProfileHistoryContent({
+  item,
+  onPreview
+}: {
+  item: DatingAppHistoryEntry;
+  onPreview: (photo: DatingAppPhoto) => void;
+}) {
+  const profile = item.finalProfile;
+  const hero = profile.photos.find(photo => photo.uri && isRenderableMediaUri(photo.uri)) || profile.photos[0];
+  return (
+    <>
+      <View style={[styles.heroCard, styles.historyModalBlock]}>
+        <View style={[styles.heroImageWrap, styles.historyHeroImageWrap]}>
+          {hero?.uri && isRenderableMediaUri(hero.uri) ? (
+            <Image source={{ uri: hero.uri }} style={styles.heroImage} />
+          ) : (
+            <View style={styles.photoPlaceholder}>
+              <Text style={styles.photoPlaceholderTitle}>{profile.name}</Text>
+              <Text style={styles.photoPlaceholderSub}>저장된 대표 사진이 없습니다.</Text>
+            </View>
+          )}
+          <View style={styles.heroGradient}>
+            <View style={styles.heroBadge}><Text style={styles.heroBadgeText}>{profile.verified ? '인증됨' : '프로필'}</Text></View>
+            <Text style={styles.heroName}>{profile.name}, {profile.age}</Text>
+            <Text style={styles.heroMeta}>{profile.job}</Text>
+            <Text style={styles.heroMeta}>{profile.location} · {profile.distanceKm.toFixed(1)}km</Text>
+          </View>
+        </View>
+      </View>
+
+      <Section title="자기소개" style={styles.historyModalBlock}>
+        <Text style={styles.bio}>{profile.bio}</Text>
+      </Section>
+      <Section title="특징" style={styles.historyModalBlock}>
+        <TagCloud tags={profile.traits} hot />
+      </Section>
+      <Section title="관심사" style={styles.historyModalBlock}>
+        <TagCloud tags={profile.interests} />
+      </Section>
+      <Section title="기본 정보" style={styles.historyModalBlock}>
+        <View style={styles.infoGrid}>
+          <InfoCell label="학력" value={profile.education || '미공개'} />
+          <InfoCell label="키" value={`${profile.heightCm}cm`} />
+          <InfoCell label="체형" value={profile.bodyLabel} />
+          <InfoCell label="술" value={profile.alcohol} />
+          <InfoCell label="흡연" value={profile.smoking} />
+          <InfoCell label="종교" value={profile.religion} />
+          <InfoCell label="MBTI" value={profile.mbti || '미공개'} />
+          <InfoCell label="거리" value={`${profile.distanceKm.toFixed(1)}km`} />
+        </View>
+      </Section>
+      <Section title="연애 성향" style={styles.historyModalBlock}>
+        <TagCloud tags={profile.datingStyle} hot />
+      </Section>
+      <Section title="라이프스타일" style={styles.historyModalBlock}>
+        <TagCloud tags={profile.lifestyle} />
+      </Section>
+      <Section title="특징과 관심사" style={styles.historyModalBlock}>
+        {profile.profileQuestionCards.map(card => (
+          <View key={card.question} style={styles.questionCard}>
+            <Text style={styles.questionTitle}>{card.question}</Text>
+            <Text style={styles.questionText}>{card.lockedText}</Text>
+          </View>
+        ))}
+      </Section>
+      <Section title="사진">
+        <Gallery photos={profile.photos} onPreview={onPreview} />
+      </Section>
+    </>
+  );
+}
+
+function profileHistorySummary(profile: DatingAppProfile) {
+  const parts = [
+    profile.personalitySummary,
+    profile.bio,
+    profile.relationshipStyle,
+    profile.traits?.slice(0, 3).join(', '),
+    profile.interests?.slice(0, 3).join(', ')
+  ]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  return parts[0] || `${profile.job} · ${profile.location} · ${profile.distanceKm.toFixed(1)}km`;
+}
+
+function historyStatusLabel(status: DatingAppProgress['requestStatus']) {
+  if (status === 'accepted') return '수락';
+  if (status === 'rejected') return '거절';
+  if (status === 'pending') return '대기';
+  return '선택';
+}
+
 function requestLabel(status: DatingAppProgress['requestStatus'], pendingSeconds: number, hasAcceptedRoom = false, selectedReferenceCount = 0) {
   if (status === 'accepted') return hasAcceptedRoom ? '대화방 열기' : selectedReferenceCount ? '캐릭터 저장하고 대화방 열기' : '사진 1장 이상 선택 후 저장';
   if (status === 'pending') return pendingSeconds > 0 ? '답장 기다리는 중' : '답장 확인 중';
@@ -460,6 +665,16 @@ function formatRemaining(ms: number) {
   return `${remainSeconds}초`;
 }
 
+function formatHistoryDate(timestamp?: number) {
+  if (!timestamp) return '저장됨';
+  const date = new Date(timestamp);
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${month}/${day} ${hours}:${minutes}`;
+}
+
 function Notice({ title, text }: { title: string; text: string }) {
   return (
     <View style={styles.noticePanel}>
@@ -469,9 +684,9 @@ function Notice({ title, text }: { title: string; text: string }) {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, children, style }: { title: string; children: React.ReactNode; style?: StyleProp<ViewStyle> }) {
   return (
-    <View style={styles.section}>
+    <View style={[styles.section, style]}>
       <Text style={styles.sectionTitle}>{title}</Text>
       {children}
     </View>
@@ -538,6 +753,14 @@ const styles = StyleSheet.create({
   statusText: { marginTop: 3, color: colors.sub, fontSize: 12, fontWeight: '800' },
   onlinePill: { minHeight: 28, paddingHorizontal: 10, borderRadius: 14, backgroundColor: colors.successSoft, alignItems: 'center', justifyContent: 'center' },
   onlinePillText: { color: colors.datingOnline, fontSize: 12, fontWeight: '900' },
+  photoWarningPanel: { borderRadius: 12, borderWidth: 1, borderColor: colors.datingHeart, backgroundColor: colors.datingHeartSoft, padding: 16, gap: 10 },
+  photoWarningTitle: { color: colors.datingHeart, fontSize: 20, lineHeight: 25, fontWeight: '900' },
+  photoWarningText: { color: colors.text, fontSize: 14, lineHeight: 20, fontWeight: '800' },
+  photoWarningActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  photoRetryButton: { minHeight: 46, borderRadius: 23, paddingHorizontal: 16, backgroundColor: colors.datingHeart, alignItems: 'center', justifyContent: 'center' },
+  photoRetryText: { color: colors.white, fontSize: 14, fontWeight: '900' },
+  photoReplaceButton: { minHeight: 46, borderRadius: 23, paddingHorizontal: 16, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panel, alignItems: 'center', justifyContent: 'center' },
+  photoReplaceText: { color: colors.text, fontSize: 14, fontWeight: '900' },
   heroCard: { borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panel, shadowColor: colors.datingShadow, shadowOpacity: 1, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 2 },
   heroImageWrap: { height: 560, backgroundColor: colors.surfaceAlt },
   heroImage: { width: '100%', height: '100%' },
@@ -595,6 +818,29 @@ const styles = StyleSheet.create({
   resultName: { flex: 1, minWidth: 0, color: colors.text, fontSize: 17, fontWeight: '900' },
   resultMeta: { marginTop: 5, color: colors.sub, fontWeight: '800' },
   resultSummary: { marginTop: 8, color: colors.text, lineHeight: 19, fontWeight: '700' },
+  historyCard: { minHeight: 96, borderRadius: 10, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panelSoft, padding: 10, flexDirection: 'row', gap: 10, marginBottom: 10 },
+  historyPhoto: { width: 72, height: 82, borderRadius: 8, backgroundColor: colors.surfaceAlt },
+  historyPhotoPlaceholder: { width: 72, height: 82, borderRadius: 8, backgroundColor: colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
+  historyPhotoText: { color: colors.sub, fontSize: 28, fontWeight: '900' },
+  historyBody: { flex: 1, minWidth: 0, justifyContent: 'center' },
+  historyTopLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  historyName: { flex: 1, minWidth: 0, color: colors.text, fontSize: 16, fontWeight: '900' },
+  historyStatus: { color: colors.datingHeart, fontSize: 12, fontWeight: '900' },
+  historyMeta: { marginTop: 5, color: colors.sub, fontSize: 12, fontWeight: '800' },
+  historySummary: { marginTop: 7, color: colors.text, fontSize: 12, lineHeight: 17, fontWeight: '800' },
+  historyModalScreen: { flex: 1, backgroundColor: colors.bg },
+  historyModalHeader: { minHeight: 86, paddingTop: 18, paddingHorizontal: 18, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.panel, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  historyModalTitle: { color: colors.text, fontSize: 22, fontWeight: '900' },
+  historyModalSub: { marginTop: 4, color: colors.sub, fontSize: 12, fontWeight: '800' },
+  historyModalClose: { minHeight: 40, paddingHorizontal: 16, borderRadius: 20, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
+  historyModalCloseText: { color: colors.text, fontSize: 14, fontWeight: '900' },
+  historyModalBody: { flex: 1, minHeight: 0 },
+  historyModalScroll: { flex: 1, minHeight: 0 },
+  historyModalContent: { padding: 18, paddingBottom: 160 },
+  historyDetailScroll: { flex: 1 },
+  historyDetailContent: { padding: 18, paddingBottom: 160 },
+  historyModalBlock: { marginBottom: 14 },
+  historyHeroImageWrap: { height: 440 },
   resultBadge: { minHeight: 28, paddingHorizontal: 9, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceAlt },
   resultBadgeLike: { backgroundColor: colors.datingHeart },
   resultBadgePass: { backgroundColor: colors.surfaceAlt },

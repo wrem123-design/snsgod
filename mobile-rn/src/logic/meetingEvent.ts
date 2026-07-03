@@ -1,6 +1,6 @@
 import { callLLMText, generateImageDataUri, parseJsonObject } from './api';
 import { appendDebugLog } from './debugLog';
-import { characterReferenceImages, randomReferenceImage } from './imageReference';
+import { primaryCharacterReferenceImage } from './imageReference';
 import { makeId } from './ids';
 import { DEFAULT_USER_APPEARANCE_PROMPT, userNameFor } from './prompts';
 import { appendMessage, findCharacter, findRoom, roomMessages, updateCharacter } from './stateHelpers';
@@ -366,7 +366,7 @@ export async function createBlindDateFirstDatePrompt(state: SNSGodState, roomId:
           'Use the selected candidate profile and blind date memory as the source.',
           'location, mood, seedSummary, and firstLine are visible to the user and must be Korean only.',
           'stillPrompt must be English only. It must describe one realistic horizontal cinematic still for the first blind date meeting.',
-          'The still must be generated from the selected candidate reference photo when one exists. Preserve her face, body impression, hairstyle vibe, and ordinary-person likeness while changing only the date scene, pose, outfit, and background.',
+          'The still must be generated from the selected candidate reference photo when one exists. Preserve her face, body impression, exact hairstyle direction, hair length, bangs or no bangs, hair color, and ordinary-person likeness while changing only the date scene, pose, outfit, and background.',
           'The still should include the female character and the male user as separate adults. Use the provided user appearance prompt for the male user.',
           'Choose the female outfit naturally from her profile, personality, job, and the date context. No text, no UI, no logos.'
         ].join('\n')
@@ -398,7 +398,11 @@ export async function createBlindDateFirstDatePrompt(state: SNSGodState, roomId:
 }
 
 async function generateMeetingStillImage(state: SNSGodState, character: SNSGodCharacter, stillPrompt: string, roomId: string): Promise<string> {
-  const referenceImage = randomReferenceImage(characterReferenceImages(character));
+  const referenceImage = primaryCharacterReferenceImage(character);
+  await appendDebugLog(
+    'meeting.image.reference',
+    `room=${roomId} character=${character.name} reference=${referenceImage ? 'yes' : 'no'} prompt=${String(stillPrompt || '').replace(/\s+/g, ' ').slice(0, 260)}`
+  );
   try {
     return await generateImageDataUri(state, stillPrompt, character, {
       referenceImage,
@@ -409,7 +413,7 @@ async function generateMeetingStillImage(state: SNSGodState, character: SNSGodCh
   }
   const retryPrompt = [
     `Reference-based first date still of ${character.name} meeting the male user in a realistic Korean cafe or everyday date place.`,
-    referenceImage ? 'Use the attached female reference image as mandatory identity reference; preserve her face and recognizable visual identity.' : '',
+    referenceImage ? 'Use the attached female reference image as mandatory identity reference; preserve her face, hairstyle, hair length, bangs or no bangs, hair color, face shape, and recognizable visual identity.' : '',
     'Show the female character clearly, face visible, upper body or half-body included, natural date posture.',
     `Male user appearance: ${state.config.userAppearancePrompt || DEFAULT_USER_APPEARANCE_PROMPT}`,
     'Two distinct adults, warm realistic lighting, horizontal cinematic phone-drama still, no text, no UI, no logos, no watermark.'
@@ -440,6 +444,7 @@ export async function createMeetingEventSession(state: SNSGodState, roomId: stri
     start.stillPrompt || '',
     `Male user appearance: ${state.config.userAppearancePrompt || DEFAULT_USER_APPEARANCE_PROMPT}`,
     'The attached reference image, if provided, is only for the female character. Keep the male user visually separate and based on the male user appearance prompt.',
+    'If a female reference image is attached, preserve her face and hair exactly enough that she reads as the same woman from the match photo.',
     'Automatically choose the female character outfit from recent chat, current place, time, weather, and mood. The outfit should fit the meeting context.',
     'Horizontal cinematic still, realistic phone-drama composition, natural light, emotional in-person meeting moment.',
     'No text, no captions, no UI, no logos, no watermark.'

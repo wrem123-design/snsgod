@@ -104,6 +104,20 @@ function phoneCooldownMinutes(value: unknown, fallbackMinutes: number, legacyHou
   return fallbackMinutes;
 }
 
+function normalizeDatingAgeRangeInput(value: unknown): string {
+  const numbers = String(value || '')
+    .match(/\d{1,3}/g)
+    ?.map(item => Number(item))
+    .filter(Number.isFinite) || [];
+  let min = numbers[0] ?? 19;
+  let max = numbers[1] ?? numbers[0] ?? 43;
+  if (min > max) [min, max] = [max, min];
+  min = Math.max(19, Math.min(80, Math.round(min)));
+  max = Math.max(19, Math.min(80, Math.round(max)));
+  if (min > max) [min, max] = [max, min];
+  return `${min}-${max}`;
+}
+
 function apiKeySlotsFromProfile(profile: SNSGodState['config']['apiProfiles'][ApiProvider] | undefined): [string, string, string] {
   const primary = String(profile?.apiKey || '');
   const extras = (profile?.apiKeys || [])
@@ -260,6 +274,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   const [snsStartCount, setSnsStartCount] = useState(String(state.config.snsStartCount ?? 6));
   const [datingAppRefreshHours, setDatingAppRefreshHours] = useState(String(state.config.datingAppRefreshHours ?? state.datingApp?.refreshIntervalHours ?? 12));
   const [datingAppAcceptanceChance, setDatingAppAcceptanceChance] = useState(String(state.config.datingAppAcceptanceChancePercent ?? state.datingApp?.acceptanceChancePercent ?? 50));
+  const [datingAppAgeRange, setDatingAppAgeRange] = useState(String(state.config.datingAppAgeRange || '19-43'));
   const [snsIncludeUserInDM, setSnsIncludeUserInDM] = useState((state.config.sns || {}).includeUserInDM !== false);
   const [autoEnabled, setAutoEnabled] = useState(state.config.autoEnabled !== false);
   const [privateFirst, setPrivateFirst] = useState(state.config.privateFirst === true);
@@ -731,8 +746,10 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     const phoneGlobalCooldownMinutes = Math.max(0, Math.min(10080, Math.round(Number.isFinite(phoneGlobalCooldown) ? phoneGlobalCooldown : 180)));
     const datingRefresh = Math.max(1, Math.min(168, Math.round(Number(datingAppRefreshHours) || 12)));
     const datingChance = Math.max(0, Math.min(100, Math.round(Number(datingAppAcceptanceChance) || 50)));
+    const datingAgeRangeValue = normalizeDatingAgeRangeInput(datingAppAgeRange);
     const previousDatingRefresh = Math.max(1, Math.min(168, Math.round(Number(state.config.datingAppRefreshHours ?? state.datingApp?.refreshIntervalHours ?? 12) || 12)));
     const datingRefreshChanged = previousDatingRefresh !== datingRefresh;
+    const datingAgeRangeChanged = normalizeDatingAgeRangeInput(state.config.datingAppAgeRange || '19-43') !== datingAgeRangeValue;
     try {
       await onChange({
         ...state,
@@ -752,6 +769,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           characterPhoneCallGlobalCooldownHours: phoneGlobalCooldownMinutes / 60,
           datingAppRefreshHours: datingRefresh,
           datingAppAcceptanceChancePercent: datingChance,
+          datingAppAgeRange: datingAgeRangeValue,
           snsAutoChance: Math.max(0, Math.min(100, Math.round(Number(snsAutoChance) || 0))),
           snsStartCount: Math.max(1, Math.round(Number(snsStartCount) || 6)),
           sns: {
@@ -760,12 +778,13 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           }
         },
         datingApp: {
-          ...(datingRefreshChanged ? {} : (state.datingApp || {})),
+          ...(datingRefreshChanged || datingAgeRangeChanged ? {} : (state.datingApp || {})),
           refreshIntervalHours: datingRefresh,
           acceptanceChancePercent: datingChance,
-          requestStatus: datingRefreshChanged ? 'none' : state.datingApp?.requestStatus
+          requestStatus: datingRefreshChanged || datingAgeRangeChanged ? 'none' : state.datingApp?.requestStatus
         }
       });
+      setDatingAppAgeRange(datingAgeRangeValue);
       setStatus(datingRefreshChanged ? '자동화 저장 완료: 데이트 어플 갱신 주기가 바뀌어 후보 라운드를 초기화했어요.' : '자동화 저장 완료');
     } catch (error) {
       setStatus(`자동화 저장 실패: ${error instanceof Error ? error.message : String(error)}`);
@@ -1607,6 +1626,15 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
                 <TextInput value={datingAppAcceptanceChance} onChangeText={setDatingAppAcceptanceChance} style={styles.input} keyboardType="number-pad" />
               </View>
             </View>
+            <Text style={styles.label}>AI 여성 생성 나이 범위</Text>
+            <TextInput
+              value={datingAppAgeRange}
+              onChangeText={setDatingAppAgeRange}
+              style={styles.input}
+              placeholder="19-43"
+              placeholderTextColor="#9a9387"
+            />
+            <Text style={styles.help}>예: 19-43, 25~35. 저장 시 19세 이상 범위로 보정되고, 변경하면 기존 소개팅 후보 라운드는 초기화됩니다.</Text>
             <Text style={styles.help}>ETC의 데이트 어플 후보 갱신과 대화신청 수락/거절 확률에 적용됩니다.</Text>
           </View>
           <Pressable onPress={saveAutomation} style={styles.primary}><Text style={styles.primaryText}>자동화 저장</Text></Pressable>

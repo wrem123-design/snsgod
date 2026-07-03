@@ -229,7 +229,15 @@ export async function externalizeStateMedia(state: SNSGodState): Promise<SNSGodS
       currentProfile: state.datingApp.currentProfile ? {
         ...state.datingApp.currentProfile,
         photos: [...(state.datingApp.currentProfile.photos || [])]
-      } : state.datingApp.currentProfile
+      } : state.datingApp.currentProfile,
+      history: [...(state.datingApp.history || [])].map(item => ({
+        ...item,
+        decisions: [...(item.decisions || [])],
+        finalProfile: {
+          ...item.finalProfile,
+          photos: [...(item.finalProfile.photos || [])]
+        }
+      }))
     } : state.datingApp
   };
 
@@ -294,10 +302,15 @@ export async function externalizeStateMedia(state: SNSGodState): Promise<SNSGodS
     const currentProfile = next.datingApp.currentProfile
       ? await externalizeDatingAppProfileImages(next.datingApp.currentProfile)
       : next.datingApp.currentProfile;
+    const history = await Promise.all((next.datingApp.history || []).map(async item => ({
+      ...item,
+      finalProfile: await externalizeDatingAppProfileImages(item.finalProfile)
+    })));
     next.datingApp = {
       ...next.datingApp,
       profiles,
-      currentProfile
+      currentProfile,
+      history
     };
   }
 

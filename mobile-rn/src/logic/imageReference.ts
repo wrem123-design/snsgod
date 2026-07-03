@@ -21,6 +21,12 @@ export function characterReferenceImageForSns(character: SNSGodCharacter | undef
   return randomReferenceImage(characterReferenceImages(character));
 }
 
+export function primaryCharacterReferenceImage(character: SNSGodCharacter | undefined): string | undefined {
+  const direct = String(character?.profileReferenceImage || character?.profileImage || character?.avatar || '').trim();
+  if (RENDERABLE_URI_PATTERN.test(direct)) return direct;
+  return characterReferenceImages(character)[0];
+}
+
 export function characterReferenceImages(character: SNSGodCharacter | undefined): string[] {
   const values = [
     ...(Array.isArray(character?.profileReferenceImages) ? character?.profileReferenceImages || [] : []),

@@ -1,5 +1,6 @@
 import { BlindDateAnswer, BlindDateCandidate, BlindDateMode, BlindDateProgress, BlindDateRanking, BlindDateRotationTurn, BlindDateRound, BlindDateSession, BlindDateWorldcupPair, CandidateAppearance, SNSGodCharacter, SNSGodState, StreetEncounterChoice, StreetEncounterStats } from '../types';
 import { callLLMText, generateImageDataUri, parseJsonObject } from './api';
+import { completeGeneratedCharacter } from './characterCompletion';
 import { appendDebugLog } from './debugLog';
 import { makeId } from './ids';
 import { DEFAULT_COVER_BACKGROUND_DIRECTION } from './prompts';
@@ -2667,6 +2668,29 @@ export function importBlindDateCandidate(state: SNSGodState, sessionId: string, 
       firstDateSummary: session.mode === 'encounter' ? encounterSummary : undefined
     }
   };
+  const completedCharacter = completeGeneratedCharacter(character, {
+    state,
+    source: 'blind_date',
+    modeLabel: session.mode === 'worldcup' ? '이상형 월드컵' : session.mode === 'encounter' ? '우연한 만남' : '블라인드 소개팅',
+    personalitySummary: candidate.personalitySummary,
+    speechStyle: candidate.speechStyle,
+    relationshipStyle: candidate.relationshipStyle,
+    likes: candidate.likes,
+    dislikes: candidate.dislikes,
+    hobbies: candidate.hobbies,
+    job: candidate.job,
+    locationName: candidate.locationBase,
+    snsStyle: candidate.snsStyle,
+    phonePrompt: candidate.callPreview,
+    appearancePrompt: appearanceText,
+    imageIdentityPrompt: candidate.imagePrompt,
+    profileImage: candidate.profileImageUri,
+    referenceImages: candidate.profileImageUri ? [candidate.profileImageUri] : [],
+    profileAvatarPrompt: candidate.imagePrompt,
+    profileCoverPrompt: coverPromptForCandidate(candidate),
+    firstMessage: firstChatMessage,
+    memory
+  });
   const completedSession = {
     ...session,
     status: 'completed' as const,
@@ -2675,7 +2699,7 @@ export function importBlindDateCandidate(state: SNSGodState, sessionId: string, 
   };
   const next: SNSGodState = {
     ...state,
-    characters: [...state.characters, character],
+    characters: [...state.characters, completedCharacter],
     chatRooms: {
       ...state.chatRooms,
       [characterId]: [{ id: roomId, characterId, name: '기본 채팅', createdAt: now, lastActivity: now, relationshipNote: session.mode === 'encounter' ? `${session.encounterLocation || candidate.locationBase}에서 우연히 만나 연락처를 교환한 첫 채팅` : '블라인드 데이트에서 이어진 첫 채팅' }]

@@ -40,6 +40,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
   entryMode?: 'blindDate' | 'encounter';
 }) {
   const [busy, setBusy] = useState(false);
+  const [busyMessage, setBusyMessage] = useState<{ title: string; subtitle: string } | undefined>();
   const [customQuestion, setCustomQuestion] = useState('');
   const [encounterText, setEncounterText] = useState('');
   const [rotationText, setRotationText] = useState('');
@@ -69,14 +70,16 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
     setProfileIndex(0);
   }, [session?.id]);
 
-  async function runBusy(work: () => Promise<void>) {
+  async function runBusy(work: () => Promise<void>, message?: { title: string; subtitle: string }) {
     if (busy) return;
     setBusy(true);
+    setBusyMessage(message);
     try {
       await work();
     } catch (error) {
       Alert.alert('블라인드 데이트 오류', error instanceof Error ? error.message : String(error));
     } finally {
+      setBusyMessage(undefined);
       setBusy(false);
     }
   }
@@ -156,15 +159,21 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
   }
 
   function importSelected() {
-    if (!session) return;
+    if (!session || busy) return;
     const candidateId = session.selectedCandidateId || session.finalRanking?.[0]?.candidateId;
     if (!candidateId) {
       Alert.alert('선택 필요', '연락처를 받을 사람을 먼저 선택해주세요.');
       return;
     }
-    const { next, roomId } = importBlindDateCandidate(state, session.id, candidateId);
-    void Promise.resolve(roomId ? createBlindDateFirstDatePrompt(next, roomId) : next).then(withMeetingPrompt => onChange(withMeetingPrompt)).then(() => {
+    const candidate = session.candidates.find(item => item.id === candidateId);
+    void runBusy(async () => {
+      const { next, roomId } = importBlindDateCandidate(state, session.id, candidateId);
+      const withMeetingPrompt = roomId ? await createBlindDateFirstDatePrompt(next, roomId) : next;
+      await onChange(withMeetingPrompt);
       if (roomId) onOpenRoom(roomId);
+    }, {
+      title: `${candidate?.name || '그녀'}에게 연락처를 부탁하는 중...`,
+      subtitle: '살짝 긴장한 손끝으로 메시지를 정리하고, 답장을 기다렸다가 첫 데이트 초대장까지 조심히 건네는 중이에요.'
     });
   }
 
@@ -314,7 +323,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
               </View>
             )}
 
-            {busy ? <LoadingBlock /> : null}
+            {busy ? <LoadingBlock message={busyMessage} /> : null}
 
             {session.mode === 'encounter' ? (
               <StreetEncounterMode
@@ -450,7 +459,7 @@ function SetupModeCard({ title, subtitle, action, rows, onPress, disabled }: {
   );
 }
 
-function LoadingBlock() {
+function LoadingBlock({ message }: { message?: { title: string; subtitle: string } }) {
   const messages = useMemo(() => [
     ['소개팅 장소에 후보들이 하나둘 모이고 있어요.', '누군가는 거울을 보고, 누군가는 답장을 미리 생각 중이에요.'],
     ['첫인상 카드를 정리하는 중이에요.', '너무 비슷한 얼굴은 슬쩍 돌려보내고 있습니다.'],
@@ -468,7 +477,7 @@ function LoadingBlock() {
     return () => clearInterval(timer);
   }, [messages.length]);
 
-  const current = messages[index] || messages[0];
+  const current = message ? [message.title, message.subtitle] : messages[index] || messages[0];
   return (
     <View style={styles.loadingBlock}>
       <ActivityIndicator color={colors.accent} />

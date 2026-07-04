@@ -6,7 +6,7 @@ import { callLLMText, generateImageDataUri, imagePromptWithoutCharacterName, par
 import { makeId } from '../logic/ids';
 import { formatMessageTime } from '../logic/time';
 import { MAX_CONTEXT_MESSAGES, MAX_GROUP_ROOM_MESSAGES } from '../logic/limits';
-import { SNSGodCharacter, SNSGodMessage, SNSGodState, Sticker } from '../types';
+import { MeetingEventSession, SNSGodCharacter, SNSGodMessage, SNSGodState, Sticker } from '../types';
 import { markRoomRead } from '../logic/notifications';
 import { beginChatJob, endChatJob, isCurrentChatJob, tryLockGeneratingRoom } from '../logic/chatJobs';
 import { shouldAllowChatImageGeneration } from '../logic/chatImageGuard';
@@ -15,7 +15,7 @@ import { isRenderableMediaUri } from '../logic/media';
 import { characterReferenceImageForPrompt } from '../logic/imageReference';
 import { characterWithConversationRhythm } from '../logic/conversationRhythm';
 import { forceUpdateRoomMemory, groupMemoryPromptBlock, updateRoomMemoryAfterAppend } from '../logic/memoryBridge';
-import { dateGroundingInstruction } from '../logic/prompts';
+import { dateGroundingInstruction, resolvedPrompts } from '../logic/prompts';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const GROUP_REPLY_TIMEOUT_MS = 120000;
@@ -107,6 +107,7 @@ function participantNames(participants: SNSGodCharacter[]) {
 }
 
 function buildGroupPrompt(state: SNSGodState, roomId: string, participants: SNSGodCharacter[], latestUserText: string) {
+  const prompts = resolvedPrompts(state);
   const profile = state.config.apiProfiles[state.config.apiType] || {};
   const messages = (state.messages[roomId] || []).slice(-Number(profile.contextMessageLimit || MAX_CONTEXT_MESSAGES));
   const transcript = messages.map(message => {
@@ -124,7 +125,8 @@ function buildGroupPrompt(state: SNSGodState, roomId: string, participants: SNSG
     'Return only valid JSON: {"messages":[{"characterId":"one allowed id","content":"short Korean chat bubble","sticker":"","imagePrompt":"","imageCaption":""}]}. Do not wrap it in markdown.',
     state.config.imageGeneration?.enabled === false
       ? 'Image sending is disabled. Do not include imagePrompt or imageCaption.'
-      : 'Image sending is strictly opt-in. Include imagePrompt when the latest user message explicitly asks for a photo, selfie, picture, image, visual, drawing, outfit, face, appearance, scene, or asks someone to show/send/take a photo. If the user asks situational questions about food, cafe, outside, travel, scenery, outfit, wearing, or what someone is doing, one relevant phone-photo imagePrompt is allowed occasionally, but not every time. Never add random selfies or atmospheric images during ordinary group chat.',
+      : prompts.groupChatImageRules,
+    prompts.adultBoundaryRules,
     'Write 1 to 4 messages. Usually only 1 to 3 members reply. Not everyone needs to answer.',
     'Every message must include characterId from the allowed member list. Do not use outside speakers.',
     'Do not expose JSON keys as visible chat text. Do not echo, rewrite, summarize, or delete the latest user message.',
@@ -164,13 +166,16 @@ function resolveGroupSpeaker(participants: SNSGodCharacter[], item: NonNullable<
   return participants.find(character => character.name === name || character.handle === name || character.id === name);
 }
 
-export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurrent, onOpenSettings }: {
+export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurrent, onOpenSettings, onOpenMeeting, onMaybeStartMeeting, onRequestMeetingPrompt }: {
   state: SNSGodState;
   roomId: string;
   onBack: () => void;
   onChange: (next: SNSGodState) => Promise<void> | void;
   onCommitCurrent?: (patch: (current: SNSGodState) => SNSGodState) => Promise<SNSGodState | void> | SNSGodState | void;
   onOpenSettings: (roomId: string) => void;
+  onOpenMeeting?: (sessionId: string) => void;
+  onMaybeStartMeeting?: (roomId: string, latestUserInput: string) => Promise<boolean>;
+  onRequestMeetingPrompt?: (roomId: string) => Promise<boolean>;
 }) {
   const room = findGroup(state, roomId);
   const participantKey = Array.isArray(room?.participantIds) ? room.participantIds.join('|') : '';
@@ -181,11 +186,18 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
   const messages = useMemo(() => state.messages[roomId] || [], [state.messages, roomId]);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [requestingMeeting, setRequestingMeeting] = useState(false);
   const [showStickers, setShowStickers] = useState(false);
+  const [showQuickActions, setShowQuickActions] = useState(false);
   const [typingCharacters, setTypingCharacters] = useState<SNSGodCharacter[]>([]);
   const listRef = useRef<FlatList<SNSGodMessage>>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
+  const meetingStatusById = useMemo(() => {
+    const status = new Map<string, string | undefined>();
+    for (const session of state.meetingEventSessions || []) status.set(session.id, session.status);
+    return status;
+  }, [state.meetingEventSessions]);
 
   function scrollToLatest(animated = true) {
     requestAnimationFrame(() => {
@@ -244,6 +256,10 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
       ...appendGroupMessage(current, roomId, userMessage),
       unreadCounts: { ...current.unreadCounts, [roomId]: 0 }
     }));
+    if (onMaybeStartMeeting && await onMaybeStartMeeting(roomId, content)) {
+      setSending(false);
+      return;
+    }
     const jobId = beginChatJob(roomId);
     try {
       const firstReader = chooseFallbackSpeaker(participants, stateRef.current.messages[roomId] || []);
@@ -301,7 +317,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
             latestUserText: content,
             imagePrompt: item.imagePrompt,
             imageCaption: item.imageCaption,
-            reason: 'no_explicit_image_intent'
+            reason: 'image_context_not_matched'
           }), 'info');
           item.imagePrompt = undefined;
           item.imageCaption = undefined;
@@ -364,6 +380,46 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
     void markReadLater(roomId, participants);
   }
 
+  async function requestMeetingPrompt() {
+    if (!room || !onRequestMeetingPrompt || requestingMeeting) return;
+    setRequestingMeeting(true);
+    setShowStickers(false);
+    setShowQuickActions(false);
+    try {
+      const created = await onRequestMeetingPrompt(room.id);
+      if (!created) Alert.alert('단톡 만남 이벤트', '현재 단톡방에서는 만남 이벤트를 준비할 수 없습니다.');
+    } catch (error) {
+      Alert.alert('단톡 만남 이벤트 실패', error instanceof Error ? error.message : String(error));
+    } finally {
+      setRequestingMeeting(false);
+    }
+  }
+
+  async function startMeetingEvent(sessionId: string) {
+    await commitCurrent(current => ({
+      ...current,
+      activeMeetingEventId: sessionId,
+      meetingEventSessions: (current.meetingEventSessions || []).map(session => session.id === sessionId ? { ...session, status: 'active' } : session)
+    }));
+    onOpenMeeting?.(sessionId);
+  }
+
+  async function cancelMeetingEvent(sessionId: string, messageId: string) {
+    await commitCurrent(current => ({
+      ...current,
+      meetingEventSessions: (current.meetingEventSessions || []).map(session => session.id === sessionId ? { ...session, status: 'dismissed', endedAt: Date.now() } : session),
+      messages: {
+        ...current.messages,
+        [roomId]: (current.messages[roomId] || []).map(message => message.id === messageId ? {
+          ...message,
+          content: '단톡 만남 이벤트를 취소했습니다.',
+          meetingEventPrompt: false,
+          meetingEventCancelled: true
+        } : message)
+      }
+    }));
+  }
+
   if (!room) {
     return (
       <View style={styles.empty}>
@@ -390,12 +446,37 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
         contentContainerStyle={styles.messages}
         onContentSizeChange={() => scrollToLatest(false)}
         onLayout={() => scrollToLatest(false)}
-        renderItem={({ item }) => <GroupBubble message={item} participants={participants} userName={state.config.userName || '나'} userStickers={state.userStickers || []} />}
+        renderItem={({ item }) => {
+          const meetingSessionId = String(item.meetingEventId || '');
+          return (
+            <GroupBubble
+              message={item}
+              participants={participants}
+              userName={state.config.userName || '나'}
+              userStickers={state.userStickers || []}
+              meetingSession={meetingSessionId ? (state.meetingEventSessions || []).find(session => session.id === meetingSessionId) : undefined}
+              meetingStatus={meetingSessionId ? meetingStatusById.get(meetingSessionId) : undefined}
+              onStartMeeting={startMeetingEvent}
+              onCancelMeeting={cancelMeetingEvent}
+            />
+          );
+        }}
         ListFooterComponent={typingCharacters.length ? <GroupTypingBubble characters={typingCharacters} /> : null}
       />
       {showStickers ? <StickerTray stickers={state.userStickers || []} onPick={sendSticker} /> : null}
+      {showQuickActions ? (
+        <View pointerEvents="box-none" style={styles.quickActionLayer}>
+          <Pressable accessibilityLabel="빠른 액션 닫기" onPress={() => setShowQuickActions(false)} style={styles.quickActionBackdrop} />
+          <View style={styles.quickActionMenu}>
+            <Pressable onPress={requestMeetingPrompt} disabled={requestingMeeting} style={[styles.quickActionItem, requestingMeeting && styles.disabled]}>
+              <Text style={styles.quickActionText}>{requestingMeeting ? '준비 중' : '단톡 만남 이벤트'}</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
       <View style={styles.composer}>
-        <Pressable onPress={() => setShowStickers(value => !value)} disabled={sending} style={[styles.stickerToggle, sending && styles.disabled]}><Text style={styles.stickerToggleText}>스티커</Text></Pressable>
+        <Pressable onPress={() => { setShowQuickActions(false); setShowStickers(value => !value); }} disabled={sending} style={[styles.stickerToggle, sending && styles.disabled]}><Text style={styles.stickerToggleText}>스티커</Text></Pressable>
+        <Pressable accessibilityLabel="단톡 만남 이벤트 메뉴" onPress={() => { setShowStickers(false); setShowQuickActions(value => !value); }} disabled={sending || requestingMeeting} style={[styles.eventIconButton, (sending || requestingMeeting) && styles.disabled]}><Text style={styles.eventIconText}>{requestingMeeting ? '…' : '👥'}</Text></Pressable>
         <TextInput value={text} onChangeText={setText} style={styles.input} placeholder="메시지 입력" multiline />
         <Pressable onPress={send} disabled={!text.trim() || sending} style={[styles.send, (!text.trim() || sending) && styles.disabled]}>
           <Text style={styles.sendText}>전송</Text>
@@ -440,13 +521,41 @@ function StickerTray({ stickers, onPick }: { stickers: Sticker[]; onPick: (stick
   );
 }
 
-function GroupBubble({ message, participants, userName, userStickers }: { message: SNSGodMessage; participants: SNSGodCharacter[]; userName: string; userStickers: Sticker[] }) {
+function GroupBubble({ message, participants, userName, userStickers, meetingSession, meetingStatus, onStartMeeting, onCancelMeeting }: {
+  message: SNSGodMessage;
+  participants: SNSGodCharacter[];
+  userName: string;
+  userStickers: Sticker[];
+  meetingSession?: MeetingEventSession;
+  meetingStatus?: string;
+  onStartMeeting?: (sessionId: string) => void;
+  onCancelMeeting?: (sessionId: string, messageId: string) => void;
+}) {
   const [promptOpen, setPromptOpen] = useState(false);
   const mine = message.role === 'user';
   const system = message.role === 'system';
   const character = participants.find(item => item.id === message.characterId);
   const sticker = message.sticker ? (mine ? userStickers : character?.stickers || []).find(item => String(item.id) === String(message.sticker)) : undefined;
-  if (system) return <View style={styles.systemBubble}><Text style={styles.systemText}>{message.content}</Text></View>;
+  if (system) {
+    const meetingSessionId = String(message.meetingEventId || '');
+    const pendingMeeting = Boolean(message.meetingEventPrompt && meetingSessionId && meetingStatus === 'pending');
+    return (
+      <View style={styles.systemBubble}>
+        {pendingMeeting && meetingSession ? <GroupMeetingPromptPreview session={meetingSession} participants={participants} /> : null}
+        <Text style={styles.systemText}>{message.content}</Text>
+        {pendingMeeting ? (
+          <View style={styles.meetingActions}>
+            <Pressable onPress={() => onStartMeeting?.(meetingSessionId)} style={styles.meetingPrimary}>
+              <Text style={styles.meetingPrimaryText}>단톡 만남 시작</Text>
+            </Pressable>
+            <Pressable onPress={() => onCancelMeeting?.(meetingSessionId, message.id)} style={styles.meetingSecondary}>
+              <Text style={styles.meetingSecondaryText}>취소</Text>
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
+    );
+  }
   return (
     <View style={[styles.messageRow, mine && styles.messageRowMine]}>
       {!mine ? <Avatar character={character} size={34} /> : null}
@@ -474,6 +583,21 @@ function GroupBubble({ message, participants, userName, userStickers }: { messag
         {message.imageCaption ? <Text style={styles.imageHint}>{message.imageCaption}</Text> : null}
       </View>
       {!mine ? <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text> : null}
+    </View>
+  );
+}
+
+function GroupMeetingPromptPreview({ session, participants }: { session: MeetingEventSession; participants: SNSGodCharacter[] }) {
+  const present = (session.presentCharacterIds || []).map(id => participants.find(character => character.id === id)).filter(Boolean) as SNSGodCharacter[];
+  const previewImage = isRenderableMediaUri(session.stillImage) ? String(session.stillImage) : '';
+  return (
+    <View style={styles.meetingPreview}>
+      {previewImage ? <Image source={{ uri: previewImage }} style={styles.meetingPreviewImage} resizeMode="cover" /> : null}
+      <View style={styles.meetingPreviewBody}>
+        <Text style={styles.meetingPreviewTitle}>단톡 만남 이벤트</Text>
+        <View style={styles.meetingAvatarRow}>{present.map(character => <Avatar key={character.id} character={character} size={26} />)}</View>
+        <Text style={styles.meetingPreviewText}>{session.location || '만남 장소'} · {session.mood || '단톡 만남 분위기'}</Text>
+      </View>
     </View>
   );
 }
@@ -511,15 +635,33 @@ const styles = StyleSheet.create({
   imageHint: { marginTop: 6, fontSize: 12, color: colors.sub },
   systemBubble: { alignSelf: 'center', maxWidth: '88%', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: 'rgba(255,255,255,0.45)' },
   systemText: { color: '#4f5a62', fontSize: 12, fontWeight: '700' },
+  meetingPreview: { marginBottom: 8, minWidth: 220, borderRadius: 12, overflow: 'hidden', backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
+  meetingPreviewImage: { width: '100%', height: 112, backgroundColor: '#eee8dc' },
+  meetingPreviewBody: { padding: 10 },
+  meetingPreviewTitle: { color: colors.text, fontSize: 15, fontWeight: '900' },
+  meetingAvatarRow: { marginTop: 6, flexDirection: 'row', gap: 4, alignItems: 'center' },
+  meetingPreviewText: { marginTop: 6, color: colors.sub, fontSize: 12, lineHeight: 17, fontWeight: '800' },
+  meetingActions: { marginTop: 9, flexDirection: 'row', gap: 8 },
+  meetingPrimary: { flex: 1, minHeight: 42, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
+  meetingPrimaryText: { color: '#241a00', fontSize: 14, fontWeight: '900' },
+  meetingSecondary: { minWidth: 74, minHeight: 42, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
+  meetingSecondaryText: { color: colors.text, fontSize: 14, fontWeight: '900' },
   composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 10, backgroundColor: '#f7f2e9', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   stickerToggle: { minWidth: 58, minHeight: 42, paddingHorizontal: 10, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
   stickerToggleText: { color: colors.text, fontWeight: '900' },
+  eventIconButton: { width: 46, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
+  eventIconText: { color: colors.text, fontSize: 22, lineHeight: 26, fontWeight: '900' },
   stickerTray: { maxHeight: 144, paddingHorizontal: 10, paddingVertical: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 8, backgroundColor: '#f7f2e9', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   stickerTrayItem: { width: 72, borderRadius: 10, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', padding: 6, alignItems: 'center' },
   stickerThumb: { width: 48, height: 48, borderRadius: 8 },
   stickerThumbText: { width: 48, height: 48, borderRadius: 8, overflow: 'hidden', textAlign: 'center', lineHeight: 48, backgroundColor: '#eee8dc', color: colors.text, fontWeight: '900' },
   stickerTrayName: { marginTop: 4, color: colors.sub, fontSize: 11, fontWeight: '800' },
   emptyStickerText: { color: colors.sub, fontWeight: '800', padding: 8 },
+  quickActionLayer: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 62, justifyContent: 'flex-end', alignItems: 'flex-start', paddingLeft: 82, paddingBottom: 8 },
+  quickActionBackdrop: { ...StyleSheet.absoluteFillObject },
+  quickActionMenu: { minWidth: 150, borderRadius: 12, backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border, shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
+  quickActionItem: { minHeight: 46, paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center' },
+  quickActionText: { color: colors.text, fontSize: 15, fontWeight: '900' },
   input: { flex: 1, minHeight: 42, maxHeight: 112, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 18, backgroundColor: '#fff', color: colors.text, fontSize: 16 },
   send: { minWidth: 64, minHeight: 42, paddingHorizontal: 14, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
   disabled: { opacity: 0.5 },

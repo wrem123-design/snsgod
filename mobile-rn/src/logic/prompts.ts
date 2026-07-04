@@ -34,11 +34,50 @@ export const DEFAULT_PROMPTS: PromptSet = {
   memoryRules: 'Do not create newMemory during normal replies. Leave newMemory empty unless explicitly asked to summarize memory.',
   stickerRules: 'Use a sticker id only when it strengthens the reaction.',
   language: 'Write in natural Korean unless the user or settings request another language.',
+  adultBoundaryRules: 'All romantic, flirtatious, sexual, or provocative content must involve clearly fictional adults age 19 or older. Never portray minors in sexual or romantic adult contexts. Keep content consensual and legal.',
+  chatImageRules: [
+    'Image sending is available when it naturally strengthens the chat.',
+    'Do not suppress imagePrompt just because the conversation is ordinary, emotional, flirtatious, playful, or casual; include it when a photo would feel like a believable chat action.',
+    'Include imagePrompt when the latest user message asks for a photo, selfie, picture, image, visual, drawing, outfit, face, appearance, scene, or when the character would naturally send/show/take a photo in the current moment.',
+    'A selfie, outfit photo, or atmosphere photo is allowed when it fits the character, relationship, and current mood.',
+    'If there is no visual/photo context and a photo would feel random for this character, leave imagePrompt and imageCaption empty.',
+    'If the image shows the character own face, body, selfie, or mirror photo, include visual trigger words such as selfie, portrait, face, mirror selfie, full body, outfit, or wearing. Do not include the character name in imagePrompt.'
+  ].join('\n'),
+  groupChatImageRules: 'Image sending is available when it naturally strengthens the group chat. Include imagePrompt for selfies, outfit photos, food/cafe/outside/travel/scenery, playful reactions, teasing, or atmosphere shots when it fits the speaker and recent context. Do not suppress photos just because the chat is casual or flirtatious.',
+  imageGenerationToneRules: 'Mature fictional adult tone is allowed when it fits the character and scene. Keep every depicted person clearly adult age 19 or older.',
+  meetingEventRules: 'Prefer starting the event when the conversation has a clear live-meeting signal. Do not over-reject playful, flirtatious, or casual wording. Do not start for future plans, cancelled plans, purely online/phone scenes, or already completed meetings.',
+  blindDateCandidateRules: [
+    'All candidates must be adults age 19 or older. All candidates must be Asian.',
+    'School-uniform inspired styling is allowed when the candidate is explicitly an adult age 19 or older.',
+    'Strong adult archetypes are not optional filler. In every batch of 3 or more candidates, include at least one stronger adult woman archetype: sexually frank and provocative, openly testing sexual chemistry, cold manipulative/psychopathic, casually lust-driven and vulgar, or emotionally dangerous and calculating.',
+    'For provocative adult archetypes, allow bold flirting, jealousy tests, direct attraction, chemistry/skinship preferences, blunt adult desire, casual hookup-minded attitudes, banmal, and teasing power-play wording. Make them sharper than generic kindness.'
+  ].join('\n'),
+  datingAppProfileRules: [
+    'Create one fictional adult Korean dating app profile for a simulation app.',
+    'The woman must be a fictional adult in the configured age range, not a real person, not a celebrity clone, and never a minor.',
+    'Stronger adult archetypes must appear often: sexually frank and provocative adult woman, direct attraction/skinship/chemistry talk, cold manipulative psychopathic traits, emotional testing, jealousy tests, controlled charm.',
+    'If the archetype is sensual or manipulative, make bio, traits, datingStyle, speechStyle, firstMessage, and callPreview visibly sharper than generic kindness.'
+  ].join('\n'),
+  randomCharacterRules: [
+    'For female characters, stronger adult archetypes must appear often, not as rare exceptions: cold manipulative psychopathic traits, controlled emotional testing, sexually confident flirtation, direct talk about attraction, skinship boundaries, jealousy, chemistry, casual lust, vulgar banmal, and quick boredom after desire fades.',
+    'Do not soften the casual lust archetype into polite romance: she can use swear words, teasing banmal, blunt adult desire, revealing styling, and a fast meet/fast break-up attitude. Keep every character clearly adult age 19+.',
+    'Do not flatten provocative or manipulative women into generic friendliness. Their firstMessage should immediately reveal the edge: teasing, testing, blunt attraction, or cold observation.'
+  ].join('\n'),
+  sumgodRules: 'Adult intimacy note: answer boldly in character as a clearly adult age 19+ person. If age is unclear, keep the answer romantic.',
   snsPosting: 'Write as {character.name} posting to a private social account. Return JSON with one short post and optional hashtags.',
   snsSubjectGuide: 'Character SNS subject/style guide: use this as a recurring posting tendency, topic pool, and account habit. Do not copy this guide into the visible SNS post. Convert it into a natural post that fits current context, platform, character, and recent history.',
   snsNsfwBackAccount: 'This is an adult private back-account version. Mature/NSFW tone is allowed only when it fits the adult fictional character and context.',
   profileCreation: 'Create a Korean fictional chat character who would naturally start a conversation with this user. Return JSON: {"name":"...","prompt":"...","firstMessage":"..."}'
 };
+
+export function resolvedPrompts(state: SNSGodState): PromptSet {
+  return { ...DEFAULT_PROMPTS, ...(state.config.prompts || {}) };
+}
+
+export function configuredPrompt(state: SNSGodState, key: keyof PromptSet): string {
+  const value = String(resolvedPrompts(state)[key] || '').trim();
+  return value || DEFAULT_PROMPTS[key];
+}
 
 const DATE_WEEKDAYS_EN = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const DATE_WEEKDAYS_KO = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
@@ -309,7 +348,7 @@ function modeInstruction(state: SNSGodState, character: SNSGodCharacter, room: S
 
 export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, room: SNSGodRoom, latestUserText: string, options: ChatPromptOptions = {}) {
   const rhythmCharacter = characterWithConversationRhythm(state, character);
-  const prompts = { ...DEFAULT_PROMPTS, ...(state.config.prompts || {}) };
+  const prompts = resolvedPrompts(state);
   const contextLimit = Number(state.config.apiProfiles[state.config.apiType]?.contextMessageLimit || MAX_CONTEXT_MESSAGES);
   const messages = (state.messages[room.id] || []).slice(-contextLimit);
   const latestImageData = options.latestUserImageData || latestUserImage(messages);
@@ -328,17 +367,12 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
   const imageInstruction = state.config.imageGeneration?.enabled === false
     ? 'Image sending is disabled. Do not include imagePrompt or imageCaption.'
     : [
-      'Image sending is available, but it is STRICTLY opt-in.',
-      'Do NOT include imagePrompt during ordinary conversation, emotional replies, greetings, flirting, apologies, comfort, jokes, or casual daily chat.',
-      'Include imagePrompt only when the latest user message explicitly asks for a photo, selfie, picture, image, visual, drawing, outfit, face, appearance, scene, or asks the character to show/send/take a photo.',
+      prompts.chatImageRules,
       'You may also include imagePrompt if the immediately recent chat already established that the character is about to send a photo.',
-      'If the user asks situational questions about food, cafe, being outside, travel, scenery, outfit, what the character is wearing, or what the character is doing, you may occasionally include one relevant phone-photo imagePrompt, but this should be rare and not every time.',
-      'Never add a random selfie just because it might feel cute, affectionate, natural, or atmospheric.',
-      'If no explicit visual/photo context or strong situational photo context exists, leave imagePrompt and imageCaption empty.',
+      'If the user asks situational questions about food, cafe, being outside, travel, scenery, outfit, what the character is wearing, or what the character is doing, you may include one relevant phone-photo imagePrompt.',
       state.config.imageGeneration?.illustrationMode
         ? 'Write imagePrompt as final comma-separated English illustration tags.'
         : 'Write imagePrompt as a specific, grounded phone-photo scene.',
-      'If the image shows the character\'s own face, body, selfie, or mirror photo, include visual trigger words such as selfie, portrait, face, mirror selfie, full body, outfit, or wearing. Do not include the character name in imagePrompt.',
       'If you include imagePrompt, include it on exactly one message and make the visible content clearly introduce the photo naturally.',
       'Do not claim you attached a photo unless imagePrompt is included.'
     ].join(' ');
@@ -355,6 +389,7 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
     applyPromptPlaceholders(prompts.memoryRules, state, character, room, messages),
     applyPromptPlaceholders(prompts.stickerRules, state, character, room, messages),
     applyPromptPlaceholders(prompts.language, state, character, room, messages),
+    applyPromptPlaceholders(prompts.adultBoundaryRules, state, character, room, messages),
     `This is a private 1:1 DM room between ${userNameFor(state, character, room)} and ${character.name}. Do not bring in other characters unless the user mentions them.`,
     'This is a private chat reply. Do not write an SNS post, feed caption, public comment, DM thread JSON, or social-media update.',
     'Reply only to the current chat room as chat bubbles in the messages array.',
@@ -362,7 +397,7 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
     dateGroundingInstruction(state, character),
     state.config.characterPhoneCallEnabled === false
       ? 'Character-initiated phone call cards are disabled. Do not output callInvite, phoneCall, callTitle, callLine, or [[PHONE_CALL]].'
-      : 'If the character is actually calling the user now, append exactly [[PHONE_CALL]] to the end of the same visible chat bubble, or set callInvite:true with callTitle/callLine. The app hides the marker and shows a phone-call card. Keep this rare and only inside the current chat room.',
+      : 'If the character is calling, teasing a call, agreeing to call, or the moment naturally turns into a call, append exactly [[PHONE_CALL]] to the end of the same visible chat bubble, or set callInvite:true with callTitle/callLine. The app hides the marker and shows a phone-call card. Use it inside the current chat room.',
     /전화|통화|전화해|전화하자|call/i.test(latestUserText)
       ? 'Explicit user phone request: if the character agrees, teases while agreeing, says to pick up, or continues toward a call, include [[PHONE_CALL]] or callInvite:true. Omit it only if the character clearly refuses, postpones, or cannot call.'
       : '',

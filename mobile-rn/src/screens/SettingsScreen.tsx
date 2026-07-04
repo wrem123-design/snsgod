@@ -10,7 +10,7 @@ import { callLLMText } from '../logic/api';
 import { makeId } from '../logic/ids';
 import { isRenderableMediaUri, pickStickerDataUri } from '../logic/media';
 import { Avatar } from '../components/Avatar';
-import { fetchGrokAccounts, fetchGrokBilling, fetchGrokStatus, GrokBilling, GrokLocalAccount, GrokLocalStatus, grokBaseUrl, grokCloudBaseUrl, logoutGrokOAuth, selectGrokOAuth, startGrokLogin } from '../logic/grokLocal';
+import { fetchGrokAccounts, fetchGrokBilling, fetchGrokStatus, GrokBilling, GrokLocalAccount, GrokLocalStatus, grokBaseUrl, grokCloudBaseUrl, logoutGrokOAuth, selectGrokOAuth, startGrokLogin, submitGrokOAuthCallback } from '../logic/grokLocal';
 import { createBackupPayload } from '../logic/backup';
 import { DEFAULT_USER_APPEARANCE_PROMPT } from '../logic/prompts';
 import { MAX_CONTEXT_MESSAGES } from '../logic/limits';
@@ -195,10 +195,15 @@ function grokLoginMessageFromPayload(payload: unknown): string {
 async function openExternalUrl(url: string): Promise<boolean> {
   const target = String(url || '').trim();
   if (!/^https?:\/\//i.test(target)) return false;
-  const canOpen = await Linking.canOpenURL(target).catch(() => true);
-  if (!canOpen) return false;
-  await Linking.openURL(target);
-  return true;
+  try {
+    await Linking.openURL(target);
+    return true;
+  } catch {
+    const canOpen = await Linking.canOpenURL(target).catch(() => false);
+    if (!canOpen) return false;
+    await Linking.openURL(target);
+    return true;
+  }
 }
 
 const TermuxBridge = NativeModules.TermuxBridge as undefined | {
@@ -306,6 +311,9 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   const [grokStatus, setGrokStatus] = useState<GrokLocalStatus | undefined>();
   const [grokBilling, setGrokBilling] = useState<GrokBilling | undefined>();
   const [grokAccounts, setGrokAccounts] = useState<GrokLocalAccount[]>([]);
+  const [grokLoginBusy, setGrokLoginBusy] = useState(false);
+  const [grokOAuthCallback, setGrokOAuthCallback] = useState('');
+  const [grokCallbackBusy, setGrokCallbackBusy] = useState(false);
   const [snsDefaultPlatform, setSnsDefaultPlatform] = useState<SnsSettingsPlatform>(() => snsPlatform(snsConfig.platform));
   const initialSnsOptions = useMemo(() => snsPlatformOptions(snsConfig, snsPlatform(snsConfig.platform)), [snsConfig]);
   const [snsCommentQty, setSnsCommentQty] = useState(String(initialSnsOptions.commentQty || '2-4'));
@@ -830,7 +838,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     }
   }
 
-  async function refreshGrokLocal() {
+  async function refreshGrokLocal(options?: { silent?: boolean }): Promise<GrokLocalStatus | undefined> {
     const baseUrl = imageProvider === 'grok-cloud' ? (grokCloudUrl.trim() || 'http://168.110.122.66') : (grokLocalBaseUrl.trim() || 'http://127.0.0.1:5000');
     try {
       const [nextStatus, nextBilling, nextAccounts] = await Promise.all([
@@ -841,12 +849,20 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
       setGrokStatus(nextStatus);
       setGrokBilling(nextBilling);
       setGrokAccounts(nextAccounts);
-      setStatus(`Grok 상태 확인 완료: ${nextStatus.tokenLabel || '상태 확인됨'} · CREDIT ${Math.round(Number(nextBilling.remaining_percent || 0))}%`);
-      Alert.alert('Grok 상태 확인', `${nextStatus.tokenLabel || '상태 확인됨'}\nCREDIT ${Math.round(Number(nextBilling.remaining_percent || 0))}%`);
+      if (nextStatus.hermesAuthenticated) {
+        setStatus(`Grok 상태 확인 완료: ${nextStatus.tokenLabel || '상태 확인됨'} · CREDIT ${Math.round(Number(nextBilling.remaining_percent || 0))}%`);
+        if (!options?.silent) Alert.alert('Grok 상태 확인', `${nextStatus.tokenLabel || '상태 확인됨'}\nCREDIT ${Math.round(Number(nextBilling.remaining_percent || 0))}%`);
+      } else {
+        const message = `Grok 인증 필요: ${nextStatus.tokenMessage || nextStatus.tokenLabel || 'OAuth 토큰 검증이 통과하지 않았습니다.'}`;
+        setStatus(message);
+        if (!options?.silent) Alert.alert('Grok 인증 필요', `${message}\n새창 로그인 후 callback URL 또는 인증 코드를 다시 붙여넣어 주세요.`);
+      }
+      return nextStatus;
     } catch (error) {
       const message = `Grok 상태 확인 실패: ${error instanceof Error ? error.message : String(error)}`;
       setStatus(message);
-      Alert.alert('Grok 상태 확인 실패', `${message}\nTermux에서 서버가 실행 중인지 먼저 확인하세요.`);
+      if (!options?.silent) Alert.alert('Grok 상태 확인 실패', `${message}\n서버가 실행 중인지 먼저 확인하세요.`);
+      return undefined;
     }
   }
 
@@ -881,26 +897,61 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   }
 
   async function startGrokOAuthLoginOnServer(baseUrl: string) {
+    if (grokLoginBusy) return;
+    setGrokLoginBusy(true);
     try {
       const payload = await startGrokLogin(baseUrl);
       const loginUrl = grokLoginUrlFromPayload(payload);
-      await refreshGrokLocal();
       const opened = await openExternalUrl(loginUrl);
       if (opened) {
-        setStatus('Grok OAuth 로그인 페이지를 브라우저로 열었습니다. 로그인 후 다시 상태 확인을 눌러 주세요.');
-        Alert.alert('Grok 계정 추가', '브라우저에서 X/Grok 로그인을 완료한 뒤 앱으로 돌아와 상태 확인을 눌러 주세요.');
+        setStatus('Grok 로그인 창을 열었습니다. 승인 후 브라우저의 callback URL 또는 표시된 코드를 복사해 앱의 연동 완료 칸에 붙여넣어 주세요.');
+        setTimeout(() => {
+          void refreshGrokLocal();
+        }, 1200);
         return;
       }
       const serverMessage = grokLoginMessageFromPayload(payload);
       const message = serverMessage
-        ? `${serverMessage}\n\n서버가 폰에서 열 수 있는 OAuth 로그인 URL을 반환하지 않았습니다. 클라우드 서버의 /api/hermes/login POST 응답에 auth_url 또는 login_url이 포함되어야 합니다.`
-        : '서버가 폰에서 열 수 있는 OAuth 로그인 URL을 반환하지 않았습니다. 클라우드 서버의 /api/hermes/login POST 응답에 auth_url 또는 login_url이 포함되어야 합니다.';
+        ? `${serverMessage}\n\n서버가 폰에서 열 수 있는 OAuth 로그인 URL을 반환하지 않았습니다. /api/hermes/login 응답에 auth_url, login_url, url 중 하나가 필요합니다.`
+        : '서버가 폰에서 열 수 있는 OAuth 로그인 URL을 반환하지 않았습니다. /api/hermes/login 응답에 auth_url, login_url, url 중 하나가 필요합니다.';
       setStatus(message);
       Alert.alert('Grok 계정 추가', message);
     } catch (error) {
       const message = `Grok 계정 추가 실패: ${error instanceof Error ? error.message : String(error)}`;
       setStatus(message);
-      Alert.alert('Grok 계정 추가 실패', `${message}\n서버 주소가 맞는지, 서버가 /api/hermes/login POST에서 auth_url 또는 login_url을 반환하는지 확인해 주세요.`);
+      Alert.alert('Grok 계정 추가 실패', `${message}\n서버 주소가 맞는지, 서버가 /api/hermes/login POST에서 로그인 URL을 반환하는지 확인해 주세요.`);
+    } finally {
+      setGrokLoginBusy(false);
+    }
+  }
+
+  async function submitCloudGrokOAuthCallback() {
+    if (grokCallbackBusy) return;
+    const callback = grokOAuthCallback.trim();
+    if (!callback) {
+      Alert.alert('Grok OAuth', '브라우저 주소창의 callback URL 전체 또는 화면에 표시된 인증 코드를 붙여넣어 주세요.');
+      return;
+    }
+    const baseUrl = grokCloudUrl.trim() || 'http://168.110.122.66';
+    setGrokCallbackBusy(true);
+    try {
+      await submitGrokOAuthCallback(baseUrl, callback);
+      setGrokOAuthCallback('');
+      const nextStatus = await refreshGrokLocal({ silent: true });
+      if (nextStatus?.hermesAuthenticated) {
+        setStatus('Grok OAuth 연동 완료');
+        Alert.alert('Grok OAuth', '연동이 완료되었습니다.');
+      } else {
+        const tokenMessage = nextStatus?.tokenMessage || '서버가 OAuth 코드는 저장했지만 xAI API 검증이 아직 통과하지 않았습니다.';
+        setStatus(`Grok OAuth 검증 필요: ${tokenMessage}`);
+        Alert.alert('Grok OAuth 검증 필요', `${tokenMessage}\n상태 확인이 토큰을 지우지는 않도록 서버를 수정했습니다. 새창 로그인으로 한 번 더 인증해 주세요.`);
+      }
+    } catch (error) {
+      const message = `Grok OAuth 완료 실패: ${error instanceof Error ? error.message : String(error)}`;
+      setStatus(message);
+      Alert.alert('Grok OAuth 완료 실패', `${message}\ncallback URL 전체 또는 표시된 코드만 다시 붙여넣어 보세요.`);
+    } finally {
+      setGrokCallbackBusy(false);
     }
   }
 
@@ -1449,7 +1500,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
                 <Text style={styles.help}>자동 실행은 Termux의 외부 명령 허용이 켜져 있을 때만 동작합니다. 실패하면 복사 버튼을 누른 뒤 Termux에 붙여넣고 Enter를 누르세요.</Text>
               </View>
               <View style={styles.buttonRow}>
-                <Pressable onPress={refreshGrokLocal} style={[styles.secondaryInline, styles.rowButton]}><Text style={styles.secondaryText}>상태 확인</Text></Pressable>
+                <Pressable onPress={() => { void refreshGrokLocal(); }} style={[styles.secondaryInline, styles.rowButton]}><Text style={styles.secondaryText}>상태 확인</Text></Pressable>
                 <Pressable onPress={() => runGrokAction('login')} style={[styles.secondaryInline, styles.rowButton]}><Text style={styles.secondaryText}>계정 추가</Text></Pressable>
               </View>
               <View style={styles.buttonRow}>
@@ -1487,23 +1538,55 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
             <View style={styles.subPanel}>
               <Text style={styles.label}>Cloud Grok 서버</Text>
               <TextInput value={grokCloudUrl} onChangeText={setGrokCloudUrl} style={styles.input} autoCapitalize="none" placeholder="http://168.110.122.66" placeholderTextColor="#9a9387" />
-              <View style={styles.buttonRow}>
-                <Pressable onPress={refreshGrokLocal} style={[styles.secondaryInline, styles.rowButton]}><Text style={styles.secondaryText}>상태 확인</Text></Pressable>
-                <Pressable onPress={() => runGrokAction('login')} style={[styles.primaryInline, styles.rowButton]}><Text style={styles.primaryText}>계정 추가/재인증</Text></Pressable>
+              <View style={[styles.cloudConnectCard, grokStatus?.hermesAuthenticated && styles.cloudConnectCardReady]}>
+                <View style={styles.cloudStatusRow}>
+                  <View style={[styles.cloudDot, grokStatus?.hermesAuthenticated && styles.cloudDotReady]} />
+                  <View style={styles.listBody}>
+                    <Text style={styles.cloudTitle}>{grokStatus?.hermesAuthenticated ? 'Cloud Grok 연동됨' : 'Cloud Grok 로그인 필요'}</Text>
+                    <Text style={styles.cloudSub}>{grokStatus?.tokenMessage || '아래 버튼을 누르면 X/Grok 로그인 창을 바로 엽니다.'}</Text>
+                  </View>
+                </View>
+                <Pressable onPress={() => runGrokAction('login')} disabled={grokLoginBusy} style={[styles.cloudLoginButton, grokLoginBusy && styles.disabled]}>
+                  <Text style={styles.cloudLoginText}>{grokLoginBusy ? '로그인 창 여는 중...' : '새창 로그인으로 연동'}</Text>
+                </Pressable>
+                <Text style={styles.cloudHint}>로그인 완료 후 앱으로 돌아와 상태 확인을 누르면 계정과 CREDIT이 갱신됩니다.</Text>
               </View>
+              <View style={styles.cloudCallbackBox}>
+                <Text style={styles.label}>callback URL 또는 인증 코드</Text>
+                <TextInput
+                  value={grokOAuthCallback}
+                  onChangeText={setGrokOAuthCallback}
+                  style={[styles.input, styles.cloudCallbackInput]}
+                  multiline
+                  textAlignVertical="top"
+                  autoCapitalize="none"
+                  placeholder="브라우저 주소창의 http://127.0.0.1:.../callback?code=... 전체 URL 또는 화면에 표시된 코드"
+                  placeholderTextColor="#9a9387"
+                />
+                <Pressable onPress={submitCloudGrokOAuthCallback} disabled={grokCallbackBusy} style={[styles.cloudCompleteButton, grokCallbackBusy && styles.disabled]}>
+                  <Text style={styles.cloudCompleteText}>{grokCallbackBusy ? '연동 확인 중...' : '연동 완료'}</Text>
+                </Pressable>
+                <Text style={styles.cloudHint}>새창 로그인 후 브라우저가 실패 화면을 보여도 정상입니다. 그때 주소창 전체를 복사해서 여기에 붙여넣으세요.</Text>
+              </View>
+              <View style={styles.cloudMetricRow}>
+                <View style={styles.cloudMetric}>
+                  <Text style={styles.cloudMetricLabel}>상태</Text>
+                  <Text style={styles.cloudMetricValue}>{grokStatus?.tokenLabel || '확인 전'}</Text>
+                </View>
+                <View style={styles.cloudMetric}>
+                  <Text style={styles.cloudMetricLabel}>계정</Text>
+                  <Text style={styles.cloudMetricValue}>{grokAccounts.length}개</Text>
+                </View>
+                <View style={styles.cloudMetric}>
+                  <Text style={styles.cloudMetricLabel}>CREDIT</Text>
+                  <Text style={styles.cloudMetricValue}>{grokBilling?.remaining_percent ?? '--'}%</Text>
+                </View>
+              </View>
+              <View style={styles.creditTrack}><View style={[styles.creditFill, { width: `${Math.max(0, Math.min(100, Number(grokBilling?.remaining_percent || 0)))}%` }]} /></View>
               <View style={styles.buttonRow}>
+                <Pressable onPress={() => { void refreshGrokLocal(); }} style={[styles.secondaryInline, styles.rowButton]}><Text style={styles.secondaryText}>상태 확인</Text></Pressable>
                 <Pressable onPress={() => runGrokAction('select')} style={[styles.secondaryInline, styles.rowButton]}><Text style={styles.secondaryText}>OAuth 선택</Text></Pressable>
                 <Pressable onPress={() => runGrokAction('logout')} style={[styles.dangerInline, styles.rowButton]}><Text style={styles.dangerText}>삭제</Text></Pressable>
-              </View>
-              <View style={styles.statusBox}>
-                <Text style={styles.listTitle}>Cloud Grok 상태: {grokStatus?.tokenLabel || '확인 전'}</Text>
-                <Text style={styles.listSub}>{grokStatus?.tokenMessage || 'Oracle 서버의 /api/settings, CREDIT, OAuth 상태를 확인합니다.'}</Text>
-                <Text style={styles.listSub}>계정 {grokAccounts.length}개 · CREDIT {grokBilling?.remaining_percent ?? '--'}%</Text>
-                <View style={styles.creditTrack}><View style={[styles.creditFill, { width: `${Math.max(0, Math.min(100, Number(grokBilling?.remaining_percent || 0)))}%` }]} /></View>
-              </View>
-              <View style={styles.termuxPanel}>
-                <Text style={styles.label}>클라우드 OAuth 로그인</Text>
-                <Text style={styles.listSub}>계정 추가/재인증을 누르면 클라우드 서버에 로그인 URL 생성을 요청하고, 받은 Grok/X 로그인 페이지를 폰 기본 브라우저로 엽니다. 로그인 완료 후 앱으로 돌아와 상태 확인을 누르세요.</Text>
               </View>
               {grokAccounts.length ? grokAccounts.map((account, index) => (
                 <View key={`${account.id || account.provider || 'cloud-account'}-${index}`} style={styles.eventRow}>
@@ -1772,6 +1855,24 @@ const styles = StyleSheet.create({
   rowButton: { flex: 1 },
   subPanel: { marginTop: 12, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#f7f3ea' },
   termuxPanel: { marginTop: 12, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#d6c48f', backgroundColor: '#fff8dd' },
+  cloudConnectCard: { marginTop: 12, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#d8c99c', backgroundColor: '#fff8dd', gap: 10 },
+  cloudConnectCardReady: { borderColor: '#8ac6a5', backgroundColor: '#eefbf3' },
+  cloudStatusRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  cloudDot: { width: 12, height: 12, marginTop: 4, borderRadius: 6, backgroundColor: '#d14444' },
+  cloudDotReady: { backgroundColor: '#0f8f62' },
+  cloudTitle: { color: colors.text, fontSize: 16, fontWeight: '900' },
+  cloudSub: { marginTop: 3, color: colors.sub, fontSize: 12, fontWeight: '700', lineHeight: 18 },
+  cloudLoginButton: { minHeight: 52, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  cloudLoginText: { color: '#241a00', fontSize: 16, fontWeight: '900' },
+  cloudHint: { color: colors.sub, fontSize: 12, fontWeight: '800', lineHeight: 18 },
+  cloudCallbackBox: { marginTop: 10, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', gap: 8 },
+  cloudCallbackInput: { minHeight: 92, paddingVertical: 10, fontSize: 12, lineHeight: 18 },
+  cloudCompleteButton: { minHeight: 46, borderRadius: 8, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
+  cloudCompleteText: { color: '#ffffff', fontWeight: '900' },
+  cloudMetricRow: { marginTop: 10, flexDirection: 'row', gap: 8 },
+  cloudMetric: { flex: 1, minHeight: 62, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', justifyContent: 'center' },
+  cloudMetricLabel: { color: colors.sub, fontSize: 11, fontWeight: '900' },
+  cloudMetricValue: { marginTop: 4, color: colors.text, fontSize: 14, fontWeight: '900' },
   commandBox: { minHeight: 118, marginTop: 4, paddingVertical: 10, fontSize: 12, lineHeight: 18 },
   creditTrack: { marginTop: 8, height: 12, borderRadius: 6, overflow: 'hidden', backgroundColor: '#e1d8c8', borderWidth: 1, borderColor: colors.border },
   creditFill: { height: '100%', backgroundColor: '#0f766e' },

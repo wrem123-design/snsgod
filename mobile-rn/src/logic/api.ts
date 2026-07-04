@@ -4,6 +4,7 @@ import { KJUR } from 'jsrsasign';
 import { ApiProfile, ImageGenerationConfig, SNSGodCharacter, SNSGodState } from '../types';
 import { editableForbiddenPromptRules } from './imagePromptRules';
 import { appendDebugLog } from './debugLog';
+import { configuredPrompt } from './prompts';
 
 type ChatMessage = {
   role: 'system' | 'user' | 'assistant';
@@ -852,13 +853,16 @@ function samePromptText(a: string, b: string): boolean {
   return a.replace(/\s+/g, ' ').trim().toLowerCase() === b.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodCharacter | undefined, prompt: string, options: { usesReference?: boolean; kind?: ImagePromptKind } = {}): string {
+export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodCharacter | undefined, prompt: string, options: { usesReference?: boolean; kind?: ImagePromptKind; state?: SNSGodState } = {}): string {
   const prefix = config.promptPrefix || 'Create a realistic in-character phone photo. Natural lighting, casual composition, no text overlay.';
   const forbiddenRules = editableForbiddenPromptRules(config.forbiddenPromptRules).trim();
   const globalRules = forbiddenRules ? `Global forbidden prompt rules: ${forbiddenRules}` : '';
   const profilePhotoPrompt = character?.profileAvatarPrompt ? imagePromptWithoutCharacterName(character.profileAvatarPrompt, character) : '';
   const requested = imagePromptWithoutCharacterName(prompt, character);
-  const nsfw = config.nsfw ? 'NSFW/private fictional image is allowed when appropriate.' : 'Keep it safe and non-explicit.';
+  const configuredTone = options.state ? configuredPrompt(options.state, 'imageGenerationToneRules') : '';
+  const nsfw = config.nsfw
+    ? `NSFW/private fictional adult image tone is enabled. ${configuredTone || 'Keep every depicted person clearly adult.'}`
+    : configuredTone || 'Mature fictional adult tone is allowed when it fits the character and scene. Keep every depicted person clearly adult.';
   if (options.kind === 'cover') {
     return [
       'Create a wide messenger profile cover/background image, not a profile photo.',
@@ -1000,7 +1004,7 @@ async function generateGrokLocalImage(state: SNSGodState, prompt: string, charac
   const baseUrl = normalizeGrokBaseUrl(config.provider === 'grok-cloud' ? config.grokCloudBaseUrl : config.grokBaseUrl);
   const referenceImage = options?.kind === 'cover' ? '' : options?.referenceImage || '';
   const usesReference = /^(data:|file:|content:|asset:)/i.test(referenceImage);
-  const finalPrompt = imagePromptFor(config, character, prompt, { usesReference, kind: options?.kind });
+  const finalPrompt = imagePromptFor(config, character, prompt, { usesReference, kind: options?.kind, state });
   const resolution = String(config.grokResolution || config.quality || '1k').includes('1k') ? '1k' : String(config.grokResolution || '1k');
   const aspectRatio = String(config.grokAspectRatio || 'auto');
   if (usesReference) {
@@ -1048,8 +1052,8 @@ export async function generateImageDataUri(state: SNSGodState, prompt: string, c
   if (config.size) tool.size = config.size;
   if (config.quality) tool.quality = config.quality;
   const body = endpoint.includes('/images/generations')
-    ? { model, prompt: imagePromptFor(config, character, prompt, { kind: options?.kind }), size: config.size || '1024x1024', response_format: 'b64_json' }
-    : { model, input: imagePromptFor(config, character, prompt, { kind: options?.kind }), tools: [tool], tool_choice: { type: 'image_generation' } };
+    ? { model, prompt: imagePromptFor(config, character, prompt, { kind: options?.kind, state }), size: config.size || '1024x1024', response_format: 'b64_json' }
+    : { model, input: imagePromptFor(config, character, prompt, { kind: options?.kind, state }), tools: [tool], tool_choice: { type: 'image_generation' } };
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },

@@ -3,7 +3,9 @@ import { callLLMText, generateImageDataUri, parseJsonObject } from './api';
 import { completeGeneratedCharacter } from './characterCompletion';
 import { appendDebugLog } from './debugLog';
 import { makeId } from './ids';
-import { buildRandomCategorizedImagePrompt } from './randomImagePrompt';
+import { personalityFields, pickPersonalitySeed, usedDatingPersonalityPresetIds } from './personalityPresets';
+import { buildRandomCategorizedImagePrompt, pickHairColor, pickHairStyle } from './randomImagePrompt';
+import { configuredPrompt } from './prompts';
 import { createRoom } from './stateHelpers';
 
 export const DEFAULT_DATING_APP_REFRESH_HOURS = 12;
@@ -75,7 +77,6 @@ const DATING_EYES = ['calm almond-shaped eyes', 'round gentle eyes', 'slightly u
 const DATING_EYELIDS = ['inner double eyelids', 'monolids', 'natural double eyelids', 'soft hooded eyelids', 'thin tapered double eyelids', 'wide parallel double eyelids'];
 const DATING_NOSES = ['small straight nose', 'softly rounded nose tip', 'low delicate nose bridge', 'slim nose', 'natural Korean nose shape', 'defined high nose bridge', 'button nose'];
 const DATING_LIPS = ['small heart-shaped lips', 'full soft lips', 'thin delicate lips', 'slightly pouty lips', 'clear cupid bow', 'wide smiling lips', 'plump glossy lips', 'brick red point lips'];
-const DATING_HAIRS = ['long dark brown layered hair', 'short black bob hair', 'medium wavy black hair', 'long straight ash brown hair', 'low ponytail with soft bangs', 'chin-length blunt bob', 'long black hair with see-through bangs', 'messy bun with loose strands', 'medium chestnut C-curl hair', 'sleek black lob hair', 'long loose perm hair'];
 const DATING_MAKEUPS = ['natural Korean daily makeup', 'clean office makeup', 'soft pink romantic makeup', 'chic cat-eye makeup', 'warm coral makeup', 'muted rose matte makeup', 'glossy influencer makeup', 'elegant hotel-lounge makeup', 'night-out shimmer eye makeup'];
 const DATING_BODY_TYPES: CandidateAppearance['bodyType'][] = ['slender', 'slim_glamorous', 'petite_slim', 'tall_slender', 'soft_slim', 'athletic_slim'];
 const DATING_MARKS = [['tiny mole under one eye'], ['faint dimples'], ['subtle aegyo-sal under eyes'], ['clear skin texture'], ['gentle smile lines'], ['tiny beauty mark near lip'], ['natural under-eye shadows'], ['soft freckles on nose bridge']];
@@ -99,23 +100,19 @@ const REGION_COORDS = [
 const DATING_SLOT_CUES = [
   {
     label: '대표 사진',
-    cue: 'dating app representative profile photo, vertical close upper-body portrait, eye-level phone camera, face centered but not passport-stiff, shoulders visible, gentle head tilt, one hand loosely touching hair or collarbone, head fully included, clean profile photo crop'
+    cue: 'dating app representative profile photo, vertical close upper-body portrait, eye-level phone camera, face centered but not passport-stiff, shoulders visible, gentle head tilt, one hand loosely touching hair or collarbone, head fully included, clean profile photo crop, simple profile-photo structure'
   },
   {
     label: '일상',
-    cue: 'daily-life candid photo, seated at a cafe table or leaning near a window, three-quarter body snapshot, phone camera from slightly above, natural candid smile, one arm resting on table, ordinary Korean daily setting, face clearly visible, head fully included'
+    cue: 'additional GLAM album photo 1, daily-life candid cafe or quiet indoor photo, seated at a cafe table or leaning near a window, three-quarter body snapshot, phone camera from slightly above, natural candid smile, one arm resting naturally, calm Korean daily setting, casual soft outfit category, face clearly visible, head fully included, not a profile portrait'
   },
   {
     label: '외출',
-    cue: 'going-out snapshot, full-body or knees-up street photo, camera held by a friend from a few meters away, walking pose or one foot forward, Seoul neighborhood background, stylish believable outfit, face clearly visible, head included, not a scenery photo'
+    cue: 'additional GLAM album photo 2, going-out snapshot, full-body or knees-up outdoor street photo, camera held by a friend from a few meters away, walking pose or one foot forward, Seoul neighborhood background, stylish going-out outfit category, face clearly visible, head included, not a scenery photo, not cafe, not seated'
   },
   {
-    label: '취향',
-    cue: 'hobby and interest photo, environmental candid composition, the woman is doing a simple activity related to her interests, hands visible, three-quarter angle from the side, realistic place matching her interests, face clearly visible, head included, not an empty interior or object photo'
-  },
-  {
-    label: '분위기',
-    cue: 'atmospheric evening dating app photo, waist-up portrait from a diagonal angle, warm indoor or city light mood, looking slightly away from camera then back, relaxed shoulders, different outfit and lighting, head fully included'
+    label: '스냅',
+    cue: 'additional GLAM album photo 3, separate casual snapshot, different everyday place from the other photos, natural standing or leaning pose, hands visible, three-quarter side angle, distinct casual outfit category, face clearly visible, head included, not an empty interior or object photo, not cafe, not street walking, not profile portrait'
   }
 ];
 
@@ -548,6 +545,14 @@ function normalizeProfile(state: SNSGodState, parsed: GeneratedDatingAppProfile 
     snsStyle: stringValue(parsed?.snsStyle, fallback.snsStyle),
     firstMessage: stringValue(parsed?.firstMessage, fallback.firstMessage),
     callPreview: stringValue(parsed?.callPreview, fallback.callPreview),
+    personalityPresetId: stringValue(parsed?.personalityPresetId, fallback.personalityPresetId || ''),
+    personalityPresetLabel: stringValue(parsed?.personalityPresetLabel, fallback.personalityPresetLabel || ''),
+    personalityCategory: stringValue(parsed?.personalityCategory, fallback.personalityCategory || ''),
+    personalityIntensity: stringValue(parsed?.personalityIntensity, fallback.personalityIntensity || ''),
+    personalityAxes: stringValue(parsed?.personalityAxes, fallback.personalityAxes || ''),
+    redFlagLevel: (parsed?.redFlagLevel === 0 || parsed?.redFlagLevel === 1 || parsed?.redFlagLevel === 2 || parsed?.redFlagLevel === 3)
+      ? parsed.redFlagLevel
+      : fallback.redFlagLevel,
     identityPrompt: datingAgeIdentityPrompt(
       name,
       age,
@@ -562,24 +567,24 @@ function normalizeProfile(state: SNSGodState, parsed: GeneratedDatingAppProfile 
 
 async function generateProfileJson(state: SNSGodState): Promise<GeneratedDatingAppProfile | undefined> {
   const ageRange = datingAppAgeRange(state);
+  const personalitySeed = pickPersonalitySeed({ usedPresetIds: usedDatingPersonalityPresetIds(state) });
   const messages = [
     {
       role: 'system' as const,
       content: [
-        'Create one fictional adult Korean dating app profile for a simulation app.',
+        configuredPrompt(state, 'datingAppProfileRules'),
+        personalitySeed.promptBlock,
         `Return compact JSON only. The woman must be a fictional adult age ${ageRange.label}, not a real person, and not a celebrity clone.`,
         'name must be a diverse 3-syllable Korean full name with one common Korean family name plus a two-syllable given name, such as 김서연, 정하윤, 문채린, 한지우. Do not return two-syllable given names like 서윤, 지안, 유나. Avoid repeating common small pools.',
         `Choose age randomly across the full ${ageRange.label} range; do not cluster every profile in the 20s unless the configured range is only 20s.`,
-        'Make her personality specific, not generic. Include friction, quirks, and dating preferences.',
+        'Make her personality specific, not generic. The selected personality preset above is mandatory and must shape her friction, quirks, dating preferences, profile text, firstMessage, callPreview, and image identityPrompt.',
         'Write bio like a realistic Korean dating app self-introduction. It may be short, medium, or long depending on personality. Ban boring essays, philosophical writing, self-help tone, and overexplained profile copy.',
-        'bio should sound like a person typed it on a phone: concrete daily habits, boundaries, humor, dating intent, recent breakup boundaries, contact style, or what kind of person she avoids. Do not make every bio polite or safe.',
+        'bio should sound like a person typed it on a phone: concrete daily habits, boundaries, humor, dating intent, recent breakup boundaries, contact style, or what kind of person she avoids. Do not make every bio overly polite or bland.',
         'Basic info must be detailed and personality-based: include education, heightCm, bodyLabel, alcohol, smoking, religion, mbti. Values should fit the person, not random filler.',
         'datingStyle and lifestyle must also be personality-based and concrete, such as 연락 텀, 약속 방식, 애정표현, 질투, 집순이/외출, 주말 루틴, 술자리 거리감, 스킨십 선, 장기연애/가벼운 만남 거절.',
         'profileQuestionCards must be visible profile detail cards, not locked questions. Use 4-5 cards about 특징 and 관심사. Each card has question as a short heading and lockedText as the realistic answer text.',
         'Example headings: 내 특징, 관심사, 친해지는 방식, 요즘 싫은 것, 연애할 때 보는 것, 주말 루틴, 연락 스타일, 이런 사람은 힘들어요.',
         'Do not write "대화신청이 수락되면 볼 수 있어요", hidden answers, locked content, generic compliments, or academic-sounding explanations.',
-        'Stronger adult archetypes must appear often: sexually frank and provocative adult woman, direct attraction/skinship/chemistry talk, cold manipulative psychopathic traits, emotional testing, jealousy tests, controlled charm. Keep everything fictional and adult; never minors, coercion, or non-consensual framing.',
-        'Do not sanitize provocative profiles into generic kindness. If the archetype is sensual or manipulative, make bio, traits, datingStyle, speechStyle, firstMessage, and callPreview visibly sharper.',
         'identityPrompt must explicitly include her exact age and age-appropriate face, styling, outfit, and vibe for that age.',
         'Fields: name, age, job, location, distanceKm, heightCm, bodyLabel, alcohol, smoking, religion, education, mbti, verified, lastActiveLabel, bio, traits, interests, datingStyle, lifestyle, profileQuestionCards, personalitySummary, speechStyle, relationshipStyle, likes, dislikes, hobbies, snsStyle, firstMessage, callPreview, identityPrompt.'
       ].join('\n')
@@ -591,10 +596,19 @@ async function generateProfileJson(state: SNSGodState): Promise<GeneratedDatingA
   ];
   try {
     const result = await callLLMText(state, messages);
-    return parseJsonObject<GeneratedDatingAppProfile>(result.text);
+    const parsed = parseJsonObject<GeneratedDatingAppProfile>(result.text);
+    return parsed ? { ...parsed, ...personalityFields(personalitySeed) } : undefined;
   } catch (error) {
     void appendDebugLog('datingApp.profile', `profile generation failed: ${error instanceof Error ? error.message : String(error)}`, 'warn');
-    return undefined;
+    return {
+      ...personalityFields(personalitySeed),
+      personalitySummary: personalitySeed.preset.core,
+      speechStyle: personalitySeed.preset.speechStyle,
+      relationshipStyle: personalitySeed.compactSummary,
+      snsStyle: personalitySeed.preset.snsStyle,
+      firstMessage: personalitySeed.preset.firstMeetingBehavior,
+      callPreview: personalitySeed.preset.callStyle
+    };
   }
 }
 
@@ -618,8 +632,8 @@ function datingAppearanceFor(profile: DatingAppProfile, seed: number): Candidate
     chin: pickIndexed(['small rounded chin', 'soft pointed chin', 'delicate small chin', 'balanced oval chin', 'short rounded chin', 'soft square chin'], seed * 23),
     skinTone: pickIndexed(['fair neutral Korean skin tone', 'warm ivory skin tone', 'clear light beige skin tone', 'neutral porcelain skin tone', 'soft natural Korean skin tone', 'slightly sun-kissed beige skin tone', 'cool fair skin tone'], seed * 29),
     distinctiveMarks: pickIndexed(DATING_MARKS, seed * 31),
-    hairStyle: pickIndexed(DATING_HAIRS, seed * 37),
-    hairColor: pickIndexed(['dark brown', 'black', 'soft black', 'ash brown', 'natural black', 'chestnut brown', 'cool black', 'reddish brown', 'milk tea brown'], seed * 41),
+    hairStyle: pickHairStyle(seed * 37),
+    hairColor: pickHairColor(seed * 41),
     heightCm: profile.heightCm,
     bodyType: profile.bodyLabel.includes('글래머') ? 'slim_glamorous' : pickIndexed(DATING_BODY_TYPES, seed * 43),
     makeupStyle: pickIndexed(DATING_MAKEUPS, seed * 47),
@@ -666,10 +680,16 @@ function datingPhotoPrompts(profile: DatingAppProfile) {
   const usedOutfitIds: string[] = [];
   const compositionCues = [
     'composition must be close upper-body, direct eye-level selfie-like portrait, relaxed head tilt, shoulders and hands visible',
-    'composition must be candid seated cafe snapshot, camera slightly above, table edge visible, one arm resting naturally',
-    'composition must be outdoor full-body or knees-up walking shot, camera several meters away, dynamic step-forward pose',
-    'composition must be side-angle environmental hobby candid, hands actively doing something, body turned 30-60 degrees from camera',
-    'composition must be warm evening diagonal waist-up portrait, looking slightly off-camera, softer expression and different framing'
+    'composition must be candid seated cafe or indoor daily snapshot, camera slightly above, table edge or window frame visible, one arm resting naturally, not full-body street framing',
+    'composition must be outdoor full-body or knees-up walking shot, camera several meters away, dynamic step-forward pose, visible outfit from head to at least knees, not seated and not cafe',
+    'composition must be side-angle casual snapshot, hands visible, body turned 30-60 degrees from camera, distinct everyday location, not profile portrait and not walking street shot'
+  ];
+  const albumVarietyRules = [
+    'GLAM album contains exactly 4 photos: slot 1 is the representative profile photo, slots 2-4 are additional album photos',
+    'preserve the exact same face, face shape, eye impression, hair color, hair length, bangs or no bangs, and hairstyle direction across all 4 photos',
+    'only change clothing, place, pose, camera distance, lighting, and activity between photos',
+    'slots 2-4 must each use a different structure, different place type, different pose family, different camera distance, and different clothing category from one another and from slot 1',
+    'do not reuse the representative profile-photo composition for any additional photo'
   ];
   return DATING_SLOT_CUES.map((slot, index) => {
     const seedIndex = baseSeed + index * 113;
@@ -682,26 +702,27 @@ function datingPhotoPrompts(profile: DatingAppProfile) {
       outfitSlot: baseSeed + index * 131,
       usedOutfitIds
     });
-    const interestCue = index === 3 && profile.interests.length
-      ? `interests to express visually: ${profile.interests.slice(0, 4).join(', ')}`
-      : '';
     return {
       label: slot.label,
       prompt: [
         categorizedPrompt,
         profile.identityPrompt,
-        `fictional adult Korean dating app profile for ${profile.name}, ${profile.age}, ${profile.job}`,
+        `fictional adult Korean GLAM dating app album photo, age ${profile.age}`,
         'same woman identity across the dating app album, realistic ordinary person, not a celebrity clone',
+        ...albumVarietyRules,
         'use the app global prompt rules, outfit presets, body silhouette, makeup, lighting, background, and negative prompt rules',
+        'slot cue overrides any generic random composition, random pose, or random background if they conflict',
         slot.cue,
         compositionCues[index],
-        interestCue,
-        `photo slot ${index + 1} of 5, use a different outfit preset, different outfit color, different fit, different background, and different pose from every other slot`,
-        `mandatory variety: this slot must not reuse the same camera distance, same pose, same arm position, same background layout, or same crop as any other slot in this album`,
-        'never repeat the same clothing combination across this album, avoid duplicate outfit, avoid same top, same skirt, same dress, same jacket, same color styling',
+        `photo slot ${index + 1} of 4, use a different outfit preset, different outfit color, different fit, different background, and different pose from every other slot`,
+        index === 0
+          ? 'representative profile photo only: clean close portrait, do not make it a lifestyle album shot'
+          : 'additional photo only: not the representative profile photo, must feel like a separate real dating-app album picture',
+        `mandatory variety: this slot must not reuse the same camera distance, same pose, same arm position, same background layout, same place category, or same crop as any other slot in this album`,
+        'never repeat the same clothing combination across this album, avoid duplicate outfit, avoid same top, same skirt, same dress, same jacket, same color styling, same accessory styling',
         'face must be clearly visible, eyes visible, head fully included, no face cropped out, no faceless body crop',
         'no empty room, no scenery-only photo, no object-only photo, no clothing-only crop',
-        'no extra people, no text overlay, no watermark, no logo, no bag, no handbag, no backpack, no boots, no coffee cup, no mug, no drink cup, no handheld drink props'
+        'no extra people, no text overlay, no watermark, no logo, no bag, no handbag, no backpack, no coffee cup, no mug, no drink cup, no handheld drink props'
       ].filter(Boolean).join(', ')
     };
   });
@@ -941,7 +962,7 @@ export function selectDatingAppFinalProfile(state: SNSGodState, profileId: strin
 export function toggleDatingAppReferencePhoto(state: SNSGodState, photoId: string): SNSGodState {
   const progress = datingAppProgress(state);
   const profile = finalDatingAppProfile(progress);
-  if (!profile || progress.requestStatus === 'pending' || progress.acceptedRoomId) return state;
+  if (!profile || progress.requestStatus !== 'accepted' || progress.acceptedRoomId) return state;
   const photo = profile.photos.find(item => item.id === photoId && item.uri);
   if (!photo) return state;
   const current = progress.selectedReferencePhotoIds || [];
@@ -1222,15 +1243,6 @@ function createAcceptedDatingRoom(state: SNSGodState, profile: DatingAppProfile,
       ...state.messages,
       [room.id]: [systemMessage, firstMessage]
     },
-    referenceFaceSlots: selectedReferenceImages.length ? [
-      ...selectedReferenceImages.map((image, index) => ({
-        id: makeId('ref'),
-        image,
-        name: `${profile.name} 데이트앱 레퍼런스 ${index + 1}`,
-        createdAt: now + index
-      })),
-      ...(state.referenceFaceSlots || []).filter(slot => !selectedReferenceImages.includes(String(slot.image || '')))
-    ].slice(0, 80) : state.referenceFaceSlots,
     unreadCounts: {
       ...state.unreadCounts,
       [room.id]: 1

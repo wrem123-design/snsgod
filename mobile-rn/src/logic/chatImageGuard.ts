@@ -5,7 +5,7 @@ const IMAGE_NEGATION_PATTERN = /사진은\s*(됐|괜찮|필요\s*없|말로)|이
 const CHARACTER_PROMISED_IMAGE_PATTERN = /사진.*(보낼게|보내줄게|찍어|보여줄게|올릴게)|셀카.*(보낼게|보내줄게|찍어|보여줄게)|photo|selfie|picture/i;
 const SITUATIONAL_IMAGE_CONTEXT_PATTERN = /뭐\s*먹|먹었|먹는\s*중|점심|저녁|아침|간식|카페|커피|디저트|음식|메뉴|맛있|외출|밖이|밖에|나왔|나가는|산책|길|거리|장소|풍경|하늘|바다|공원|여행|데이트|착장|옷|입었|입고|코디|패션|거울|머리|화장|네일|지금\s*뭐해|뭐하고|where are you|what are you eating|food|lunch|dinner|coffee|cafe|outfit|wearing|outside|walk|view|sky|place/i;
 const SELFIE_IMAGE_PROMPT_PATTERN = /selfie|mirror|portrait|face|full body|outfit|wearing|food|meal|cafe|coffee|street|outside|walk|view|sky|photo|phone photo|snapshot|사진|셀카|착장|음식/i;
-const SITUATIONAL_IMAGE_CHANCE = 0.32;
+const SITUATIONAL_IMAGE_CHANCE = 0.82;
 
 export function hasExplicitImageIntent(text: string): boolean {
   const value = String(text || '');
@@ -49,10 +49,10 @@ export function shouldAllowChatImageGeneration(params: {
   if (state.config.imageGeneration?.enabled === false) return false;
   if (!String(imagePrompt || '').trim()) return false;
   const room = Object.values(state.chatRooms || {}).flat().find(item => item.id === roomId);
-  const imageReplyMode = String(room?.imageReplyMode || 'explicitOnly');
+  const imageReplyMode = String(room?.imageReplyMode || 'natural');
   if (imageReplyMode === 'off') return false;
   if (imageReplyMode === 'natural') return true;
-  if (sourceMode === 'proactive') return false;
+  if (sourceMode === 'proactive') return imagePromptMatchesSituation(String(imagePrompt || ''));
   if (hasExplicitImageIntent(latestUserText) || recentChatEstablishedPhotoContext(state.messages?.[roomId] || [], characterId)) return true;
   if (hasSituationalImageContext(latestUserText) && imagePromptMatchesSituation(String(imagePrompt || ''))) {
     return Math.random() < SITUATIONAL_IMAGE_CHANCE;

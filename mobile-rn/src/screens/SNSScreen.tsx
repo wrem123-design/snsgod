@@ -647,7 +647,7 @@ function SnsRetryPromptEditor({ post, prompt, loading, onChangePrompt, onCancel,
     <View style={styles.modal}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.retryPanel}>
         <Text style={styles.retryTitle}>SNS 재생성</Text>
-        <Text style={styles.retryHelp}>최종 이미지 프롬프트만 수정해서 다시 생성합니다. 이미지 검열/빈 게시물이라면 원하는 장면을 더 구체적으로 적어주세요.</Text>
+        <Text style={styles.retryHelp}>최종 이미지 프롬프트만 수정해서 다시 생성합니다. 원하는 장면을 더 구체적으로 적어주세요.</Text>
         <Text style={styles.retryPostPreview} numberOfLines={3}>{post.content || post.imageCaption || post.generationError || '표시할 내용이 없는 게시물입니다.'}</Text>
         <TextInput
           value={prompt}

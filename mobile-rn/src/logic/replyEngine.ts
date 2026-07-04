@@ -239,7 +239,7 @@ export async function startReplyJob(input: StartReplyJobInput) {
           latestUserText: input.latestUserInput,
           imagePrompt: bubble.imagePrompt,
           imageCaption: bubble.imageCaption,
-          reason: 'no_explicit_image_intent'
+          reason: 'image_context_not_matched'
         }), 'info');
         bubble.imagePrompt = undefined;
         bubble.imageCaption = undefined;

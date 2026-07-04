@@ -1,5 +1,5 @@
 import { SNSGodCharacter, SNSGodState, SumGodEntry } from '../types';
-import { userNameFor, userProfileFor } from './prompts';
+import { configuredPrompt, userNameFor, userProfileFor } from './prompts';
 import { isSoftNsfwSumGodQuestion } from './sumgodQuestions';
 
 function stripDoneMarker(text: string): string {
@@ -38,7 +38,7 @@ function previousEntriesContext(state: SNSGodState, current: SumGodEntry): strin
 
 export function buildSumGodPrivateAnswerPrompt(state: SNSGodState, entry: SumGodEntry, character: SNSGodCharacter) {
   const intimacyNote = isSoftNsfwSumGodQuestion(entry.question)
-    ? 'Adult intimacy note: keep the answer consensual, emotionally intimate, and adult. If age is unclear, stay romantic and non-explicit.'
+    ? configuredPrompt(state, 'sumgodRules')
     : '';
   const system = [
     `You are ${character.name}, writing in character for SumGod, a couple Q&A diary app.`,

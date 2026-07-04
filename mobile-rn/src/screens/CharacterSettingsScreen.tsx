@@ -6,7 +6,7 @@ import { clampNumber, makeId } from '../logic/ids';
 import { findCharacter, updateCharacter } from '../logic/stateHelpers';
 import { isRenderableMediaUri, pickImageDataUri } from '../logic/media';
 import { callLLMText, generateImageDataUri, imagePromptWithoutCharacterName, parseJsonObject } from '../logic/api';
-import { DEFAULT_COVER_BACKGROUND_DIRECTION, LEGACY_COVER_BACKGROUND_DIRECTION } from '../logic/prompts';
+import { DEFAULT_COVER_BACKGROUND_DIRECTION, LEGACY_COVER_BACKGROUND_DIRECTION, configuredPrompt } from '../logic/prompts';
 import { characterReferenceImages, randomReferenceImage } from '../logic/imageReference';
 
 type CharacterSection = 'basic' | 'reply' | 'profile' | 'time' | 'calendar' | 'lore' | 'stickers' | 'prompt';
@@ -337,7 +337,8 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
           content: [
             'You write concise English image-generation prompts for a fictional messenger app.',
             'Return raw JSON only: {"prompt":"..."}. No markdown, no explanation.',
-            'Create a BASE identity prompt for future profile-photo generation, not a one-time scene prompt. Extract only stable visual identity from the character profile: face shape, facial impression, eyes, hair color/style if clearly described, approximate adult age impression, expression range, and overall aura. Do NOT lock in specific clothing, accessories, jewelry, bags, uniforms, brands, pose, camera angle, background, location, season, activity, lighting gimmick, or repeated outfit details. Keep clothing generic and non-binding if unavoidable, such as variable simple casual clothing. The prompt must remain reusable across many future images without forcing the same outfit or scene. Keep it safe, non-explicit, and identity-consistent.',
+            'Create a BASE identity prompt for future profile-photo generation, not a one-time scene prompt. Extract only stable visual identity from the character profile: face shape, facial impression, eyes, hair color/style if clearly described, approximate adult age impression, expression range, and overall aura. Do NOT lock in specific clothing, accessories, jewelry, bags, uniforms, brands, pose, camera angle, background, location, season, activity, lighting gimmick, or repeated outfit details unless the character profile explicitly requires them. The prompt must remain reusable across many future images without forcing the same outfit or scene. Keep every identity clearly adult and identity-consistent.',
+            configuredPrompt(state, 'adultBoundaryRules'),
             'Prompt should be one compact English paragraph or comma-separated tag sentence, 35-80 words.',
             'If appearance is unclear, infer a grounded non-specific look from the profile without contradicting it.'
           ].join('\n')

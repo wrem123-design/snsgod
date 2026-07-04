@@ -39,6 +39,24 @@ export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
   const [loadingIndex, setLoadingIndex] = useState(0);
 
   useEffect(() => {
+    imageAttemptedRef.current.clear();
+  }, [worldcupSession?.id]);
+
+  useEffect(() => {
+    if (!worldcupSession || champion || currentPair) return;
+    const pairs = worldcupSession.worldcupPairs || [];
+    if (!pairs.length) return;
+    const unresolvedIndex = pairs.findIndex(pair => !pair.selectedCandidateId);
+    const fallbackWinnerId = [...pairs].reverse().find(pair => pair.selectedCandidateId)?.selectedCandidateId;
+    const nextSessions = progress.sessions.map(item => {
+      if (item.id !== worldcupSession.id) return item;
+      if (unresolvedIndex >= 0) return { ...item, worldcupIndex: unresolvedIndex };
+      return fallbackWinnerId ? { ...item, status: 'revealing' as const, selectedCandidateId: fallbackWinnerId } : { ...item, worldcupIndex: Math.max(0, pairs.length - 1) };
+    });
+    void onChange({ ...state, blindDate: { ...progress, sessions: nextSessions } });
+  }, [worldcupSession?.id, worldcupSession?.worldcupIndex, currentPair?.id, champion?.id]);
+
+  useEffect(() => {
     if (!busy) return undefined;
     const timer = setInterval(() => setLoadingIndex(index => (index + 1) % loadingLines.length), 2200);
     return () => clearInterval(timer);
@@ -208,7 +226,10 @@ export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
 
 function currentWorldcupPair(session?: BlindDateSession) {
   if (!session) return undefined;
-  return (session.worldcupPairs || [])[Number(session.worldcupIndex || 0)];
+  const pairs = session.worldcupPairs || [];
+  const preferred = pairs[Number(session.worldcupIndex || 0)];
+  if (preferred && !preferred.selectedCandidateId) return preferred;
+  return pairs.find(pair => !pair.selectedCandidateId);
 }
 
 function worldcupMatchTitle(session: BlindDateSession, pair?: NonNullable<BlindDateSession['worldcupPairs']>[number]): string {

@@ -5,7 +5,7 @@ import { makeId } from './ids';
 import { MAX_SNS_CONTEXT_MESSAGES, MAX_SNS_DM_CONTEXT_MESSAGES } from './limits';
 import { lorePromptBlock, resolveActiveLore } from './loreEngine';
 import { pushNotification } from './notifications';
-import { DEFAULT_PROMPTS } from './prompts';
+import { DEFAULT_PROMPTS, configuredPrompt } from './prompts';
 import { SNSDmThread, SNSGodCharacter, SNSGodState, SNSPost } from '../types';
 
 type GeneratedPlatform = {
@@ -520,7 +520,8 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
     `Comment count per platform: ${sns.commentQty || '2-4'} (${commentCountHint(sns.commentQty)} desired).`,
     sns.autoComments === false ? 'Do not invent audience comments; return comments as an empty array.' : 'Invent fresh believable audience comments for this post only.',
     sns.anonymous ? 'Use a private/anonymous account vibe.' : 'Use the character account openly.',
-    sns.nsfw ? snsNsfwInstruction(state) : 'Keep it SFW unless the current conversation explicitly requires otherwise.',
+    sns.nsfw ? snsNsfwInstruction(state) : configuredPrompt(state, 'imageGenerationToneRules'),
+    configuredPrompt(state, 'adultBoundaryRules'),
     platform === 'instagram' ? 'Write for an Instagram-style public visual feed. Keep the tone polished and feed-friendly.' : 'Write for a Twitter/X-style timeline. Shorter, sharper, more conversational posts are allowed.',
     sns.textOnly ? 'Do not include imagePrompt.' : 'If an image fits, include imagePrompt as English visual prompt. When a person appears, it must be this character, not a new random person.',
     sns.noDM ? 'Do not create dms.' : 'Create one short SNS DM thread when natural.',

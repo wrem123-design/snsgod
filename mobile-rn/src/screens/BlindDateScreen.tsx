@@ -18,6 +18,7 @@ import {
   getBlindDateProgress,
   importBlindDateCandidate,
   importBlindDateArchive,
+  isStreetEncounterLocationUsedToday,
   passStreetEncounterContact,
   chooseStreetEncounterOption,
   chooseStreetEncounterCustomText,
@@ -219,6 +220,32 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
   }
 
   function exitActiveSession() {
+    if (entryMode === 'encounter' && session?.mode === 'encounter' && session.encounterPhase !== 'locations') {
+      void onChange({
+        ...state,
+        blindDate: {
+          ...progress,
+          sessions: progress.sessions.map(item => item.id === session.id ? {
+            ...item,
+            candidates: [],
+            encounterLocation: undefined,
+            encounterPhase: 'locations',
+            encounterNarration: undefined,
+            encounterNpcLine: undefined,
+            encounterTurn: 0,
+            encounterStats: undefined,
+            encounterChoices: [],
+            encounterHistory: [],
+            encounterResult: undefined,
+            encounterContactAttempted: false,
+            encounterContactFailureReason: undefined,
+            selectedCandidateId: undefined,
+            finalRanking: undefined
+          } : item)
+        }
+      });
+      return;
+    }
     void onChange({ ...state, blindDate: { ...progress, activeSessionId: undefined } });
   }
 
@@ -339,6 +366,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
                 setCustomText={setEncounterText}
                 onSendCustom={sendEncounterText}
                 onOpenPhoto={setPhotoPreview}
+                isLocationUsed={location => isStreetEncounterLocationUsedToday(state, location)}
               />
             ) : session.mode === 'profile' ? (
               <ProfileGachaMode
@@ -542,7 +570,7 @@ function ArchiveBlock({ archives, mixArchiveIds, onToggleMix, onCreateMix, onImp
   );
 }
 
-function StreetEncounterMode({ session, busy, onChooseLocation, onApproach, onChoice, onAskContact, onPassContact, onSaveAndMessage, customText, setCustomText, onSendCustom, onOpenPhoto }: {
+function StreetEncounterMode({ session, busy, onChooseLocation, onApproach, onChoice, onAskContact, onPassContact, onSaveAndMessage, customText, setCustomText, onSendCustom, onOpenPhoto, isLocationUsed }: {
   session: BlindDateSession;
   busy?: boolean;
   onChooseLocation: (location: string) => void;
@@ -555,6 +583,7 @@ function StreetEncounterMode({ session, busy, onChooseLocation, onApproach, onCh
   setCustomText: (text: string) => void;
   onSendCustom: () => void;
   onOpenPhoto: (preview: PhotoPreview) => void;
+  isLocationUsed: (location: string) => boolean;
 }) {
   const candidate = session.candidates[0];
   const phase = session.encounterPhase || 'locations';
@@ -640,11 +669,19 @@ function StreetEncounterMode({ session, busy, onChooseLocation, onApproach, onCh
           </View>
         ) : null}
         <View style={styles.locationGrid}>
-          {visibleLocations.map(location => (
-            <Pressable key={location} disabled={busy} onPress={() => onChooseLocation(location)} style={[styles.locationCard, busy && styles.disabled]}>
-              <Text style={styles.locationTitle}>{location}</Text>
-            </Pressable>
-          ))}
+          {visibleLocations.map(location => {
+            const used = isLocationUsed(location);
+            return (
+              <Pressable
+                key={location}
+                disabled={busy || used}
+                onPress={() => onChooseLocation(location)}
+                style={[styles.locationCard, used && styles.locationCardUsed, busy && styles.disabled]}
+              >
+                <Text style={[styles.locationTitle, used && styles.locationTitleUsed]}>{location}</Text>
+              </Pressable>
+            );
+          })}
         </View>
       </View>
     );
@@ -1309,7 +1346,14 @@ function CandidateDetailModal({ candidate, onClose }: { candidate: BlindDateCand
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.detailOverlay}>
         <View style={styles.detailPanel}>
-          <ScrollView style={styles.detailScroll} contentContainerStyle={styles.detailContent} showsVerticalScrollIndicator>
+          <ScrollView
+            style={styles.detailScroll}
+            contentContainerStyle={styles.detailContent}
+            showsVerticalScrollIndicator
+            keyboardShouldPersistTaps="handled"
+            nestedScrollEnabled
+            bounces={false}
+          >
             <View style={styles.detailTop}>
               <View style={styles.detailTitleWrap}>
                 <Text style={styles.detailTitle}>{candidate.name} · {candidate.age}</Text>
@@ -1463,7 +1507,9 @@ const styles = StyleSheet.create({
   encounterLine: { marginTop: 12, padding: 12, borderRadius: 8, color: colors.text, backgroundColor: '#fffefa', fontSize: 15, lineHeight: 22, fontWeight: '900' },
   locationGrid: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 12 },
   locationCard: { flexBasis: '48%', minHeight: 92, paddingHorizontal: 12, paddingVertical: 14, borderRadius: 12, justifyContent: 'center', backgroundColor: '#151515', borderWidth: 1, borderColor: '#2f2f2f', shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 10, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
+  locationCardUsed: { opacity: 0.34, backgroundColor: '#111', borderColor: '#1d1d1d', shadowOpacity: 0, elevation: 0 },
   locationTitle: { color: '#fffefa', fontSize: 20, lineHeight: 25, fontWeight: '900' },
+  locationTitleUsed: { color: 'rgba(255,254,250,0.45)' },
   encounterStats: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   statPill: { flexGrow: 1, flexBasis: '47%', minHeight: 48, borderRadius: 8, paddingHorizontal: 10, justifyContent: 'center', backgroundColor: '#f2eee6', borderWidth: 1, borderColor: colors.border },
   statPillStrong: { backgroundColor: '#fff6cf', borderColor: colors.accent },
@@ -1617,9 +1663,9 @@ const styles = StyleSheet.create({
   importSub: { marginTop: 6, color: '#d8d8d8', fontSize: 13, lineHeight: 19, fontWeight: '700' },
   importButton: { marginTop: 14, minHeight: 48, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
   importButtonText: { color: '#241a00', fontWeight: '900', fontSize: 16 },
-  detailOverlay: { flex: 1, paddingHorizontal: 16, paddingTop: 36, paddingBottom: 48, backgroundColor: 'rgba(0,0,0,0.62)', justifyContent: 'center' },
-  detailPanel: { maxHeight: '100%', borderRadius: 8, overflow: 'hidden', backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
-  detailScroll: { maxHeight: '100%' },
+  detailOverlay: { flex: 1, paddingHorizontal: 16, paddingTop: 36, paddingBottom: 48, backgroundColor: 'rgba(0,0,0,0.62)', justifyContent: 'flex-start' },
+  detailPanel: { width: '100%', maxHeight: '96%', flexShrink: 1, borderRadius: 8, overflow: 'hidden', backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border },
+  detailScroll: { flexGrow: 0 },
   detailContent: { padding: 14, paddingBottom: 56 },
   detailTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   detailTitleWrap: { flex: 1 },

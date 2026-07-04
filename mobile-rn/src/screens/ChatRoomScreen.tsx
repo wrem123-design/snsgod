@@ -318,7 +318,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
 
   const retryReferencePreview = imageRetryDraft ? characterReferenceImageForPrompt(character, imageRetryDraft.prompt) : undefined;
   const retryFinalPrompt = imageRetryDraft
-    ? imagePromptFor(state.config.imageGeneration || {}, character, imageRetryDraft.prompt, { usesReference: Boolean(retryReferencePreview) })
+    ? imagePromptFor(state.config.imageGeneration || {}, character, imageRetryDraft.prompt, { usesReference: Boolean(retryReferencePreview), state })
     : '';
 
   return (
@@ -567,7 +567,7 @@ function ImagePromptRetryEditor({ prompt, finalPrompt, busy, onChangePrompt, onC
     <View style={styles.promptEditorOverlay}>
       <View style={styles.promptEditorPanel}>
         <Text style={styles.promptEditorTitle}>이미지 프롬프트 수정</Text>
-        <Text style={styles.promptEditorHelp}>검열로 거부된 표현을 순화하거나 구체적인 장면으로 바꾼 뒤 다시 생성하세요.</Text>
+        <Text style={styles.promptEditorHelp}>원하는 장면, 분위기, 구도, 의상을 더 구체적으로 적은 뒤 다시 생성하세요.</Text>
         <TextInput
           value={prompt}
           onChangeText={onChangePrompt}

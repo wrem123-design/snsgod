@@ -1,6 +1,8 @@
 import { RandomChatRoom, SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
 import { parseJsonObject } from './api';
 import { makeId } from './ids';
+import { pickPersonalitySeed } from './personalityPresets';
+import { configuredPrompt } from './prompts';
 import { createRoom } from './stateHelpers';
 
 export type RandomGender = 'any' | 'male' | 'female';
@@ -39,6 +41,7 @@ export function isRandomRoom(state: SNSGodState, room: SNSGodRoom | undefined) {
 }
 
 export function randomTraitBundle(state: SNSGodState, gender: RandomGender) {
+  const personalitySeed = pickPersonalitySeed();
   const identityTypes = [
     'ordinary human', 'diaspora human with mixed cultural background',
     'fantasy human from a fictional kingdom', 'android passing as human',
@@ -75,7 +78,9 @@ export function randomTraitBundle(state: SNSGodState, gender: RandomGender) {
     'adult dating columnist who speaks bluntly about attraction, skinship, jealousy, and chemistry',
     'cold manipulative adult woman who treats random chat like a psychological test',
     'psychopathic low-empathy woman with controlled charm and dangerous curiosity',
-    'adult club manager who flirts provocatively while measuring the user reaction'
+    'adult club manager who flirts provocatively while measuring the user reaction',
+    'vulgar banmal-speaking adult woman who seduces men easily, treats dating as fast chemistry and sexual release, and gets bored quickly',
+    'reckless adult flirt in revealing clothes who uses cute teasing, swear words, and blunt desire instead of polite manners'
   ];
   const temperaments = [
     'bright but emotionally guarded', 'dry, teasing, and secretly attentive',
@@ -86,7 +91,9 @@ export function randomTraitBundle(state: SNSGodState, gender: RandomGender) {
     'sexually confident adult woman who speaks frankly about attraction, boundaries, and chemistry',
     'provocative adult woman who enjoys making the user flustered while still respecting boundaries',
     'cold, charming, and manipulative with a habit of turning every answer into a test',
-    'direct about sexual tension, skinship preferences, jealousy, and desire without acting underage or non-consensual'
+    'direct about sexual tension, skinship preferences, jealousy, and desire while staying clearly adult age 19+',
+    'light, vulgar, banmal-heavy, skilled at seducing men, affectionate at first, and quick to lose interest when the chemistry dies',
+    'casual about meeting and breaking up, openly desire-driven, rarely polite, and usually styled in revealing nightlife outfits'
   ];
   const hooks = [
     'they messaged the wrong person and refuse to admit it was a mistake',
@@ -112,12 +119,13 @@ export function randomTraitBundle(state: SNSGodState, gender: RandomGender) {
     `Primary language seed: ${pick(languages)}. The firstMessage and normal chat style should match this language unless the character is explicitly bilingual.`,
     `Archetype seed: ${pick(archetypes)}.`,
     `Temperament seed: ${pick(temperaments)}.`,
+    'Structured personality seed:',
+    personalitySeed.promptBlock,
     `First-chat hook: ${pick(hooks)}.`,
     `Visual direction: ${pick(visuals)}.`,
     `Avoid these already used random-chat names: ${usedNames}.`,
     'Make this character sharply different from existing random chats in origin, species, job, speech rhythm, emotional problem, and visual tags.',
-    'For female characters, stronger adult archetypes must appear often, not as rare exceptions: cold manipulative psychopathic traits, controlled emotional testing, sexually confident flirtation, direct talk about attraction, skinship boundaries, jealousy, and chemistry. Keep them fictional consenting adults and make the behavior show clearly in firstMessage and prompt.',
-    'Do not flatten provocative or manipulative women into safe generic friendliness. Their firstMessage should immediately reveal the edge: teasing, testing, blunt attraction, or cold observation.',
+    configuredPrompt(state, 'randomCharacterRules'),
     'The character has just met the user through random chat. Do not assume romance, shared memories, prior closeness, or physical proximity.',
     'Do not use famous characters, celebrities, real people, copyrighted settings, or stereotypes.'
   ].join('\n');

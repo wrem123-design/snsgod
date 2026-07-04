@@ -41,7 +41,7 @@ import { roomRouteKind } from './logic/roomStore';
 import { IncomingPhoneCall, markPhoneCardStatus, missIncomingPhoneCall, newestPendingPhoneCandidate, rejectIncomingPhoneCall } from './logic/phone';
 import { markRoomRead, pushNotification } from './logic/notifications';
 import { startReplyJob } from './logic/replyEngine';
-import { createManualMeetingEventPrompt, createMeetingEventSession, shouldStartMeetingEvent } from './logic/meetingEvent';
+import { createGroupMeetingEventSession, createManualGroupMeetingEventPrompt, createManualMeetingEventPrompt, createMeetingEventSession, shouldStartGroupMeetingEvent, shouldStartMeetingEvent } from './logic/meetingEvent';
 import { forceUpdateRoomMemory } from './logic/memoryBridge';
 
 const INTERRUPTED_REPLY_RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -432,6 +432,16 @@ export default function App() {
   async function maybeStartMeetingEvent(roomId: string, latestUserInput: string): Promise<boolean> {
     const current = stateRef.current;
     if (!current) return false;
+    const groupRoom = (current.groupRooms || []).find(item => item.id === roomId);
+    if (groupRoom) {
+      if ((current.meetingEventSessions || []).some(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active'))) return false;
+      const result = await shouldStartGroupMeetingEvent(current, roomId, latestUserInput);
+      if (!result.shouldStartNow) return false;
+      const latest = stateRef.current || current;
+      const next = await createGroupMeetingEventSession(latest, roomId, result);
+      await commit(next);
+      return true;
+    }
     const room = allRooms(current).find(item => item.id === roomId);
     if (!room || room.type === 'random') return false;
     if ((current.meetingEventSessions || []).some(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active'))) return false;
@@ -446,6 +456,14 @@ export default function App() {
   async function requestManualMeetingEvent(roomId: string): Promise<boolean> {
     const current = stateRef.current;
     if (!current) return false;
+    const groupRoom = (current.groupRooms || []).find(item => item.id === roomId);
+    if (groupRoom) {
+      if ((current.meetingEventSessions || []).some(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active'))) return true;
+      const next = await createManualGroupMeetingEventPrompt(current, roomId);
+      if (next === current) return false;
+      await commit(next);
+      return true;
+    }
     const room = allRooms(current).find(item => item.id === roomId);
     if (!room || room.type === 'random') return false;
     if ((current.meetingEventSessions || []).some(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active'))) return true;
@@ -698,6 +716,9 @@ export default function App() {
           onCommitCurrent={commitCurrentForScreen}
           onBack={goBack}
           onOpenSettings={roomId => navigate({ name: 'groupRoomSettings', roomId, returnRoomId: route.roomId })}
+          onOpenMeeting={sessionId => navigate({ name: 'meeting', sessionId, returnRoute: route })}
+          onMaybeStartMeeting={maybeStartMeetingEvent}
+          onRequestMeetingPrompt={requestManualMeetingEvent}
         />
       ) : route.name === 'chatRoom' ? (
         <ChatRoomScreen

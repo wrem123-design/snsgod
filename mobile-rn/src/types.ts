@@ -52,6 +52,15 @@ export type PromptSet = {
   memoryRules: string;
   stickerRules: string;
   language: string;
+  adultBoundaryRules: string;
+  chatImageRules: string;
+  groupChatImageRules: string;
+  imageGenerationToneRules: string;
+  meetingEventRules: string;
+  blindDateCandidateRules: string;
+  datingAppProfileRules: string;
+  randomCharacterRules: string;
+  sumgodRules: string;
   snsPosting: string;
   snsSubjectGuide: string;
   snsNsfwBackAccount: string;
@@ -292,27 +301,103 @@ export type SNSGodMessage = {
 export type MeetingEventLine = {
   id: string;
   speaker: 'user' | 'character' | 'system';
+  speakerType?: 'user' | 'character' | 'narration';
+  characterId?: string;
+  characterName?: string;
+  targetCharacterId?: string;
+  emotion?: string;
+  isAside?: boolean;
   text: string;
   createdAt: number;
+};
+
+export type MeetingEventType =
+  | 'first_meeting'
+  | 'date'
+  | 'handoff'
+  | 'comfort'
+  | 'confession_tension'
+  | 'fight_reconcile'
+  | 'accidental_meet'
+  | 'late_night'
+  | 'short_walk'
+  | 'group_meet';
+
+export type MeetingScenarioPhase = 'intro' | 'warmup' | 'tension' | 'turning' | 'climax' | 'afterglow' | 'ending';
+
+export type MeetingChoiceStyle = 'gentle' | 'playful' | 'direct' | 'comfort' | 'silent' | 'teasing' | 'apology' | 'bold' | 'exit';
+
+export type MeetingStats = {
+  affection: number;
+  trust: number;
+  tension: number;
+  awkwardness: number;
+  intimacy: number;
+};
+
+export type MeetingChoice = {
+  id: string;
+  text: string;
+  style: MeetingChoiceStyle;
+  effects: Partial<MeetingStats>;
+  targetCharacterId?: string;
+  hiddenReactionHint?: string;
+};
+
+export type MeetingResultCard = {
+  title: string;
+  location: string;
+  mood: string;
+  keyMoment: string;
+  characterImpression: string;
+  relationshipChanges: Partial<MeetingStats>;
+  futureHooks: string[];
+  afterMessage?: string;
 };
 
 export type MeetingEventSession = {
   id: string;
   roomId: string;
-  characterId: string;
+  roomType?: 'dm' | 'group';
+  mode?: 'dm' | 'group';
+  characterId?: string;
+  primaryCharacterId?: string;
+  participantCharacterIds?: string[];
+  presentCharacterIds?: string[];
+  absentCharacterIds?: string[];
   startedAt: number;
   endedAt?: number;
   status: 'pending' | 'active' | 'dismissed' | 'ended';
+  eventType?: MeetingEventType;
+  phase?: MeetingScenarioPhase;
+  phasePlan?: MeetingScenarioPhase[];
+  phaseTurn?: number;
+  totalUserTurns?: number;
+  minTurns?: number;
+  eventGoal?: string;
+  eventConflict?: string;
+  climaxQuestion?: string;
+  expectedEndingTone?: string;
+  hasClimaxChoiceResolved?: boolean;
+  stats?: MeetingStats;
+  resultCard?: MeetingResultCard;
+  postMeetingMessageScheduled?: boolean;
   location?: string;
   reason?: string;
   mood?: string;
   seedSummary?: string;
   stillPrompt?: string;
   stillImage?: string;
+  stillImageMode?: 'single_reference' | 'multi_character_scene' | 'atmosphere_only';
   turnCount: number;
   maxTurns: number;
   lines: MeetingEventLine[];
+  speakerQueue?: string[];
+  lastSpeakerCharacterId?: string;
+  groupMood?: string;
   summary?: string;
+  perCharacterSummaries?: Record<string, string>;
+  relationshipDeltas?: Record<string, { affinity?: number; trust?: number; tension?: number }>;
 };
 
 export type BlindDateMode = 'encounter' | 'profile' | 'question' | 'worldcup' | 'rotation';
@@ -369,6 +454,12 @@ export type BlindDateCandidate = {
   snsStyle: string;
   snsPreview?: string;
   callPreview?: string;
+  personalityPresetId?: string;
+  personalityPresetLabel?: string;
+  personalityCategory?: string;
+  personalityIntensity?: string;
+  personalityAxes?: string;
+  redFlagLevel?: 0 | 1 | 2 | 3;
   appearance: CandidateAppearance;
   imagePrompt: string;
   internalAppearancePrompt?: string;
@@ -494,6 +585,11 @@ export type BlindDateProgress = {
   sessions: BlindDateSession[];
   activeSessionId?: string;
   archives?: BlindDateCandidateArchive[];
+  encounterLocationUsage?: Record<string, string>;
+  encounterDailyLocations?: {
+    dayKey: string;
+    locations: string[];
+  };
 };
 
 export type DatingAppRequestStatus = 'none' | 'pending' | 'accepted' | 'rejected';
@@ -544,6 +640,12 @@ export type DatingAppProfile = {
   snsStyle: string;
   firstMessage: string;
   callPreview: string;
+  personalityPresetId?: string;
+  personalityPresetLabel?: string;
+  personalityCategory?: string;
+  personalityIntensity?: string;
+  personalityAxes?: string;
+  redFlagLevel?: 0 | 1 | 2 | 3;
   identityPrompt: string;
   imagePrompts: string[];
   photos: DatingAppPhoto[];

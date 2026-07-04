@@ -307,7 +307,7 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
                   <View style={styles.photoPlaceholder}>
                     {loading ? <ActivityIndicator color={colors.datingHeart} /> : null}
                     <Text style={styles.photoPlaceholderTitle}>{profile.name}</Text>
-                    <Text style={styles.photoPlaceholderSub}>이미지 생성 설정을 켜면 프로필 사진 5장이 표시됩니다.</Text>
+                    <Text style={styles.photoPlaceholderSub}>이미지 생성 설정을 켜면 프로필 사진 1장과 GLAM 앨범 3장이 표시됩니다.</Text>
                   </View>
                 )}
                 <View style={styles.heroGradient}>
@@ -354,14 +354,6 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
             </Section>
             <Section title="라이프스타일">
               <TagCloud tags={profile.lifestyle} />
-            </Section>
-            <Section title="특징과 관심사">
-              {profile.profileQuestionCards.map(card => (
-                <View key={card.question} style={styles.questionCard}>
-                  <Text style={styles.questionTitle}>{card.question}</Text>
-                  <Text style={styles.questionText}>{card.lockedText}</Text>
-                </View>
-              ))}
             </Section>
             <Section title="사진">
               <Gallery photos={photos} onPreview={setPreview} />
@@ -618,14 +610,6 @@ function ProfileHistoryContent({
       <Section title="라이프스타일" style={styles.historyModalBlock}>
         <TagCloud tags={profile.lifestyle} />
       </Section>
-      <Section title="특징과 관심사" style={styles.historyModalBlock}>
-        {profile.profileQuestionCards.map(card => (
-          <View key={card.question} style={styles.questionCard}>
-            <Text style={styles.questionTitle}>{card.question}</Text>
-            <Text style={styles.questionText}>{card.lockedText}</Text>
-          </View>
-        ))}
-      </Section>
       <Section title="사진">
         <Gallery photos={profile.photos} onPreview={onPreview} />
       </Section>
@@ -813,9 +797,6 @@ const styles = StyleSheet.create({
   infoCell: { width: '48%', minHeight: 62, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panelSoft, padding: 10, justifyContent: 'center' },
   infoLabel: { color: colors.sub, fontSize: 11, fontWeight: '900' },
   infoValue: { marginTop: 5, color: colors.text, fontSize: 15, fontWeight: '900' },
-  questionCard: { minHeight: 74, borderRadius: 8, backgroundColor: colors.surfaceAlt, padding: 12, marginTop: 8, justifyContent: 'center' },
-  questionTitle: { color: colors.text, fontSize: 15, fontWeight: '900' },
-  questionText: { marginTop: 6, color: colors.sub, lineHeight: 20, fontWeight: '800' },
   galleryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   galleryItem: { width: '48%', minWidth: 0 },
   galleryImage: { width: '100%', aspectRatio: 0.76, borderRadius: 10, backgroundColor: colors.surfaceAlt },

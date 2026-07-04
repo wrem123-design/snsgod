@@ -80,6 +80,14 @@ export async function startGrokLogin(baseUrl: string) {
   return grokFetch(baseUrl, '/api/hermes/login', { method: 'POST' });
 }
 
+export async function submitGrokOAuthCallback(baseUrl: string, callback: string) {
+  return grokFetch(baseUrl, '/api/hermes/callback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ callback })
+  });
+}
+
 export async function selectGrokOAuth(baseUrl: string) {
   return grokFetch(baseUrl, '/api/hermes/select', { method: 'POST' });
 }

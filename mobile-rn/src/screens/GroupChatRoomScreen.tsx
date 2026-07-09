@@ -8,6 +8,7 @@ import { colors } from '../theme';
 import { callLLMText, generateImageDataUri, imagePromptWithoutCharacterName, parseJsonObject } from '../logic/api';
 import { makeId } from '../logic/ids';
 import { formatMessageTime } from '../logic/time';
+import { chatBubbleLayoutFor, ChatBubbleLayout } from '../logic/chatBubbleLayout';
 import { MAX_CONTEXT_MESSAGES, MAX_GROUP_ROOM_MESSAGES } from '../logic/limits';
 import { MeetingEventSession, SNSGodCharacter, SNSGodMessage, SNSGodState, Sticker } from '../types';
 import { markRoomRead } from '../logic/notifications';
@@ -188,6 +189,19 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
   }, [state.characters, participantKey]);
   const messages = useMemo(() => state.messages[roomId] || [], [state.messages, roomId]);
   const listMessages = useMemo(() => reverseMessagesForInvertedList(messages), [messages]);
+  const messageMetaById = useMemo(() => {
+    const meta = new Map<string, { previous?: SNSGodMessage; next?: SNSGodMessage; layout: ChatBubbleLayout }>();
+    messages.forEach((message, index) => {
+      const previous = index > 0 ? messages[index - 1] : undefined;
+      const next = index < messages.length - 1 ? messages[index + 1] : undefined;
+      meta.set(message.id, {
+        previous,
+        next,
+        layout: chatBubbleLayoutFor(message, previous, next)
+      });
+    });
+    return meta;
+  }, [messages]);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [requestingMeeting, setRequestingMeeting] = useState(false);
@@ -499,9 +513,12 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
         ListHeaderComponent={typingCharacters.length ? <GroupTypingBubble characters={typingCharacters} /> : null}
         renderItem={({ item }) => {
           const meetingSessionId = String(item.meetingEventId || '');
+          const messageMeta = messageMetaById.get(item.id);
+          const layout = messageMeta?.layout || chatBubbleLayoutFor(item, messageMeta?.previous, messageMeta?.next);
           return (
             <GroupBubble
               message={item}
+              layout={layout}
               participants={participants}
               userName={state.config.userName || '나'}
               userStickers={state.userStickers || []}
@@ -586,8 +603,9 @@ function StickerTray({ stickers, onPick }: { stickers: Sticker[]; onPick: (stick
   );
 }
 
-function GroupBubble({ message, participants, userName, userStickers, meetingSession, meetingStatus, onStartMeeting, onCancelMeeting, onDeleteMessage }: {
+function GroupBubble({ message, layout, participants, userName, userStickers, meetingSession, meetingStatus, onStartMeeting, onCancelMeeting, onDeleteMessage }: {
   message: SNSGodMessage;
+  layout: ChatBubbleLayout;
   participants: SNSGodCharacter[];
   userName: string;
   userStickers: Sticker[];
@@ -651,7 +669,7 @@ function GroupBubble({ message, participants, userName, userStickers, meetingSes
     const meetingSessionId = String(message.meetingEventId || '');
     const pendingMeeting = Boolean(message.meetingEventPrompt && meetingSessionId && meetingStatus === 'pending');
     return (
-      <View ref={bubbleRef} collapsable={false} style={styles.bubbleAnchor}>
+      <View ref={bubbleRef} collapsable={false} style={[styles.bubbleAnchor, styles.systemAnchor]}>
         {actionMenu}
         <Pressable onPress={() => menuOpen && setMenuOpen(false)} onLongPress={openMessageMenu} delayLongPress={380} style={styles.systemBubble}>
           {pendingMeeting && meetingSession ? <GroupMeetingPromptPreview session={meetingSession} participants={participants} /> : null}
@@ -670,19 +688,42 @@ function GroupBubble({ message, participants, userName, userStickers, meetingSes
       </View>
     );
   }
+
+  const bubbleShape = [
+    styles.bubble,
+    mine ? styles.myBubble : styles.theirBubble,
+    mine
+      ? (layout.clusterStart ? styles.myBubbleStart : styles.myBubbleFollow)
+      : (layout.clusterStart ? styles.theirBubbleStart : styles.theirBubbleFollow)
+  ];
+  // Kakao group: name only on first bubble of a run.
+  const showName = layout.clusterStart;
+
   return (
-    <View style={[styles.messageRow, mine && styles.messageRowMine]}>
-      {!mine ? <Avatar character={character} size={34} /> : null}
-      {mine ? (
+    <View style={[
+      styles.messageRow,
+      mine && styles.messageRowMine,
+      layout.tightTop ? styles.messageRowTight : styles.messageRowLoose
+    ]}>
+      {!mine ? (
+        layout.showAvatar
+          ? <Avatar character={character} size={32} />
+          : <View style={styles.avatarSpacer} />
+      ) : null}
+      {mine && (layout.showTime || layout.showRead) ? (
         <View style={styles.messageMeta}>
-          {!message.readAt ? <Text style={styles.readOne}>1</Text> : null}
-          <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text>
+          {layout.showRead ? <Text style={styles.readOne}>1</Text> : null}
+          {layout.showTime ? <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text> : null}
         </View>
       ) : null}
       <View ref={bubbleRef} collapsable={false} style={styles.bubbleAnchor}>
         {actionMenu}
-        <Pressable onPress={() => menuOpen && setMenuOpen(false)} onLongPress={openMessageMenu} delayLongPress={380} style={[styles.bubble, mine ? styles.myBubble : styles.theirBubble]}>
-          {!mine ? <Text style={styles.speaker}>{character?.name || 'Character'}</Text> : <Text style={styles.speakerMine}>{userName}</Text>}
+        <Pressable onPress={() => menuOpen && setMenuOpen(false)} onLongPress={openMessageMenu} delayLongPress={380} style={bubbleShape}>
+          {showName ? (
+            !mine
+              ? <Text style={styles.speaker}>{character?.name || 'Character'}</Text>
+              : <Text style={styles.speakerMine}>{userName}</Text>
+          ) : null}
           {message.content ? <Text style={styles.bubbleText}>{message.content}</Text> : null}
           {sticker?.data || sticker?.mediaData ? <Image source={{ uri: sticker.data || sticker.mediaData || '' }} style={styles.stickerImage} resizeMode="contain" /> : message.sticker ? <Text style={styles.stickerText}>스티커 · {sticker?.name || message.sticker}</Text> : null}
           {message.mediaData ? (
@@ -699,7 +740,7 @@ function GroupBubble({ message, participants, userName, userStickers, meetingSes
           {message.imageCaption ? <Text style={styles.imageHint}>{message.imageCaption}</Text> : null}
         </Pressable>
       </View>
-      {!mine ? <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text> : null}
+      {!mine && layout.showTime ? <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text> : null}
     </View>
   );
 }
@@ -729,23 +770,31 @@ const styles = StyleSheet.create({
   subtitle: { marginTop: 2, color: colors.sub, fontSize: 12, fontWeight: '700' },
   settings: { minHeight: 38, paddingHorizontal: 12, borderRadius: 8, backgroundColor: '#eee8dc', alignItems: 'center', justifyContent: 'center' },
   settingsText: { color: colors.text, fontWeight: '900' },
-  messages: { flexGrow: 1, padding: 12, gap: 8 },
-  bubbleAnchor: { position: 'relative', zIndex: 1, maxWidth: '100%' },
-  messageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginVertical: 4 },
+  messages: { flexGrow: 1, paddingHorizontal: 8, paddingVertical: 6 },
+  bubbleAnchor: { position: 'relative', zIndex: 1, maxWidth: '72%' },
+  systemAnchor: { maxWidth: '88%', alignSelf: 'center' },
+  messageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, paddingHorizontal: 2 },
   messageRowMine: { justifyContent: 'flex-end' },
-  messageMeta: { minWidth: 42, alignItems: 'flex-end', justifyContent: 'flex-end', gap: 1, marginBottom: 2 },
-  messageTime: { color: '#30445a', fontSize: 11, fontWeight: '700' },
-  bubble: { maxWidth: '78%', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 9 },
+  messageRowTight: { marginTop: 2, marginBottom: 1 },
+  messageRowLoose: { marginTop: 8, marginBottom: 2 },
+  avatarSpacer: { width: 32, height: 1 },
+  messageMeta: { minWidth: 36, maxWidth: 52, alignItems: 'flex-end', justifyContent: 'flex-end', gap: 1, marginBottom: 1 },
+  messageTime: { color: 'rgba(48,68,90,0.72)', fontSize: 10, fontWeight: '500', marginHorizontal: 2 },
+  bubble: { maxWidth: '100%', paddingHorizontal: 10, paddingVertical: 7 },
   theirBubble: { backgroundColor: '#fff' },
-  myBubble: { backgroundColor: '#fee56a' },
-  speaker: { marginBottom: 3, color: colors.sub, fontSize: 11, fontWeight: '900' },
+  myBubble: { backgroundColor: '#fee500' },
+  theirBubbleStart: { borderTopLeftRadius: 5, borderTopRightRadius: 14, borderBottomLeftRadius: 14, borderBottomRightRadius: 14 },
+  theirBubbleFollow: { borderTopLeftRadius: 14, borderTopRightRadius: 14, borderBottomLeftRadius: 14, borderBottomRightRadius: 14 },
+  myBubbleStart: { borderTopLeftRadius: 14, borderTopRightRadius: 5, borderBottomLeftRadius: 14, borderBottomRightRadius: 14 },
+  myBubbleFollow: { borderTopLeftRadius: 14, borderTopRightRadius: 14, borderBottomLeftRadius: 14, borderBottomRightRadius: 14 },
+  speaker: { marginBottom: 2, color: colors.sub, fontSize: 11, fontWeight: '700' },
   speakerMine: { display: 'none' },
-  bubbleText: { fontSize: 16, lineHeight: 22, color: '#222' },
-  stickerText: { marginTop: 6, color: '#6c4f00', fontWeight: '900' },
-  stickerImage: { marginTop: 8, width: 128, height: 128, borderRadius: 12 },
-  readOne: { color: '#7b6a21', fontSize: 11, fontWeight: '900', lineHeight: 13 },
-  typingBubble: { minWidth: 58, minHeight: 42, alignItems: 'center', justifyContent: 'center' },
-  typingDots: { color: '#656565', fontWeight: '900', fontSize: 20, lineHeight: 22 },
+  bubbleText: { fontSize: 15, lineHeight: 20, fontWeight: '400', color: '#191919' },
+  stickerText: { marginTop: 4, color: '#6c4f00', fontWeight: '700', fontSize: 13 },
+  stickerImage: { marginTop: 6, width: 120, height: 120, borderRadius: 10 },
+  readOne: { color: '#b8860b', fontSize: 10, fontWeight: '700', lineHeight: 12 },
+  typingBubble: { minWidth: 52, minHeight: 34, alignItems: 'center', justifyContent: 'center' },
+  typingDots: { color: '#656565', fontWeight: '700', fontSize: 18, lineHeight: 20 },
   messageImageWrap: { marginTop: 8, position: 'relative', alignSelf: 'flex-start' },
   messageImage: { width: 210, height: 210, maxWidth: '100%', borderRadius: 12, backgroundColor: '#eee' },
   promptToggle: { position: 'absolute', right: 6, bottom: 6, width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(86,92,99,0.78)' },

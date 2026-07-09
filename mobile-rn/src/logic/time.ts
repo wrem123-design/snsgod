@@ -21,6 +21,17 @@ export function isSameMessageDate(first?: number, second?: number): boolean {
   return messageDateKey(first) === messageDateKey(second);
 }
 
+/** Same calendar minute — used for Kakao-style time collapsing. */
+export function isSameMessageMinute(first?: number, second?: number): boolean {
+  const a = new Date(Number(first) || 0);
+  const b = new Date(Number(second) || 0);
+  return a.getFullYear() === b.getFullYear()
+    && a.getMonth() === b.getMonth()
+    && a.getDate() === b.getDate()
+    && a.getHours() === b.getHours()
+    && a.getMinutes() === b.getMinutes();
+}
+
 export function formatMessageDateLabel(timestamp?: number): string {
   const date = new Date(Number(timestamp) || Date.now());
   const year = date.getFullYear();

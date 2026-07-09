@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, Image, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { isComposerSendEnter, stripAccidentalSendNewline } from '../logic/chatComposerKeys';
-import { useStickToBottomList } from '../logic/useStickToBottomList';
+import { clearComposerInput, createComposerSendGuard, isComposerSendEnter } from '../logic/chatComposerKeys';
+import { reverseMessagesForInvertedList, useStickToBottomList } from '../logic/useStickToBottomList';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
 import { callLLMText, generateImageDataUri, imagePromptWithoutCharacterName, parseJsonObject } from '../logic/api';
@@ -186,6 +186,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
     return state.characters.filter(character => participantIds.includes(character.id));
   }, [state.characters, participantKey]);
   const messages = useMemo(() => state.messages[roomId] || [], [state.messages, roomId]);
+  const listMessages = useMemo(() => reverseMessagesForInvertedList(messages), [messages]);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [requestingMeeting, setRequestingMeeting] = useState(false);
@@ -193,12 +194,18 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
   const [showQuickActions, setShowQuickActions] = useState(false);
   const [typingCharacters, setTypingCharacters] = useState<SNSGodCharacter[]>([]);
   const textRef = useRef('');
+  const inputRef = useRef<TextInput>(null);
+  const sendGuardRef = useRef(createComposerSendGuard());
   const stateRef = useRef(state);
   stateRef.current = state;
 
   function updateComposerText(value: string) {
-    const cleaned = stripAccidentalSendNewline(textRef.current, value);
+    const cleaned = sendGuardRef.current.filterChange(value);
     textRef.current = cleaned;
+    // Residual Enter text often arrives while React state is already ''.
+    if (cleaned !== value) {
+      inputRef.current?.setNativeProps({ text: cleaned });
+    }
     setText(cleaned);
   }
   const meetingStatusById = useMemo(() => {
@@ -211,7 +218,8 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
     onScroll,
     onContentSizeChange,
     onLayout,
-    pinToBottom
+    pinToBottom,
+    inverted
   } = useStickToBottomList<SNSGodMessage>({
     roomKey: roomId,
     messageCount: messages.length,
@@ -254,10 +262,11 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
   }
 
   async function send() {
-    const content = textRef.current.trim() || text.trim();
+    const raw = textRef.current || text;
+    const content = raw.trim();
     if (!room || !content || sending || !participants.length) return;
-    textRef.current = '';
-    setText('');
+    sendGuardRef.current.arm(raw);
+    clearComposerInput(inputRef, textRef, setText);
     setSending(true);
     pinToBottom();
     const now = Date.now();
@@ -451,13 +460,16 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
       </View>
       <FlatList
         ref={listRef}
-        data={messages}
+        inverted={inverted}
+        data={listMessages}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.messages}
         onScroll={onScroll}
         scrollEventThrottle={16}
         onContentSizeChange={onContentSizeChange}
         onLayout={onLayout}
+        keyboardShouldPersistTaps="handled"
+        ListHeaderComponent={typingCharacters.length ? <GroupTypingBubble characters={typingCharacters} /> : null}
         renderItem={({ item }) => {
           const meetingSessionId = String(item.meetingEventId || '');
           return (
@@ -473,7 +485,6 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
             />
           );
         }}
-        ListFooterComponent={typingCharacters.length ? <GroupTypingBubble characters={typingCharacters} /> : null}
       />
       {showStickers ? <StickerTray stickers={state.userStickers || []} onPick={sendSticker} /> : null}
       {showQuickActions ? (
@@ -490,6 +501,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
         <Pressable onPress={() => { setShowQuickActions(false); setShowStickers(value => !value); }} disabled={sending} style={[styles.stickerToggle, sending && styles.disabled]}><Text style={styles.stickerToggleText}>스티커</Text></Pressable>
         <Pressable accessibilityLabel="단톡 만남 이벤트 메뉴" onPress={() => { setShowStickers(false); setShowQuickActions(value => !value); }} disabled={sending || requestingMeeting} style={[styles.eventIconButton, (sending || requestingMeeting) && styles.disabled]}><Text style={styles.eventIconText}>{requestingMeeting ? '…' : '👥'}</Text></Pressable>
         <TextInput
+          ref={inputRef}
           value={text}
           onChangeText={updateComposerText}
           style={styles.input}
@@ -637,7 +649,7 @@ const styles = StyleSheet.create({
   subtitle: { marginTop: 2, color: colors.sub, fontSize: 12, fontWeight: '700' },
   settings: { minHeight: 38, paddingHorizontal: 12, borderRadius: 8, backgroundColor: '#eee8dc', alignItems: 'center', justifyContent: 'center' },
   settingsText: { color: colors.text, fontWeight: '900' },
-  messages: { padding: 12, gap: 8 },
+  messages: { flexGrow: 1, padding: 12, gap: 8 },
   messageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginVertical: 4 },
   messageRowMine: { justifyContent: 'flex-end' },
   messageMeta: { minWidth: 42, alignItems: 'flex-end', justifyContent: 'flex-end', gap: 1, marginBottom: 2 },

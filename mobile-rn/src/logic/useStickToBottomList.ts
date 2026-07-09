@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { FlatList, NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 
-const NEAR_BOTTOM_PX = 96;
+/** inverted list: contentOffset.y ≈ 0 means visual bottom (latest). */
+const NEAR_BOTTOM_PX = 72;
 
 /**
- * Keeps a chat FlatList pinned to the latest message without fighting the user
- * or double-firing scrollToEnd (which causes intermittent up/down jitter).
+ * KakaoTalk-style chat stickiness for an *inverted* FlatList.
+ *
+ * - Room enter: list already opens at latest (offset 0). No staircase scroll.
+ * - Send / new bubble while pinned: one silent jump to offset 0.
+ * - Never animates. Never chains onContentSizeChange scrolls.
  */
 export function useStickToBottomList<T>(deps: {
   roomKey: string;
@@ -14,97 +18,61 @@ export function useStickToBottomList<T>(deps: {
 }) {
   const listRef = useRef<FlatList<T>>(null);
   const stickToBottomRef = useRef(true);
-  const scrollingRef = useRef(false);
-  const pendingRef = useRef(false);
-  const lastOffsetRef = useRef({ y: 0, contentH: 0, layoutH: 0 });
+  const pinGenerationRef = useRef(0);
+  const lastRoomKeyRef = useRef(deps.roomKey);
 
-  const isNearBottom = useCallback((event?: {
-    contentOffsetY: number;
-    contentHeight: number;
-    layoutHeight: number;
-  }) => {
-    const y = event?.contentOffsetY ?? lastOffsetRef.current.y;
-    const contentH = event?.contentHeight ?? lastOffsetRef.current.contentH;
-    const layoutH = event?.layoutHeight ?? lastOffsetRef.current.layoutH;
-    if (contentH <= 0 || layoutH <= 0) return true;
-    const distance = contentH - layoutH - y;
-    return distance <= NEAR_BOTTOM_PX;
-  }, []);
-
-  const scrollToLatest = useCallback((options?: { force?: boolean; animated?: boolean }) => {
+  const pinToBottom = useCallback((options?: { force?: boolean }) => {
     if (!options?.force && !stickToBottomRef.current) return;
-    if (scrollingRef.current) {
-      pendingRef.current = true;
-      return;
-    }
-    scrollingRef.current = true;
-    pendingRef.current = false;
-    const animated = options?.animated === true;
+    stickToBottomRef.current = true;
+    const generation = ++pinGenerationRef.current;
+    // Coalesce to a single frame — avoids the old multi-step staircase.
     requestAnimationFrame(() => {
-      listRef.current?.scrollToEnd({ animated });
-      // Allow layout to settle before accepting another programmatic scroll.
-      setTimeout(() => {
-        scrollingRef.current = false;
-        if (pendingRef.current && stickToBottomRef.current) {
-          pendingRef.current = false;
-          scrollToLatest({ force: true, animated: false });
-        }
-      }, 80);
+      if (generation !== pinGenerationRef.current) return;
+      listRef.current?.scrollToOffset({ offset: 0, animated: false });
     });
   }, []);
 
   const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    lastOffsetRef.current = {
-      y: contentOffset.y,
-      contentH: contentSize.height,
-      layoutH: layoutMeasurement.height
-    };
-    // Ignore feedback while we are programmatically scrolling.
-    if (scrollingRef.current) return;
-    stickToBottomRef.current = isNearBottom({
-      contentOffsetY: contentOffset.y,
-      contentHeight: contentSize.height,
-      layoutHeight: layoutMeasurement.height
-    });
-  }, [isNearBottom]);
+    const y = event.nativeEvent.contentOffset.y;
+    stickToBottomRef.current = y <= NEAR_BOTTOM_PX;
+  }, []);
 
-  const onContentSizeChange = useCallback((_w: number, h: number) => {
-    lastOffsetRef.current.contentH = h;
-    if (stickToBottomRef.current) {
-      scrollToLatest({ force: true, animated: false });
-    }
-  }, [scrollToLatest]);
-
-  const onLayout = useCallback(() => {
-    if (stickToBottomRef.current) {
-      scrollToLatest({ force: true, animated: false });
-    }
-  }, [scrollToLatest]);
-
-  // Enter room: pin to bottom once.
+  // Room change: mark pinned. Inverted lists already show newest at offset 0,
+  // so we only do one quiet settle after first paint (for long histories).
   useEffect(() => {
+    const roomChanged = lastRoomKeyRef.current !== deps.roomKey;
+    lastRoomKeyRef.current = deps.roomKey;
     stickToBottomRef.current = true;
-    scrollToLatest({ force: true, animated: false });
-  }, [deps.roomKey, scrollToLatest]);
+    if (!roomChanged && deps.messageCount === 0) return;
+    const t = setTimeout(() => {
+      pinToBottom({ force: true });
+    }, 16);
+    return () => clearTimeout(t);
+  }, [deps.roomKey, pinToBottom]);
 
-  // New messages / typing footer: only follow if still pinned.
+  // New messages / typing footer: one pin only while user is still at bottom.
   useEffect(() => {
     if (!stickToBottomRef.current) return;
-    scrollToLatest({ force: true, animated: false });
-  }, [deps.messageCount, deps.footerSignal, scrollToLatest]);
+    pinToBottom();
+  }, [deps.messageCount, deps.footerSignal, pinToBottom]);
 
-  const pinToBottom = useCallback(() => {
-    stickToBottomRef.current = true;
-    scrollToLatest({ force: true, animated: false });
-  }, [scrollToLatest]);
+  // Intentionally no-op: content-size thrashing was the staircase.
+  const onContentSizeChange = useCallback((_w: number, _h: number) => {}, []);
+  const onLayout = useCallback(() => {}, []);
 
   return {
     listRef,
     onScroll,
     onContentSizeChange,
     onLayout,
-    pinToBottom,
-    scrollToLatest
+    pinToBottom: () => pinToBottom({ force: true }),
+    /** Screens should pass this to FlatList. */
+    inverted: true as const
   };
+}
+
+/** Newest-first copy for inverted chat lists. */
+export function reverseMessagesForInvertedList<T>(messages: T[]): T[] {
+  if (!messages.length) return messages;
+  return messages.slice().reverse();
 }

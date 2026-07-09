@@ -10,8 +10,8 @@ import { formatMessageDateLabel, formatMessageTime, isSameMessageDate } from '..
 import { markRoomRead } from '../logic/notifications';
 import { generateImageDataUri, imagePromptFor, imagePromptWithoutCharacterName } from '../logic/api';
 import { characterReferenceImageForPrompt } from '../logic/imageReference';
-import { isComposerSendEnter, stripAccidentalSendNewline } from '../logic/chatComposerKeys';
-import { useStickToBottomList } from '../logic/useStickToBottomList';
+import { clearComposerInput, createComposerSendGuard, isComposerSendEnter } from '../logic/chatComposerKeys';
+import { reverseMessagesForInvertedList, useStickToBottomList } from '../logic/useStickToBottomList';
 
 const TermuxBridge = NativeModules.TermuxBridge as undefined | {
   copyText: (text: string) => Promise<string>;
@@ -53,10 +53,14 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
   const [regeneratingImageId, setRegeneratingImageId] = useState('');
   const [imageRetryDraft, setImageRetryDraft] = useState<{ messageId: string; prompt: string } | null>(null);
   const textRef = useRef('');
+  const inputRef = useRef<TextInput>(null);
+  const sendGuardRef = useRef(createComposerSendGuard());
   const room = findRoom(state, roomId);
   const character = findCharacter(state, room?.characterId);
   const isRandomRoom = randomMode || room?.type === 'random';
   const messages = useMemo(() => roomMessages(state, roomId), [state.messages, roomId]);
+  // inverted FlatList wants newest-first so offset 0 is the latest bubble.
+  const listMessages = useMemo(() => reverseMessagesForInvertedList(messages), [messages]);
   const messageMetaById = useMemo(() => {
     const meta = new Map<string, { previous?: SNSGodMessage; showDateDivider: boolean }>();
     messages.forEach((message, index) => {
@@ -82,7 +86,8 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
     onScroll,
     onContentSizeChange,
     onLayout,
-    pinToBottom
+    pinToBottom,
+    inverted
   } = useStickToBottomList<SNSGodMessage>({
     roomKey: roomId,
     messageCount: messages.length,
@@ -90,8 +95,13 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
   });
 
   function updateComposerText(value: string) {
-    const cleaned = stripAccidentalSendNewline(textRef.current, value);
+    const cleaned = sendGuardRef.current.filterChange(value);
     textRef.current = cleaned;
+    // Residual Enter text often arrives while React state is already ''.
+    // setText('') alone will not re-render, so force native clear.
+    if (cleaned !== value) {
+      inputRef.current?.setNativeProps({ text: cleaned });
+    }
     setText(cleaned);
   }
 
@@ -114,10 +124,11 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
   }
 
   async function send() {
-    const content = textRef.current.trim() || text.trim();
+    const raw = textRef.current || text;
+    const content = raw.trim();
     if (!content || !room || !character || sending) return;
-    textRef.current = '';
-    setText('');
+    sendGuardRef.current.arm(raw);
+    clearComposerInput(inputRef, textRef, setText);
     setSending(true);
     pinToBottom();
     const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content, createdAt: Date.now() };
@@ -360,14 +371,18 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
 
       <FlatList
         ref={listRef}
-        data={messages}
+        inverted={inverted}
+        data={listMessages}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.messages}
         onScroll={onScroll}
         scrollEventThrottle={16}
         onContentSizeChange={onContentSizeChange}
         onLayout={onLayout}
-        ListHeaderComponent={room.name !== '기본 채팅' ? <View style={styles.roomNotice}><Text style={styles.roomNoticeText}>{room.name}</Text></View> : null}
+        keyboardShouldPersistTaps="handled"
+        // inverted: footer = visual top, header = visual bottom (typing)
+        ListFooterComponent={room.name !== '기본 채팅' ? <View style={styles.roomNotice}><Text style={styles.roomNoticeText}>{room.name}</Text></View> : null}
+        ListHeaderComponent={typing ? <TypingBubble character={character} /> : null}
         renderItem={({ item }) => {
           const meetingSessionId = String(item.meetingEventId || '');
           const messageMeta = messageMetaById.get(item.id);
@@ -379,7 +394,6 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
             </View>
           );
         }}
-        ListFooterComponent={typing ? <TypingBubble character={character} /> : null}
       />
 
       {viewerImage ? <ImageViewer item={viewerImage} onClose={() => setViewerImage(null)} /> : null}
@@ -417,6 +431,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
         ) : null}
         <Pressable accessibilityLabel="사진 추가" onPress={() => { setShowQuickActions(false); void attachImage(); }} disabled={sending} style={[styles.attachIconButton, sending && styles.sendDisabled]}><Text style={styles.attachIconText}>+</Text></Pressable>
         <TextInput
+          ref={inputRef}
           value={text}
           onChangeText={updateComposerText}
           style={styles.composerInput}
@@ -784,7 +799,8 @@ const styles = StyleSheet.create({
   leaveText: { color: colors.danger },
   settingsButton: { minHeight: 38, paddingHorizontal: 12, borderRadius: 8, backgroundColor: '#eee8dc', alignItems: 'center', justifyContent: 'center' },
   settingsText: { fontWeight: '900', color: colors.text },
-  messages: { padding: 12, gap: 8 },
+  // flexGrow so short chats still sit at the visual bottom of an inverted list.
+  messages: { flexGrow: 1, padding: 12, gap: 8 },
   dateDivider: { alignSelf: 'center', marginVertical: 8, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, backgroundColor: 'rgba(94,109,126,0.26)' },
   dateDividerText: { color: '#425163', fontSize: 11, lineHeight: 14, fontWeight: '800' },
   roomNotice: { alignSelf: 'center', maxWidth: '88%', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: 'rgba(255,255,255,0.5)', marginBottom: 6 },

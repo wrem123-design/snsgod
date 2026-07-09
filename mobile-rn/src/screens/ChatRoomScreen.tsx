@@ -12,6 +12,7 @@ import { generateImageDataUri, imagePromptFor, imagePromptWithoutCharacterName }
 import { characterReferenceImageForPrompt } from '../logic/imageReference';
 import { clearComposerInput, createComposerSendGuard, isComposerSendEnter } from '../logic/chatComposerKeys';
 import { reverseMessagesForInvertedList, useStickToBottomList } from '../logic/useStickToBottomList';
+import { MessageActionAnchor, MessageActionMenu } from '../components/MessageActionMenu';
 
 const TermuxBridge = NativeModules.TermuxBridge as undefined | {
   copyText: (text: string) => Promise<string>;
@@ -59,7 +60,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
   const character = findCharacter(state, room?.characterId);
   const isRandomRoom = randomMode || room?.type === 'random';
   const messages = useMemo(() => roomMessages(state, roomId), [state.messages, roomId]);
-  // inverted FlatList wants newest-first so offset 0 is the latest bubble.
+  // inverted FlatList: newest-first so offset 0 is the latest bubble (no scroll thrash on send).
   const listMessages = useMemo(() => reverseMessagesForInvertedList(messages), [messages]);
   const messageMetaById = useMemo(() => {
     const meta = new Map<string, { previous?: SNSGodMessage; showDateDivider: boolean }>();
@@ -87,7 +88,8 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
     onContentSizeChange,
     onLayout,
     pinToBottom,
-    inverted
+    inverted,
+    listProps
   } = useStickToBottomList<SNSGodMessage>({
     roomKey: roomId,
     messageCount: messages.length,
@@ -279,6 +281,32 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
     }));
   }
 
+  /** Remove bubble from room history so future context/memory prompts cannot see it. */
+  async function deleteMessage(messageId: string) {
+    if (!roomId || !messageId) return;
+    await commitCurrent(current => {
+      const roomList = current.messages[roomId] || [];
+      const target = roomList.find(item => item.id === messageId);
+      if (!target) return current;
+      const meetingId = String(target.meetingEventId || '');
+      return {
+        ...current,
+        messages: {
+          ...current.messages,
+          [roomId]: roomList.filter(item => item.id !== messageId)
+        },
+        // Drop dismissed/pending prompt sessions only tied to this deleted card.
+        meetingEventSessions: meetingId
+          ? (current.meetingEventSessions || []).filter(session => {
+            if (session.id !== meetingId) return true;
+            // Keep active/ended live sessions; remove orphan pending prompt shells.
+            return session.status === 'active' || session.status === 'ended';
+          })
+          : current.meetingEventSessions
+      };
+    });
+  }
+
   function openImageRetryEditor(message: SNSGodMessage) {
     if (!room || !character || !message.imagePrompt || regeneratingImageId) return;
     setImageRetryDraft({
@@ -371,6 +399,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
 
       <FlatList
         ref={listRef}
+        {...listProps}
         inverted={inverted}
         data={listMessages}
         keyExtractor={item => item.id}
@@ -380,7 +409,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
         onContentSizeChange={onContentSizeChange}
         onLayout={onLayout}
         keyboardShouldPersistTaps="handled"
-        // inverted: footer = visual top, header = visual bottom (typing)
+        // inverted: footer = visual top, header = visual bottom (typing near composer)
         ListFooterComponent={room.name !== '기본 채팅' ? <View style={styles.roomNotice}><Text style={styles.roomNoticeText}>{room.name}</Text></View> : null}
         ListHeaderComponent={typing ? <TypingBubble character={character} /> : null}
         renderItem={({ item }) => {
@@ -390,7 +419,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
           return (
             <View>
               {showDateDivider ? <DateDivider timestamp={item.createdAt} /> : null}
-              <MessageBubble message={item} character={character} userStickers={state.userStickers || []} roomId={room.id} meetingSession={meetingSessionId ? (state.meetingEventSessions || []).find(session => session.id === meetingSessionId) : undefined} meetingStatus={meetingSessionId ? meetingStatusById.get(meetingSessionId) : undefined} onOpenCall={onOpenCall} onStartMeeting={startMeetingEvent} onCancelMeeting={cancelMeetingEvent} onRejectCall={rejectCall} onRetryFailed={retryFailedReply} onOpenImage={setViewerImage} onRetryImage={openImageRetryEditor} regeneratingImageId={regeneratingImageId} />
+              <MessageBubble message={item} character={character} userStickers={state.userStickers || []} roomId={room.id} meetingSession={meetingSessionId ? (state.meetingEventSessions || []).find(session => session.id === meetingSessionId) : undefined} meetingStatus={meetingSessionId ? meetingStatusById.get(meetingSessionId) : undefined} onOpenCall={onOpenCall} onStartMeeting={startMeetingEvent} onCancelMeeting={cancelMeetingEvent} onRejectCall={rejectCall} onRetryFailed={retryFailedReply} onOpenImage={setViewerImage} onRetryImage={openImageRetryEditor} regeneratingImageId={regeneratingImageId} onDeleteMessage={deleteMessage} />
             </View>
           );
         }}
@@ -629,7 +658,7 @@ function ImagePromptRetryEditor({ prompt, finalPrompt, busy, onChangePrompt, onC
   );
 }
 
-function MessageBubble({ message, character, userStickers, roomId, meetingSession, meetingStatus, onOpenCall, onStartMeeting, onCancelMeeting, onRejectCall, onRetryFailed, onOpenImage, onRetryImage, regeneratingImageId }: {
+function MessageBubble({ message, character, userStickers, roomId, meetingSession, meetingStatus, onOpenCall, onStartMeeting, onCancelMeeting, onRejectCall, onRetryFailed, onOpenImage, onRetryImage, regeneratingImageId, onDeleteMessage }: {
   message: SNSGodMessage;
   character: NonNullable<ReturnType<typeof findCharacter>>;
   userStickers: Sticker[];
@@ -644,17 +673,38 @@ function MessageBubble({ message, character, userStickers, roomId, meetingSessio
   onOpenImage?: (item: RoomImageItem) => void;
   onRetryImage?: (message: SNSGodMessage) => void;
   regeneratingImageId?: string;
+  onDeleteMessage?: (messageId: string) => void;
 }) {
   const [promptOpen, setPromptOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuAnchor, setMenuAnchor] = useState<MessageActionAnchor | null>(null);
+  const bubbleRef = useRef<View>(null);
   const mine = message.role === 'user';
   const system = message.role === 'system';
   const sticker = message.sticker ? (mine ? userStickers : character.stickers || []).find(item => String(item.id) === String(message.sticker)) : undefined;
-  const copyValue = [message.content, message.imageCaption].filter(Boolean).join('\n').trim();
+  const copyValue = [
+    message.content,
+    message.imageCaption,
+    message.phoneSummaryContext ? `통화 요약: ${message.phoneSummaryContext}` : '',
+    message.callTitle ? String(message.callTitle) : '',
+    message.callLine ? String(message.callLine) : ''
+  ].filter(Boolean).join('\n').trim();
   const imageItem = imageItemFromMessage(message, character.name);
   const imageFailed = hasImageGenerationFailure(message);
   const regenerating = regeneratingImageId === message.id;
+
+  function openMessageMenu() {
+    bubbleRef.current?.measureInWindow((x, y, width, height) => {
+      setMenuAnchor({ x, y, width, height });
+      setMenuOpen(true);
+    });
+  }
+
   async function copyMessageText() {
-    if (!copyValue) return;
+    if (!copyValue) {
+      Alert.alert('복사', '복사할 텍스트가 없습니다.');
+      return;
+    }
     try {
       if (!TermuxBridge) throw new Error('클립보드 브릿지가 준비되지 않았습니다.');
       await TermuxBridge.copyText(copyValue);
@@ -663,29 +713,56 @@ function MessageBubble({ message, character, userStickers, roomId, meetingSessio
       Alert.alert('복사 실패', error instanceof Error ? error.message : String(error));
     }
   }
+
+  function deleteMessage() {
+    onDeleteMessage?.(message.id);
+  }
+
+  const actionMenu = (
+    <MessageActionMenu
+      visible={menuOpen}
+      anchor={menuAnchor}
+      align={system ? 'center' : mine ? 'right' : 'left'}
+      onCopy={() => { void copyMessageText(); }}
+      onDelete={deleteMessage}
+      onClose={() => {
+        setMenuOpen(false);
+        setMenuAnchor(null);
+      }}
+    />
+  );
+
   if (system) {
     const meetingSessionId = String(message.meetingEventId || '');
     const pendingMeeting = Boolean(message.meetingEventPrompt && meetingSessionId && meetingStatus === 'pending');
     return (
-      <Pressable onLongPress={copyMessageText} delayLongPress={380} style={styles.systemBubble}>
-        {pendingMeeting && meetingSession ? <MeetingPromptPreview session={meetingSession} character={character} /> : null}
-        <Text style={[styles.systemText, pendingMeeting && styles.meetingSystemText]}>{message.content}</Text>
-        {pendingMeeting ? (
-          <View style={styles.meetingActions}>
-            <Pressable onPress={() => onStartMeeting?.(meetingSessionId)} style={styles.meetingPrimary}>
-              <Text style={styles.meetingPrimaryText}>이벤트</Text>
+      <View ref={bubbleRef} collapsable={false} style={styles.bubbleAnchor}>
+        {actionMenu}
+        <Pressable
+          onPress={() => menuOpen && setMenuOpen(false)}
+          onLongPress={openMessageMenu}
+          delayLongPress={380}
+          style={styles.systemBubble}
+        >
+          {pendingMeeting && meetingSession ? <MeetingPromptPreview session={meetingSession} character={character} /> : null}
+          <Text style={[styles.systemText, pendingMeeting && styles.meetingSystemText]}>{message.content}</Text>
+          {pendingMeeting ? (
+            <View style={styles.meetingActions}>
+              <Pressable onPress={() => onStartMeeting?.(meetingSessionId)} style={styles.meetingPrimary}>
+                <Text style={styles.meetingPrimaryText}>이벤트</Text>
+              </Pressable>
+              <Pressable onPress={() => onCancelMeeting?.(meetingSessionId, message.id)} style={styles.meetingSecondary}>
+                <Text style={styles.meetingSecondaryText}>취소</Text>
+              </Pressable>
+            </View>
+          ) : null}
+          {message.failed ? (
+            <Pressable accessibilityLabel="답장 재생성" onPress={() => onRetryFailed?.(message)} style={styles.retryButton}>
+              <Text style={styles.retryButtonText}>!</Text>
             </Pressable>
-            <Pressable onPress={() => onCancelMeeting?.(meetingSessionId, message.id)} style={styles.meetingSecondary}>
-              <Text style={styles.meetingSecondaryText}>취소</Text>
-            </Pressable>
-          </View>
-        ) : null}
-        {message.failed ? (
-          <Pressable accessibilityLabel="답장 재생성" onPress={() => onRetryFailed?.(message)} style={styles.retryButton}>
-            <Text style={styles.retryButtonText}>!</Text>
-          </Pressable>
-        ) : null}
-      </Pressable>
+          ) : null}
+        </Pressable>
+      </View>
     );
   }
   return (
@@ -697,45 +774,58 @@ function MessageBubble({ message, character, userStickers, roomId, meetingSessio
           <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text>
         </View>
       ) : null}
-      <Pressable onLongPress={copyMessageText} delayLongPress={380} style={[styles.bubble, mine ? styles.myBubble : styles.theirBubble]}>
-        {message.callInvite ? (
-          <View style={styles.callCard}>
-            <Text style={styles.callTitle}>{String(message.callTitle || message.mediaName || `${character.name} 전화`)}</Text>
-            <Text style={styles.callBody}>{String(message.callLine || '통화 요청이 도착했습니다.')}</Text>
-            {message.callStatus ? <Text style={styles.callStatus}>{callStatusLabel(String(message.callStatus))}</Text> : (
-              <View style={styles.callActions}>
-                <Pressable onPress={() => onOpenCall?.(String(message.characterId || character.id), roomId, message.id)} style={styles.callButton}>
-                  <Text style={styles.callButtonText}>받기</Text>
-                </Pressable>
-                <Pressable onPress={() => onRejectCall?.(message)} style={[styles.callButton, styles.callRejectButton]}>
-                  <Text style={styles.callRejectText}>거절</Text>
-                </Pressable>
-              </View>
-            )}
-          </View>
-        ) : null}
-        {message.content && !message.callInvite ? <Text style={[styles.bubbleText, mine && styles.myText]}>{message.content}</Text> : null}
-        {sticker?.data || sticker?.mediaData ? <Image source={{ uri: sticker.data || sticker.mediaData || '' }} style={styles.stickerImage} resizeMode="contain" /> : message.sticker ? <Text style={styles.stickerText}>스티커 · {sticker?.name || message.sticker}</Text> : null}
-        {message.mediaData ? (
-          <View style={styles.messageImageWrap}>
-            <Pressable onPress={() => imageItem && onOpenImage?.(imageItem)}>
-              <Image source={{ uri: message.mediaData }} style={styles.messageImage} resizeMode="cover" />
-            </Pressable>
-            {message.imagePrompt ? (
-              <Pressable accessibilityLabel={promptOpen ? '이미지 프롬프트 접기' : '이미지 프롬프트 펼치기'} onPress={() => setPromptOpen(value => !value)} style={styles.promptToggle}>
-                <Text style={styles.promptToggleText}>{promptOpen ? '⌃' : '⌄'}</Text>
+      <View ref={bubbleRef} collapsable={false} style={styles.bubbleAnchor}>
+        {actionMenu}
+        <Pressable
+          onPress={() => menuOpen && setMenuOpen(false)}
+          onLongPress={openMessageMenu}
+          delayLongPress={380}
+          style={[styles.bubble, mine ? styles.myBubble : styles.theirBubble]}
+        >
+          {message.callInvite ? (
+            <View style={styles.callCard}>
+              <Text style={styles.callTitle}>{String(message.callTitle || message.mediaName || `${character.name} 전화`)}</Text>
+              <Text style={styles.callBody}>{String(message.callLine || '통화 요청이 도착했습니다.')}</Text>
+              {message.callStatus ? <Text style={styles.callStatus}>{callStatusLabel(String(message.callStatus))}</Text> : (
+                <View style={styles.callActions}>
+                  <Pressable onPress={() => onOpenCall?.(String(message.characterId || character.id), roomId, message.id)} style={styles.callButton}>
+                    <Text style={styles.callButtonText}>받기</Text>
+                  </Pressable>
+                  <Pressable onPress={() => onRejectCall?.(message)} style={[styles.callButton, styles.callRejectButton]}>
+                    <Text style={styles.callRejectText}>거절</Text>
+                  </Pressable>
+                </View>
+              )}
+            </View>
+          ) : null}
+          {message.content && !message.callInvite ? <Text style={[styles.bubbleText, mine && styles.myText]}>{message.content}</Text> : null}
+          {sticker?.data || sticker?.mediaData ? <Image source={{ uri: sticker.data || sticker.mediaData || '' }} style={styles.stickerImage} resizeMode="contain" /> : message.sticker ? <Text style={styles.stickerText}>스티커 · {sticker?.name || message.sticker}</Text> : null}
+          {message.mediaData ? (
+            <View style={styles.messageImageWrap}>
+              <Pressable onPress={() => imageItem && onOpenImage?.(imageItem)}>
+                <Image source={{ uri: message.mediaData }} style={styles.messageImage} resizeMode="cover" />
               </Pressable>
-            ) : null}
-          </View>
-        ) : null}
-        {message.imagePrompt && promptOpen ? <Text style={styles.imageHint}>이미지 프롬프트: {message.imagePrompt}</Text> : null}
-        {message.imageCaption ? <Text style={styles.imageHint}>{message.imageCaption}</Text> : null}
-        {imageFailed ? (
-          <Pressable accessibilityLabel="이미지 재생성" onPress={() => onRetryImage?.(message)} disabled={regenerating} style={[styles.imageRetryButton, regenerating && styles.sendDisabled]}>
-            {regenerating ? <ActivityIndicator color="#073d24" size="small" /> : <Text style={styles.imageRetryButtonText}>↻</Text>}
-          </Pressable>
-        ) : null}
-      </Pressable>
+              {message.imagePrompt ? (
+                <Pressable accessibilityLabel={promptOpen ? '이미지 프롬프트 접기' : '이미지 프롬프트 펼치기'} onPress={() => setPromptOpen(value => !value)} style={styles.promptToggle}>
+                  <Text style={styles.promptToggleText}>{promptOpen ? '⌃' : '⌄'}</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
+          {message.imagePrompt && promptOpen ? <Text style={styles.imageHint}>이미지 프롬프트: {message.imagePrompt}</Text> : null}
+          {message.imageCaption ? <Text style={styles.imageHint}>{message.imageCaption}</Text> : null}
+          {message.phoneLog || message.phoneSummaryContext ? (
+            <Text style={styles.imageHint}>
+              {[message.phoneLog ? `통화 기록 · ${String(message.phoneLog)}` : '', message.phoneSummaryContext ? String(message.phoneSummaryContext) : ''].filter(Boolean).join('\n')}
+            </Text>
+          ) : null}
+          {imageFailed ? (
+            <Pressable accessibilityLabel="이미지 재생성" onPress={() => onRetryImage?.(message)} disabled={regenerating} style={[styles.imageRetryButton, regenerating && styles.sendDisabled]}>
+              {regenerating ? <ActivityIndicator color="#073d24" size="small" /> : <Text style={styles.imageRetryButtonText}>↻</Text>}
+            </Pressable>
+          ) : null}
+        </Pressable>
+      </View>
       {!mine ? <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text> : null}
     </View>
   );
@@ -799,12 +889,13 @@ const styles = StyleSheet.create({
   leaveText: { color: colors.danger },
   settingsButton: { minHeight: 38, paddingHorizontal: 12, borderRadius: 8, backgroundColor: '#eee8dc', alignItems: 'center', justifyContent: 'center' },
   settingsText: { fontWeight: '900', color: colors.text },
-  // flexGrow so short chats still sit at the visual bottom of an inverted list.
+  // inverted + flexGrow: short chats still sit at the visual bottom.
   messages: { flexGrow: 1, padding: 12, gap: 8 },
   dateDivider: { alignSelf: 'center', marginVertical: 8, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, backgroundColor: 'rgba(94,109,126,0.26)' },
   dateDividerText: { color: '#425163', fontSize: 11, lineHeight: 14, fontWeight: '800' },
   roomNotice: { alignSelf: 'center', maxWidth: '88%', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: 'rgba(255,255,255,0.5)', marginBottom: 6 },
   roomNoticeText: { color: '#4f5a62', fontSize: 12, fontWeight: '900' },
+  bubbleAnchor: { position: 'relative', zIndex: 1, maxWidth: '100%' },
   messageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginVertical: 4 },
   messageRowMine: { justifyContent: 'flex-end' },
   messageMeta: { minWidth: 42, alignItems: 'flex-end', justifyContent: 'flex-end', gap: 1, marginBottom: 2 },

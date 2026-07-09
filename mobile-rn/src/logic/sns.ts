@@ -587,12 +587,13 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
   }
 }
 
+/**
+ * Auto SNS after a character chat reply (or background tick).
+ * Gated by snsAutoPostEnabled / per-character snsAutoEnabled — not by global autoEnabled
+ * (chat autonomous automation can be off while SNS auto stays on).
+ */
 export async function maybeCreateAutoSNSPost(state: SNSGodState, character: SNSGodCharacter, roomId: string): Promise<SNSGodState> {
   const config = state.config;
-  if (config.autoEnabled === false) {
-    await logAutoSns(`skip room=${roomId} character=${character.id}: global automation disabled`);
-    return state;
-  }
   if (config.snsAutoPostEnabled === false) {
     await logAutoSns(`skip room=${roomId} character=${character.id}: SNS auto post disabled`);
     return state;
@@ -637,17 +638,26 @@ export async function maybeCreateAutoSNSPost(state: SNSGodState, character: SNSG
   const chance = Math.max(0, Math.min(100, Number(config.snsAutoChance ?? config.autoSnsChance ?? 40)));
   const roll = Math.random() * 100;
   if (roll >= chance) {
-    await logAutoSns(`skip room=${roomId} character=${character.id}: chance missed ${roll.toFixed(1)}/${chance}`);
+    // Advance soft progress so we do not re-roll every single message forever without spacing.
+    // Keep lastSnsMessageCount below current length so cooldown still allows future tries.
+    const softCount = Math.max(lastCount, messages.length - Math.max(1, cooldown - 1));
+    await logAutoSns(`skip room=${roomId} character=${character.id}: chance missed ${roll.toFixed(1)}/${chance} softCount=${softCount}`);
+    return {
+      ...state,
+      characters: state.characters.map(item => item.id === character.id ? { ...item, lastSnsMessageCount: softCount } : item)
+    };
+  }
+  const platformCandidates: Array<'instagram' | 'twitter'> = ['instagram', 'twitter'].filter(
+    platform => snsOptionsFor(state, platform as 'instagram' | 'twitter', character).enabled !== false
+  ) as Array<'instagram' | 'twitter'>;
+  if (!platformCandidates.length) {
+    await logAutoSns(`skip room=${roomId} character=${character.id}: all SNS platforms disabled`);
     return state;
   }
-  const platform = Math.random() > 0.5 ? 'instagram' : 'twitter';
-  if (snsOptionsFor(state, platform, character).enabled === false) {
-    await logAutoSns(`skip room=${roomId} character=${character.id}: ${platform} disabled`);
-    return state;
-  }
+  const platform = platformCandidates[Math.floor(Math.random() * platformCandidates.length)];
   autoPostingRooms.add(roomId);
   try {
-    await logAutoSns(`start room=${roomId} character=${character.id} platform=${platform}`);
+    await logAutoSns(`start room=${roomId} character=${character.id} platform=${platform} messages=${messages.length} lastSns=${lastCount}`);
     const next = await generateSNSPost(state, character, platform, { roomId, manual: false });
     const created = Math.max(0, (next.snsPosts || []).length - (state.snsPosts || []).length);
     await logAutoSns(`done room=${roomId} character=${character.id} platform=${platform} posts=${created}`);
@@ -658,6 +668,37 @@ export async function maybeCreateAutoSNSPost(state: SNSGodState, character: SNSG
   } finally {
     autoPostingRooms.delete(roomId);
   }
+}
+
+/** Background/automation tick: try one eligible private room for auto SNS. */
+export async function maybeCreateBackgroundAutoSNSPost(state: SNSGodState): Promise<SNSGodState | undefined> {
+  if (state.config.snsAutoPostEnabled === false) return undefined;
+  const pairs = state.characters
+    .filter(character => character.enabled !== false && character.snsAutoEnabled !== false && character.randomTemporary !== true)
+    .flatMap(character => {
+      const rooms = (state.chatRooms?.[character.id] || []).filter(room => room.type !== 'random' && room.disabled !== true);
+      return rooms.map(room => ({ character, room, messages: state.messages[room.id] || [] }));
+    })
+    .filter(item => {
+      const messages = item.messages;
+      if (messages.length < Math.max(2, Number(state.config.snsStartCount ?? 6))) return false;
+      const latest = [...messages].reverse().find(message => message.role === 'user' || message.role === 'character');
+      if (latest?.role !== 'character') return false;
+      const lastCount = Number(item.character.lastSnsMessageCount || 0);
+      const cooldown = Math.max(1, Number(state.config.autoSnsCooldownMessages ?? 4));
+      return messages.length - lastCount >= cooldown;
+    })
+    .sort((a, b) => Number(b.messages[b.messages.length - 1]?.createdAt || 0) - Number(a.messages[a.messages.length - 1]?.createdAt || 0));
+
+  for (const item of pairs.slice(0, 6)) {
+    if (autoPostingRooms.has(item.room.id)) continue;
+    const next = await maybeCreateAutoSNSPost(state, item.character, item.room.id);
+    if (next !== state) {
+      await logAutoSns(`background applied room=${item.room.id} character=${item.character.id}`);
+      return next;
+    }
+  }
+  return undefined;
 }
 
 export async function generateSnsDmReply(state: SNSGodState, threadId: string, userText: string): Promise<SNSGodState> {

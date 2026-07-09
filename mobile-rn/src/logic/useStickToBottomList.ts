@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { FlatList, NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 
-/** inverted list: contentOffset.y ≈ 0 means visual bottom (latest). */
-const NEAR_BOTTOM_PX = 72;
+/** inverted list: contentOffset.y ≈ 0 is the visual bottom (latest). */
+const NEAR_BOTTOM_PX = 64;
 
 /**
- * KakaoTalk-style chat stickiness for an *inverted* FlatList.
+ * KakaoTalk-style chat list using an *inverted* FlatList.
  *
- * - Room enter: list already opens at latest (offset 0). No staircase scroll.
- * - Send / new bubble while pinned: one silent jump to offset 0.
- * - Never animates. Never chains onContentSizeChange scrolls.
+ * Why inverted:
+ * - Newest item is at offset 0 (visual bottom).
+ * - Sending / receiving a bubble does NOT need scrollToEnd — the list
+ *   stays put and only the new row appears, instead of thrashing the viewport.
+ *
+ * Room enter still does a silent pin to offset 0 once layout is ready.
  */
 export function useStickToBottomList<T>(deps: {
   roomKey: string;
@@ -19,13 +22,14 @@ export function useStickToBottomList<T>(deps: {
   const listRef = useRef<FlatList<T>>(null);
   const stickToBottomRef = useRef(true);
   const pinGenerationRef = useRef(0);
+  const settleUntilRef = useRef(0);
   const lastRoomKeyRef = useRef(deps.roomKey);
+  const lastMessageCountRef = useRef(deps.messageCount);
 
   const pinToBottom = useCallback((options?: { force?: boolean }) => {
     if (!options?.force && !stickToBottomRef.current) return;
     stickToBottomRef.current = true;
     const generation = ++pinGenerationRef.current;
-    // Coalesce to a single frame — avoids the old multi-step staircase.
     requestAnimationFrame(() => {
       if (generation !== pinGenerationRef.current) return;
       listRef.current?.scrollToOffset({ offset: 0, animated: false });
@@ -33,32 +37,44 @@ export function useStickToBottomList<T>(deps: {
   }, []);
 
   const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    // Ignore intermediate offsets while we settle after opening a room.
+    if (Date.now() < settleUntilRef.current) {
+      stickToBottomRef.current = true;
+      return;
+    }
     const y = event.nativeEvent.contentOffset.y;
     stickToBottomRef.current = y <= NEAR_BOTTOM_PX;
   }, []);
 
-  // Room change: mark pinned. Inverted lists already show newest at offset 0,
-  // so we only do one quiet settle after first paint (for long histories).
+  // Room enter only — one quiet settle, not a multi-step staircase.
   useEffect(() => {
     const roomChanged = lastRoomKeyRef.current !== deps.roomKey;
     lastRoomKeyRef.current = deps.roomKey;
+    lastMessageCountRef.current = deps.messageCount;
     stickToBottomRef.current = true;
-    if (!roomChanged && deps.messageCount === 0) return;
-    const t = setTimeout(() => {
-      pinToBottom({ force: true });
-    }, 16);
+    if (!roomChanged) return;
+    settleUntilRef.current = Date.now() + 350;
+    pinToBottom({ force: true });
+    const t = setTimeout(() => pinToBottom({ force: true }), 80);
     return () => clearTimeout(t);
   }, [deps.roomKey, pinToBottom]);
 
-  // New messages / typing footer: one pin only while user is still at bottom.
+  // New messages / typing while inverted:
+  // Do NOT call scroll APIs. Newest row is index 0 (visual bottom), so the
+  // viewport stays put and only the new bubble appears — like KakaoTalk.
+  // Calling scrollToOffset here was what made every send feel like a jump.
   useEffect(() => {
-    if (!stickToBottomRef.current) return;
-    pinToBottom();
-  }, [deps.messageCount, deps.footerSignal, pinToBottom]);
+    lastMessageCountRef.current = deps.messageCount;
+  }, [deps.messageCount, deps.footerSignal]);
 
-  // Intentionally no-op: content-size thrashing was the staircase.
+  // No content-size auto-scroll: image loads used to bounce the whole screen.
   const onContentSizeChange = useCallback((_w: number, _h: number) => {}, []);
-  const onLayout = useCallback(() => {}, []);
+  const onLayout = useCallback(() => {
+    // First layout of a room: ensure we open at the latest bubble.
+    if (Date.now() < settleUntilRef.current && stickToBottomRef.current) {
+      pinToBottom({ force: true });
+    }
+  }, [pinToBottom]);
 
   return {
     listRef,
@@ -66,12 +82,19 @@ export function useStickToBottomList<T>(deps: {
     onContentSizeChange,
     onLayout,
     pinToBottom: () => pinToBottom({ force: true }),
-    /** Screens should pass this to FlatList. */
-    inverted: true as const
+    inverted: true as const,
+    listProps: {
+      // Clipping + inverted often mis-reports initial offset on Android.
+      removeClippedSubviews: false as const,
+      initialNumToRender: 24,
+      maxToRenderPerBatch: 16,
+      windowSize: 10,
+      style: { flex: 1 } as const
+    }
   };
 }
 
-/** Newest-first copy for inverted chat lists. */
+/** Newest-first copy for inverted chat lists (visual bottom = latest). */
 export function reverseMessagesForInvertedList<T>(messages: T[]): T[] {
   if (!messages.length) return messages;
   return messages.slice().reverse();

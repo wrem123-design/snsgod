@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, FlatList, Image, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, FlatList, Image, KeyboardAvoidingView, NativeModules, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { clearComposerInput, createComposerSendGuard, isComposerSendEnter } from '../logic/chatComposerKeys';
 import { reverseMessagesForInvertedList, useStickToBottomList } from '../logic/useStickToBottomList';
+import { MessageActionAnchor, MessageActionMenu } from '../components/MessageActionMenu';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
 import { callLLMText, generateImageDataUri, imagePromptWithoutCharacterName, parseJsonObject } from '../logic/api';
@@ -219,7 +220,8 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
     onContentSizeChange,
     onLayout,
     pinToBottom,
-    inverted
+    inverted,
+    listProps
   } = useStickToBottomList<SNSGodMessage>({
     roomKey: roomId,
     messageCount: messages.length,
@@ -439,6 +441,29 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
     }));
   }
 
+  async function deleteMessage(messageId: string) {
+    if (!roomId || !messageId) return;
+    await commitCurrent(current => {
+      const roomList = current.messages[roomId] || [];
+      const target = roomList.find(item => item.id === messageId);
+      if (!target) return current;
+      const meetingId = String(target.meetingEventId || '');
+      return {
+        ...current,
+        messages: {
+          ...current.messages,
+          [roomId]: roomList.filter(item => item.id !== messageId)
+        },
+        meetingEventSessions: meetingId
+          ? (current.meetingEventSessions || []).filter(session => {
+            if (session.id !== meetingId) return true;
+            return session.status === 'active' || session.status === 'ended';
+          })
+          : current.meetingEventSessions
+      };
+    });
+  }
+
   if (!room) {
     return (
       <View style={styles.empty}>
@@ -460,6 +485,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
       </View>
       <FlatList
         ref={listRef}
+        {...listProps}
         inverted={inverted}
         data={listMessages}
         keyExtractor={item => item.id}
@@ -469,6 +495,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
         onContentSizeChange={onContentSizeChange}
         onLayout={onLayout}
         keyboardShouldPersistTaps="handled"
+        // inverted: header sits at visual bottom (near composer)
         ListHeaderComponent={typingCharacters.length ? <GroupTypingBubble characters={typingCharacters} /> : null}
         renderItem={({ item }) => {
           const meetingSessionId = String(item.meetingEventId || '');
@@ -482,6 +509,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
               meetingStatus={meetingSessionId ? meetingStatusById.get(meetingSessionId) : undefined}
               onStartMeeting={startMeetingEvent}
               onCancelMeeting={cancelMeetingEvent}
+              onDeleteMessage={deleteMessage}
             />
           );
         }}
@@ -558,7 +586,7 @@ function StickerTray({ stickers, onPick }: { stickers: Sticker[]; onPick: (stick
   );
 }
 
-function GroupBubble({ message, participants, userName, userStickers, meetingSession, meetingStatus, onStartMeeting, onCancelMeeting }: {
+function GroupBubble({ message, participants, userName, userStickers, meetingSession, meetingStatus, onStartMeeting, onCancelMeeting, onDeleteMessage }: {
   message: SNSGodMessage;
   participants: SNSGodCharacter[];
   userName: string;
@@ -567,29 +595,78 @@ function GroupBubble({ message, participants, userName, userStickers, meetingSes
   meetingStatus?: string;
   onStartMeeting?: (sessionId: string) => void;
   onCancelMeeting?: (sessionId: string, messageId: string) => void;
+  onDeleteMessage?: (messageId: string) => void;
 }) {
   const [promptOpen, setPromptOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuAnchor, setMenuAnchor] = useState<MessageActionAnchor | null>(null);
+  const bubbleRef = useRef<View>(null);
   const mine = message.role === 'user';
   const system = message.role === 'system';
   const character = participants.find(item => item.id === message.characterId);
   const sticker = message.sticker ? (mine ? userStickers : character?.stickers || []).find(item => String(item.id) === String(message.sticker)) : undefined;
+  const copyValue = [
+    message.content,
+    message.imageCaption,
+    message.phoneSummaryContext ? `통화 요약: ${message.phoneSummaryContext}` : ''
+  ].filter(Boolean).join('\n').trim();
+
+  function openMessageMenu() {
+    bubbleRef.current?.measureInWindow((x, y, width, height) => {
+      setMenuAnchor({ x, y, width, height });
+      setMenuOpen(true);
+    });
+  }
+
+  async function copyMessageText() {
+    if (!copyValue) {
+      Alert.alert('복사', '복사할 텍스트가 없습니다.');
+      return;
+    }
+    try {
+      const bridge = NativeModules.TermuxBridge as undefined | { copyText: (text: string) => Promise<string> };
+      if (!bridge?.copyText) throw new Error('클립보드 브릿지가 준비되지 않았습니다.');
+      await bridge.copyText(copyValue);
+      Alert.alert('복사 완료', '말풍선 텍스트를 복사했습니다.');
+    } catch (error) {
+      Alert.alert('복사 실패', error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  const actionMenu = (
+    <MessageActionMenu
+      visible={menuOpen}
+      anchor={menuAnchor}
+      align={system ? 'center' : mine ? 'right' : 'left'}
+      onCopy={() => { void copyMessageText(); }}
+      onDelete={() => onDeleteMessage?.(message.id)}
+      onClose={() => {
+        setMenuOpen(false);
+        setMenuAnchor(null);
+      }}
+    />
+  );
+
   if (system) {
     const meetingSessionId = String(message.meetingEventId || '');
     const pendingMeeting = Boolean(message.meetingEventPrompt && meetingSessionId && meetingStatus === 'pending');
     return (
-      <View style={styles.systemBubble}>
-        {pendingMeeting && meetingSession ? <GroupMeetingPromptPreview session={meetingSession} participants={participants} /> : null}
-        <Text style={styles.systemText}>{message.content}</Text>
-        {pendingMeeting ? (
-          <View style={styles.meetingActions}>
-            <Pressable onPress={() => onStartMeeting?.(meetingSessionId)} style={styles.meetingPrimary}>
-              <Text style={styles.meetingPrimaryText}>단톡 만남 시작</Text>
-            </Pressable>
-            <Pressable onPress={() => onCancelMeeting?.(meetingSessionId, message.id)} style={styles.meetingSecondary}>
-              <Text style={styles.meetingSecondaryText}>취소</Text>
-            </Pressable>
-          </View>
-        ) : null}
+      <View ref={bubbleRef} collapsable={false} style={styles.bubbleAnchor}>
+        {actionMenu}
+        <Pressable onPress={() => menuOpen && setMenuOpen(false)} onLongPress={openMessageMenu} delayLongPress={380} style={styles.systemBubble}>
+          {pendingMeeting && meetingSession ? <GroupMeetingPromptPreview session={meetingSession} participants={participants} /> : null}
+          <Text style={styles.systemText}>{message.content}</Text>
+          {pendingMeeting ? (
+            <View style={styles.meetingActions}>
+              <Pressable onPress={() => onStartMeeting?.(meetingSessionId)} style={styles.meetingPrimary}>
+                <Text style={styles.meetingPrimaryText}>단톡 만남 시작</Text>
+              </Pressable>
+              <Pressable onPress={() => onCancelMeeting?.(meetingSessionId, message.id)} style={styles.meetingSecondary}>
+                <Text style={styles.meetingSecondaryText}>취소</Text>
+              </Pressable>
+            </View>
+          ) : null}
+        </Pressable>
       </View>
     );
   }
@@ -602,22 +679,25 @@ function GroupBubble({ message, participants, userName, userStickers, meetingSes
           <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text>
         </View>
       ) : null}
-      <View style={[styles.bubble, mine ? styles.myBubble : styles.theirBubble]}>
-        {!mine ? <Text style={styles.speaker}>{character?.name || 'Character'}</Text> : <Text style={styles.speakerMine}>{userName}</Text>}
-        {message.content ? <Text style={styles.bubbleText}>{message.content}</Text> : null}
-        {sticker?.data || sticker?.mediaData ? <Image source={{ uri: sticker.data || sticker.mediaData || '' }} style={styles.stickerImage} resizeMode="contain" /> : message.sticker ? <Text style={styles.stickerText}>스티커 · {sticker?.name || message.sticker}</Text> : null}
-        {message.mediaData ? (
-          <View style={styles.messageImageWrap}>
-            <Image source={{ uri: message.mediaData }} style={styles.messageImage} resizeMode="cover" />
-            {message.imagePrompt ? (
-              <Pressable accessibilityLabel={promptOpen ? '이미지 프롬프트 접기' : '이미지 프롬프트 펼치기'} onPress={() => setPromptOpen(value => !value)} style={styles.promptToggle}>
-                <Text style={styles.promptToggleText}>{promptOpen ? '⌃' : '⌄'}</Text>
-              </Pressable>
-            ) : null}
-          </View>
-        ) : null}
-        {message.imagePrompt && promptOpen ? <Text style={styles.imageHint}>이미지 프롬프트: {message.imagePrompt}</Text> : null}
-        {message.imageCaption ? <Text style={styles.imageHint}>{message.imageCaption}</Text> : null}
+      <View ref={bubbleRef} collapsable={false} style={styles.bubbleAnchor}>
+        {actionMenu}
+        <Pressable onPress={() => menuOpen && setMenuOpen(false)} onLongPress={openMessageMenu} delayLongPress={380} style={[styles.bubble, mine ? styles.myBubble : styles.theirBubble]}>
+          {!mine ? <Text style={styles.speaker}>{character?.name || 'Character'}</Text> : <Text style={styles.speakerMine}>{userName}</Text>}
+          {message.content ? <Text style={styles.bubbleText}>{message.content}</Text> : null}
+          {sticker?.data || sticker?.mediaData ? <Image source={{ uri: sticker.data || sticker.mediaData || '' }} style={styles.stickerImage} resizeMode="contain" /> : message.sticker ? <Text style={styles.stickerText}>스티커 · {sticker?.name || message.sticker}</Text> : null}
+          {message.mediaData ? (
+            <View style={styles.messageImageWrap}>
+              <Image source={{ uri: message.mediaData }} style={styles.messageImage} resizeMode="cover" />
+              {message.imagePrompt ? (
+                <Pressable accessibilityLabel={promptOpen ? '이미지 프롬프트 접기' : '이미지 프롬프트 펼치기'} onPress={() => setPromptOpen(value => !value)} style={styles.promptToggle}>
+                  <Text style={styles.promptToggleText}>{promptOpen ? '⌃' : '⌄'}</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
+          {message.imagePrompt && promptOpen ? <Text style={styles.imageHint}>이미지 프롬프트: {message.imagePrompt}</Text> : null}
+          {message.imageCaption ? <Text style={styles.imageHint}>{message.imageCaption}</Text> : null}
+        </Pressable>
       </View>
       {!mine ? <Text style={styles.messageTime}>{formatMessageTime(message.createdAt)}</Text> : null}
     </View>
@@ -650,6 +730,7 @@ const styles = StyleSheet.create({
   settings: { minHeight: 38, paddingHorizontal: 12, borderRadius: 8, backgroundColor: '#eee8dc', alignItems: 'center', justifyContent: 'center' },
   settingsText: { color: colors.text, fontWeight: '900' },
   messages: { flexGrow: 1, padding: 12, gap: 8 },
+  bubbleAnchor: { position: 'relative', zIndex: 1, maxWidth: '100%' },
   messageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginVertical: 4 },
   messageRowMine: { justifyContent: 'flex-end' },
   messageMeta: { minWidth: 42, alignItems: 'flex-end', justifyContent: 'flex-end', gap: 1, marginBottom: 2 },

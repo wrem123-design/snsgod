@@ -110,7 +110,15 @@ function upsertPrivateSummaryAndMemory(state: SNSGodState, roomId: string, messa
   const room = allRooms(state).find(item => item.id === roomId);
   const characterId = room?.characterId;
   if (!characterId) return state;
-  const summary = buildRoomSummary(state, roomId, 'private', [characterId], messages);
+  const previous = latestRoomSummary(state, roomId);
+  const built = buildRoomSummary(state, roomId, 'private', [characterId], messages);
+  // Keep the last LLM relationship summary text for prompts/UI until a new LLM pass runs.
+  // Heuristic "나: ... / 캐릭터: ..." recap must NOT overwrite 관계 요약 (roomPrompt).
+  const summary: RoomSummary = {
+    ...built,
+    summary: previous?.llmSummaryMessageCount ? previous.summary : built.summary,
+    llmSummaryMessageCount: previous?.llmSummaryMessageCount
+  };
   const memory = buildCharacterMemory({
     characterId,
     knownByCharacterIds: [characterId],
@@ -120,11 +128,91 @@ function upsertPrivateSummaryAndMemory(state: SNSGodState, roomId: string, messa
     content: summary.summary,
     importance: summaryImportance(summary)
   });
-  return syncPrivateRoomPromptSummary({
+  return {
     ...state,
     roomSummaries: upsertByRoom(state.roomSummaries || [], summary).slice(0, MAX_ROOM_SUMMARIES),
     characterMemories: upsertMemory(state.characterMemories || [], memory)
-  }, roomId, summary.summary);
+  };
+}
+
+/** True when private room is due for the same LLM summary as the room-settings button. */
+export function privateRoomNeedsLlmSummary(state: SNSGodState, roomId: string): boolean {
+  const room = allRooms(state).find(item => item.id === roomId);
+  if (!room?.characterId || room.type === 'random') return false;
+  if (groupRoomById(state, roomId)) return false;
+  const messages = state.messages[roomId] || [];
+  if (messages.length < 6) return false;
+  const current = latestRoomSummary(state, roomId);
+  const lastLlm = Number(current?.llmSummaryMessageCount || 0);
+  return !lastLlm || messages.length - lastLlm >= SUMMARY_INTERVAL;
+}
+
+/**
+ * Apply LLM "현재 대화 요약" output into roomPrompt + roomSummaries + characterMemories.
+ * Same storage shape as the room-settings button.
+ */
+export function applyPrivateRoomLlmSummary(
+  state: SNSGodState,
+  roomId: string,
+  summaryText: string,
+  options?: { draft?: Partial<SNSGodRoom> }
+): SNSGodState {
+  const cleaned = String(summaryText || '').trim();
+  if (!cleaned) return state;
+  const room = allRooms(state).find(item => item.id === roomId);
+  const characterId = room?.characterId;
+  if (!characterId || room?.type === 'random') return state;
+  const messages = state.messages[roomId] || [];
+  const previous = latestRoomSummary(state, roomId);
+  const topics = extractTopics(cleaned);
+  const followUps = extractFollowUps(cleaned);
+  const mood = previous?.mood || inferMood(cleaned);
+  const summary: RoomSummary = {
+    id: `summary_${roomId}`,
+    roomId,
+    roomType: 'private',
+    characterIds: [characterId],
+    messageCount: messages.length,
+    llmSummaryMessageCount: messages.length,
+    summary: cleaned,
+    topics: topics.length ? topics : (previous?.topics || []),
+    mood,
+    followUps: followUps.length ? followUps : (previous?.followUps || []),
+    updatedAt: Date.now(),
+    lastMessageAt: Number(messages[messages.length - 1]?.createdAt || Date.now())
+  };
+  const memory = buildCharacterMemory({
+    characterId,
+    knownByCharacterIds: [characterId],
+    sourceRoomId: roomId,
+    sourceRoomType: 'private',
+    visibility: 'private_with_user',
+    content: cleaned,
+    importance: summaryImportance(summary)
+  });
+  let next: SNSGodState = {
+    ...state,
+    roomSummaries: upsertByRoom(state.roomSummaries || [], summary).slice(0, MAX_ROOM_SUMMARIES),
+    characterMemories: upsertMemory(state.characterMemories || [], memory)
+  };
+  // Prefer draft room fields when saving from room settings.
+  if (options?.draft) {
+    const chatRooms = { ...next.chatRooms };
+    chatRooms[characterId] = (chatRooms[characterId] || []).map(item => {
+      if (item.id !== roomId) return item;
+      const basePrompt = options.draft?.roomPrompt != null ? String(options.draft.roomPrompt) : String(item.roomPrompt || '');
+      return {
+        ...item,
+        name: options.draft?.name != null ? String(options.draft.name) : item.name,
+        userAlias: options.draft?.userAlias != null ? String(options.draft.userAlias) : item.userAlias,
+        relationshipNote: options.draft?.relationshipNote != null ? String(options.draft.relationshipNote) : item.relationshipNote,
+        roomPrompt: replaceAutoSummaryBlock(basePrompt, cleaned)
+      };
+    });
+    next = { ...next, chatRooms };
+    return next;
+  }
+  return syncPrivateRoomPromptSummary(next, roomId, cleaned);
 }
 
 function upsertGroupSummaryAndMemories(state: SNSGodState, roomId: string, messages: SNSGodMessage[], privateContexts?: PrivateSummaryContext[]): SNSGodState {

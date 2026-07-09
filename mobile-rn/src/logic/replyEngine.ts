@@ -10,6 +10,7 @@ import { buildChatPrompt, normalizeReplyMessagesForStyle } from './prompts';
 import { createMeetingEventSession, shouldStartMeetingEvent } from './meetingEvent';
 import { maybeCreateAutoSNSPost } from './sns';
 import { appendMessage, findCharacter, findRoom, isRoomDisabled, roomMessages, updateCharacter } from './stateHelpers';
+import { maybeRefreshPrivateRoomLlmSummary } from './roomConversationSummary';
 import { chatNowContext, isImplausibleCompletedActivity, repairTimeRealityInstruction, softenImplausibleCompletedActivity } from './timeReality';
 import { SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
 import { appendDebugLog } from './debugLog';
@@ -141,31 +142,36 @@ function clearPending(state: SNSGodState, roomId: string, jobId: string) {
 function mergeGeneratedSns(current: SNSGodState, before: SNSGodState, generated: SNSGodState): SNSGodState {
   const beforePostIds = new Set((before.snsPosts || []).map(post => post.id));
   const currentPostIds = new Set((current.snsPosts || []).map(post => post.id));
-  const snsPosts = [
-    ...(current.snsPosts || []),
-    ...(generated.snsPosts || []).filter(post => !beforePostIds.has(post.id) && !currentPostIds.has(post.id))
-  ];
+  const newPosts = (generated.snsPosts || []).filter(post => !beforePostIds.has(post.id) && !currentPostIds.has(post.id));
+  // Newest first, matching generateSNSPost ordering.
+  const snsPosts = [...newPosts, ...(current.snsPosts || [])].slice(0, 120);
   const beforeThreadIds = new Set((before.snsDmThreads || []).map(thread => thread.id));
   const currentThreadIds = new Set((current.snsDmThreads || []).map(thread => thread.id));
-  const snsDmThreads = [
-    ...(current.snsDmThreads || []),
-    ...(generated.snsDmThreads || []).filter(thread => !beforeThreadIds.has(thread.id) && !currentThreadIds.has(thread.id))
-  ];
+  const newThreads = (generated.snsDmThreads || []).filter(thread => !beforeThreadIds.has(thread.id) && !currentThreadIds.has(thread.id));
+  const snsDmThreads = [...newThreads, ...(current.snsDmThreads || [])].slice(0, 120);
   const notifications = [
-    ...(current.notifications || []),
-    ...(generated.notifications || []).filter(item => !(current.notifications || []).some(existing => existing.id === item.id))
+    ...(generated.notifications || []).filter(item => !(current.notifications || []).some(existing => existing.id === item.id)),
+    ...(current.notifications || [])
   ].slice(0, 100);
   return {
     ...current,
     snsPosts,
     snsDmThreads,
     notifications,
+    config: generated.config?.apiProfiles ? {
+      ...current.config,
+      apiProfiles: {
+        ...current.config.apiProfiles,
+        ...generated.config.apiProfiles
+      }
+    } : current.config,
     characters: current.characters.map(character => {
       const generatedCharacter = generated.characters.find(item => item.id === character.id);
-      const beforeCharacter = before.characters.find(item => item.id === character.id);
-      if (!generatedCharacter || !beforeCharacter) return character;
-      if (generatedCharacter.lastSnsMessageCount === beforeCharacter.lastSnsMessageCount) return character;
-      return { ...character, lastSnsMessageCount: generatedCharacter.lastSnsMessageCount };
+      if (!generatedCharacter) return character;
+      const generatedCount = Number(generatedCharacter.lastSnsMessageCount || 0);
+      const currentCount = Number(character.lastSnsMessageCount || 0);
+      if (generatedCount <= currentCount) return character;
+      return { ...character, lastSnsMessageCount: generatedCount };
     })
   };
 }
@@ -372,20 +378,44 @@ export async function startReplyJob(input: StartReplyJobInput) {
       }
     }
 
-    if (!input.randomMode && isCurrentChatJob(input.roomId, jobId)) {
+    // Auto SNS is independent of the chat job lifetime: even if the user sent another
+    // message while SNS was generating, still merge posts so generation is not discarded.
+    if (!input.randomMode) {
       const beforeSns = input.getState();
       const snsTarget = roomStillValid(beforeSns, input.roomId, input.characterId);
       if (beforeSns && snsTarget) {
         try {
+          await appendDebugLog('sns.auto', `reply-hook try room=${input.roomId} character=${snsTarget.character.id}`);
           const generated = await maybeCreateAutoSNSPost(beforeSns, snsTarget.character, input.roomId);
-          if (isCurrentChatJob(input.roomId, jobId)) {
+          if (generated !== beforeSns) {
             await input.commitCurrent(current => mergeGeneratedSns(current, beforeSns, generated));
+            await appendDebugLog('sns.auto', `reply-hook committed room=${input.roomId} character=${snsTarget.character.id}`);
           }
         } catch (error) {
           await appendDebugLog('sns.auto', `auto SNS failed after reply room=${input.roomId} character=${snsTarget.character.id}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
         }
       } else {
         await appendDebugLog('sns.auto', `skip room=${input.roomId} character=${input.characterId}: room or character missing`);
+      }
+    }
+
+    // Relationship summary (관계 요약): same LLM path as room-settings "현재 대화 요약".
+    if (!input.randomMode && isCurrentChatJob(input.roomId, jobId)) {
+      const beforeSummary = input.getState();
+      if (beforeSummary) {
+        try {
+          const summarized = await maybeRefreshPrivateRoomLlmSummary(beforeSummary, input.roomId);
+          if (summarized && isCurrentChatJob(input.roomId, jobId)) {
+            await input.commitCurrent(current => ({
+              ...summarized,
+              messages: current.messages,
+              pendingReplies: current.pendingReplies,
+              unreadCounts: current.unreadCounts
+            }));
+          }
+        } catch (error) {
+          await appendDebugLog('memory.summary', `llm room summary failed room=${input.roomId}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+        }
       }
     }
   } catch (error) {

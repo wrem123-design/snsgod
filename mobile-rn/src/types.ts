@@ -248,6 +248,8 @@ export type RoomSummary = {
   roomType: 'private' | 'group';
   characterIds: string[];
   messageCount: number;
+  /** Message count when the last LLM "현재 대화 요약" style summary was written. */
+  llmSummaryMessageCount?: number;
   summary: string;
   topics: string[];
   mood: string;

@@ -12,6 +12,7 @@ import { runDailyDiaryMemory } from './dailyDiary';
 import { characterReferenceImages, randomReferenceImage } from './imageReference';
 import { characterWithConversationRhythm, conversationRhythmInstruction } from './conversationRhythm';
 import { groupMemoryPromptBlock } from './memoryBridge';
+import { maybeCreateBackgroundAutoSNSPost } from './sns';
 
 type GroupAutonomousMessage = {
   characterId?: string;
@@ -679,6 +680,11 @@ export async function runAutomationTick(state: SNSGodState): Promise<SNSGodState
 
   const calendarNext = await runCalendarEvent(state);
   if (calendarNext) return calendarNext;
+
+  // SNS auto can run while the app is backgrounded / between chats.
+  // Does not require a live reply job; uses the same eligibility as post-reply SNS.
+  const snsNext = await maybeCreateBackgroundAutoSNSPost(state);
+  if (snsNext) return snsNext;
 
   const randomFirstNext = await runPrivateFirstMessage(state, true);
   if (randomFirstNext) return randomFirstNext;

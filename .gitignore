@@ -15,3 +15,8 @@ backup/
 oracle-migration/
 android-app/app/src/main/assets/www/bootstrap-backup.json
 android-app/app/src/main/assets/www/bootstrap-backup.js
+
+mobile-rn/.gradle-user-home
+mobile-rn/.gradle-user-home-install
+_phone_compare/
+

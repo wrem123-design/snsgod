@@ -44,6 +44,7 @@ import { markRoomRead, pushNotification } from './logic/notifications';
 import { startReplyJob } from './logic/replyEngine';
 import { createGroupMeetingEventSession, createManualGroupMeetingEventPrompt, createManualMeetingEventPrompt, createMeetingEventSession, shouldStartGroupMeetingEvent, shouldStartMeetingEvent } from './logic/meetingEvent';
 import { forceUpdateRoomMemory } from './logic/memoryBridge';
+import { maybeCreateBackgroundAutoSNSPost } from './logic/sns';
 
 const INTERRUPTED_REPLY_RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -269,13 +270,23 @@ export default function App() {
   async function runAutomationTickOnce(reason: string) {
     const current = stateRef.current;
     if (!current || isAutomationQueueBusy()) return;
-    if (current.config.autoEnabled === false) return;
     const profile = current.config.apiProfiles[current.config.apiType] || {};
     const hasKey = current.config.apiType === 'vertex'
       ? Boolean(String(profile.serviceAccountJson || '').trim())
       : Boolean(profile.apiKey || profile.apiKeys?.some(Boolean));
     if (!hasKey) return;
     try {
+      // Global auto off: still allow SNS-only background posts when SNS auto is enabled.
+      if (current.config.autoEnabled === false) {
+        if (current.config.snsAutoPostEnabled === false) return;
+        const snsOnly = await maybeCreateBackgroundAutoSNSPost(current);
+        if (snsOnly && snsOnly !== current) {
+          const latest = stateRef.current;
+          await commit(latest && latest !== current ? mergeAutomationResult(latest, current, snsOnly) : snsOnly);
+          void appendDebugLog('sns.auto', `background sns-only tick applied reason=${reason}`);
+        }
+        return;
+      }
       const next = await runAutomationQueueTick(current);
       if (next !== current) {
         const latest = stateRef.current;

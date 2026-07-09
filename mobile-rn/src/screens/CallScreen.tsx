@@ -26,6 +26,9 @@ type PhoneTurn = {
 };
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+/** Hard cap on character speaking turns (including the first greeting). Prevents endless API loops. */
+const MAX_PHONE_CHARACTER_TURNS = 9;
+const PHONE_CLOSING_CHOICES = ['그래, 끊자.', '나중에 또 통화하자.', '응, 끊을게.'];
 const PHONE_CONNECTION_GLITCH_PATTERN = /(내\s*말\s*들려|목소리\s*들려|말\s*들려|잘\s*안\s*들|안\s*들려|통화\s*(?:상태|품질)|신호(?:가|는)?|끊기|끊겨|지직|노이즈|소리\s*(?:깨|끊))/i;
 const REPEATED_GLITCH_REPLACEMENTS = [
   '잠깐만, 방금 하나도 못 들었어.',
@@ -35,6 +38,40 @@ const REPEATED_GLITCH_REPLACEMENTS = [
 
 function isPhoneConnectionGlitch(text: string) {
   return PHONE_CONNECTION_GLITCH_PATTERN.test(text);
+}
+
+/** 기승전결 guidance for the current character turn (1..MAX). */
+function phoneArcGuidance(turnNumber: number, maxTurns: number): string {
+  const remaining = Math.max(0, maxTurns - turnNumber);
+  const header = `Call length limit: this is character turn ${turnNumber} of ${maxTurns}. Remaining character turns after this: ${remaining}. The call MUST finish within ${maxTurns} character turns total. Never open an endless chat.`;
+  if (turnNumber <= 1) {
+    return [
+      header,
+      'Story beat 기 (opening): warm greeting, confirm the reason for the call, set a light mood. Keep it short. Do not dump the whole agenda yet.'
+    ].join('\n');
+  }
+  if (turnNumber <= 3) {
+    return [
+      header,
+      'Story beat 기→승 (setup): react to the user, plant 1 clear topic from recent chat or relationship context, stay live and spoken.'
+    ].join('\n');
+  }
+  if (turnNumber <= 6) {
+    return [
+      header,
+      'Story beat 승→전 (development/turn): deepen emotion or conflict a little, share one concrete reaction or small revelation. Do not start brand-new long side quests.'
+    ].join('\n');
+  }
+  if (turnNumber < maxTurns) {
+    return [
+      header,
+      'Story beat 전→결 (winding down): start closing the call. Resolve or park the main topic, hint that you should hang up soon, and put at least one hang-up oriented choice such as "나중에 통화하자" or "끊자". Do not invent a new major topic.'
+    ].join('\n');
+  }
+  return [
+    header,
+    'Story beat 결 (finale, LAST turn): this is the final character speech of the call. Give a natural spoken wrap-up and goodbye. No new questions that require a long answer. No new topics. Choices must all be hang-up style. After this turn the app ends the call.'
+  ].join('\n');
 }
 
 function replaceRepeatedPhoneGlitches(sourceLines: string[], previousLines: CallLine[], allowNewGlitch: boolean) {
@@ -83,6 +120,9 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
   const endingRef = useRef(false);
   const bootedRef = useRef(false);
   const typingTokenRef = useRef(0);
+  const characterTurnCountRef = useRef(0);
+  const finalTurnActiveRef = useRef(false);
+  const skipExtraGoodbyeRef = useRef(false);
   const connectionGlitchAllowedRef = useRef(Math.random() < 0.25);
   const ring = useRef(new Animated.Value(0)).current;
   const cardFade = useRef(new Animated.Value(1)).current;
@@ -210,22 +250,40 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
     return nextLines;
   }
 
-  function parsePhoneTurn(text: string, previousLines: CallLine[]): { lines: string[]; choices: string[]; uiMode: CallTurnUiMode; allowDirectReply: boolean } {
+  function parsePhoneTurn(
+    text: string,
+    previousLines: CallLine[],
+    options?: { finalTurn?: boolean; windDown?: boolean }
+  ): { lines: string[]; choices: string[]; uiMode: CallTurnUiMode; allowDirectReply: boolean } {
     const parsed = parseJsonObject<PhoneTurn>(text);
     const sourceLines = parsed
       ? parsed.lines || parsed.characterLines || parsed.dialogue || [parsed.line || parsed.content || parsed.text || '']
       : [text];
     const parsedChoices = parsed?.choices || parsed?.options || [];
     const nextLines = sanitizePhoneLines(sourceLines.map(item => String(item || '').trim()).filter(Boolean).slice(0, 3), previousLines);
-    const nextChoices = parsedChoices.map(item => String(item || '').trim()).filter(Boolean).slice(0, 3);
-    const mode = parsed?.uiMode === 'next' || parsed?.uiMode === 'input' || parsed?.uiMode === 'mixed' || parsed?.uiMode === 'choices'
-      ? parsed.uiMode
-      : nextChoices.length >= 2 ? 'choices' : 'next';
+    let nextChoices = parsedChoices.map(item => String(item || '').trim()).filter(Boolean).slice(0, 3);
+    if (options?.finalTurn) {
+      nextChoices = PHONE_CLOSING_CHOICES.slice();
+    } else if (options?.windDown) {
+      const hangupChoice = nextChoices.find(item => looksLikeHangup(item));
+      nextChoices = [
+        ...nextChoices.filter(item => !looksLikeHangup(item)).slice(0, 2),
+        hangupChoice || '나중에 다시 통화하자.'
+      ].slice(0, 3);
+      if (nextChoices.length < 2) nextChoices = ['응, 알겠어.', '나중에 다시 통화하자.'];
+    } else if (nextChoices.length < 2) {
+      nextChoices = ['응, 듣고 있어.', '조금 더 말해줘.', '나중에 다시 통화하자.'];
+    }
+    const mode = options?.finalTurn
+      ? 'choices'
+      : parsed?.uiMode === 'next' || parsed?.uiMode === 'input' || parsed?.uiMode === 'mixed' || parsed?.uiMode === 'choices'
+        ? parsed.uiMode
+        : nextChoices.length >= 2 ? 'choices' : 'next';
     return {
-      lines: nextLines.length ? nextLines : ['여보세요?'],
-      choices: nextChoices.length >= 2 ? nextChoices : ['응, 듣고 있어.', '조금 더 말해줘.', '나중에 다시 통화하자.'],
+      lines: nextLines.length ? nextLines : (options?.finalTurn ? ['알겠어. 이만 끊을게. 나중에 또 이야기하자.'] : ['여보세요?']),
+      choices: nextChoices,
       uiMode: mode === 'mixed' ? 'choices' : mode,
-      allowDirectReply: parsed?.allowDirectReply !== false
+      allowDirectReply: options?.finalTurn ? false : parsed?.allowDirectReply !== false
     };
   }
 
@@ -250,7 +308,17 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
   }
 
   async function requestCharacterTurn(baseLines: CallLine[], firstTurn = false) {
-    if (!character || phase === 'ending') return;
+    if (!character || endingRef.current || phase === 'ending') return;
+    // Already used the full 9 character turns — close without another LLM chat turn.
+    if (characterTurnCountRef.current >= MAX_PHONE_CHARACTER_TURNS) {
+      skipExtraGoodbyeRef.current = true;
+      await endCall(undefined, baseLines);
+      return;
+    }
+    const turnNumber = characterTurnCountRef.current + 1;
+    const isFinalTurn = turnNumber >= MAX_PHONE_CHARACTER_TURNS;
+    const isWindDown = turnNumber >= MAX_PHONE_CHARACTER_TURNS - 2 && !isFinalTurn;
+    finalTurnActiveRef.current = isFinalTurn;
     setPhase('listening');
     setChoices([]);
     setUiMode('next');
@@ -267,11 +335,16 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
           content: [
             `You are ${character.name} in a private live phone call with ${userName}.`,
             `Phone call language: ${character.language || state.config.language || 'Korean'}.`,
+            phoneArcGuidance(turnNumber, MAX_PHONE_CHARACTER_TURNS),
             'Return raw JSON only: {"lines":["short spoken line 1","short spoken line 2"],"choices":["user reply option 1","user reply option 2","user reply option 3"],"uiMode":"next|choices|input|mixed","allowDirectReply":true}.',
             'Lines must contain 1-3 short spoken live phone lines. Each line is shown as one card page. No narration, no action descriptions, no speaker labels, no phone-call markers, no SNS posts.',
             'Choices must be concise, varied, and directly reply to the spoken lines.',
             'A bad-connection or hearing-trouble moment such as "Can you hear me?" is a rare live-call flavor. Use it at most once in the entire call, never twice, and do not use it if it already appears in the transcript.',
-            firstTurn ? 'For the first connected turn, uiMode may be next if the character is starting with a short greeting.' : 'Use choices when the user should answer meaningfully.',
+            firstTurn
+              ? 'For the first connected turn, uiMode may be next if the character is starting with a short greeting.'
+              : isFinalTurn
+                ? 'Final turn: uiMode must be choices. allowDirectReply must be false. All choices must end the call.'
+                : 'Use choices when the user should answer meaningfully.',
             `Character profile:\n${character.prompt || '(empty)'}`,
             `User profile:\n${state.config.userDescription || '(empty)'}`,
             memoryText ? `Character memories, including real in-person meetings:\n${memoryText}` : '',
@@ -283,16 +356,51 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
           role: 'user',
           content: [
             `Phone call so far:\n${transcript || '(call just connected)'}`,
-            firstTurn ? 'The call has just connected. Let the character speak first.' : 'Continue after my selected/direct reply.',
+            firstTurn
+              ? 'The call has just connected. Let the character speak first (opening beat 기).'
+              : isFinalTurn
+                ? 'This is the last allowed character turn. Close the call with a spoken 결 ending. Do not ask a new open question.'
+                : `Continue after my selected/direct reply. Stay inside turn ${turnNumber}/${MAX_PHONE_CHARACTER_TURNS} of the 기승전결 arc.`,
             'Return JSON now.'
           ].join('\n\n')
         }
       ]);
-      const turn = parsePhoneTurn(result.text, baseLines);
+      characterTurnCountRef.current = turnNumber;
+      const turn = parsePhoneTurn(result.text, baseLines, { finalTurn: isFinalTurn, windDown: isWindDown });
       await showCharacterPage(turn.lines, 0, turn.choices, turn.uiMode, turn.allowDirectReply);
+      if (isFinalTurn) {
+        await finishFinalTurnPages(turn.lines, turn.choices);
+      }
     } catch {
-      const fallbackLines = sanitizePhoneLines(['잠깐만, 방금 하나도 못 들었어.'], baseLines);
-      await showCharacterPage(fallbackLines, 0, ['다시 말해줘.', '괜찮아?', '나중에 다시 통화하자.'], 'choices', true);
+      characterTurnCountRef.current = turnNumber;
+      const fallbackLines = isFinalTurn
+        ? ['알겠어. 이만 끊을게. 나중에 또 이야기하자.']
+        : sanitizePhoneLines(['잠깐만, 방금 하나도 못 들었어.'], baseLines);
+      await showCharacterPage(
+        fallbackLines,
+        0,
+        isFinalTurn ? PHONE_CLOSING_CHOICES.slice() : ['다시 말해줘.', '괜찮아?', '나중에 다시 통화하자.'],
+        'choices',
+        !isFinalTurn
+      );
+      if (isFinalTurn) {
+        await finishFinalTurnPages(fallbackLines, PHONE_CLOSING_CHOICES.slice());
+      }
+    }
+  }
+
+  /** After the 9th turn, auto-advance remaining pages then end — no 10th API turn. */
+  async function finishFinalTurnPages(nextPages: string[], nextChoices: string[]) {
+    if (endingRef.current) return;
+    for (let index = 1; index < nextPages.length; index += 1) {
+      if (endingRef.current) return;
+      await sleep(450);
+      await showCharacterPage(nextPages, index, nextChoices, 'choices', false);
+    }
+    skipExtraGoodbyeRef.current = true;
+    await sleep(700);
+    if (!endingRef.current) {
+      await endCall(undefined, linesRef.current);
     }
   }
 
@@ -340,7 +448,14 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
     const next = addLine('user', trimmed);
     setUiMode('next');
     setChoices([]);
-    if (looksLikeHangup(trimmed)) {
+    if (looksLikeHangup(trimmed) || finalTurnActiveRef.current) {
+      await sleep(250);
+      await endCall(undefined, next);
+      return;
+    }
+    // No more character turns left — close instead of another API call.
+    if (characterTurnCountRef.current >= MAX_PHONE_CHARACTER_TURNS) {
+      skipExtraGoodbyeRef.current = true;
       await sleep(250);
       await endCall(undefined, next);
       return;
@@ -355,6 +470,11 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
       await showCharacterPage(pages, pageIndex + 1, choices, uiMode, allowDirectReply);
       return;
     }
+    if (finalTurnActiveRef.current) {
+      skipExtraGoodbyeRef.current = true;
+      await endCall(undefined, linesRef.current);
+      return;
+    }
     setPhase('awaiting_choice');
     setUiMode('choices');
   }
@@ -362,6 +482,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
   async function endCall(finalUserText?: string, providedLines?: CallLine[]) {
     if (endingRef.current || !character) return;
     endingRef.current = true;
+    finalTurnActiveRef.current = false;
     setPhase('ending');
     typingTokenRef.current += 1;
     let finalLines = providedLines || (finalUserText?.trim() ? addLine('user', finalUserText.trim()) : linesRef.current);
@@ -384,13 +505,17 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
       onBack();
       return;
     }
-    if (conversationLines.length) {
+    // Final 9th-turn already delivered a closing line — skip an extra goodbye API call.
+    if (conversationLines.length && !skipExtraGoodbyeRef.current) {
       const goodbye = await requestGoodbyeLine(finalLines);
       const goodbyeLine = goodbye || '알겠어. 나중에 다시 전화할게.';
       await typeText(goodbyeLine, 'character', 'ending');
       finalLines = addLine('character', goodbyeLine);
       conversationLines = finalLines.filter(item => item.speaker !== 'system');
       await sleep(700);
+    } else if (conversationLines.length && skipExtraGoodbyeRef.current) {
+      await showSystemCard('통화 종료', 'ending');
+      await sleep(350);
     }
     const endedAt = Date.now();
     if (onChange) {

@@ -10,6 +10,8 @@ import { formatMessageDateLabel, formatMessageTime, isSameMessageDate } from '..
 import { markRoomRead } from '../logic/notifications';
 import { generateImageDataUri, imagePromptFor, imagePromptWithoutCharacterName } from '../logic/api';
 import { characterReferenceImageForPrompt } from '../logic/imageReference';
+import { isComposerSendEnter, stripAccidentalSendNewline } from '../logic/chatComposerKeys';
+import { useStickToBottomList } from '../logic/useStickToBottomList';
 
 const TermuxBridge = NativeModules.TermuxBridge as undefined | {
   copyText: (text: string) => Promise<string>;
@@ -50,12 +52,11 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
   const [viewerImage, setViewerImage] = useState<RoomImageItem | null>(null);
   const [regeneratingImageId, setRegeneratingImageId] = useState('');
   const [imageRetryDraft, setImageRetryDraft] = useState<{ messageId: string; prompt: string } | null>(null);
-  const listRef = useRef<FlatList<SNSGodMessage>>(null);
+  const textRef = useRef('');
   const room = findRoom(state, roomId);
   const character = findCharacter(state, room?.characterId);
   const isRandomRoom = randomMode || room?.type === 'random';
   const messages = useMemo(() => roomMessages(state, roomId), [state.messages, roomId]);
-  const displayMessages = useMemo(() => [...messages].reverse(), [messages]);
   const messageMetaById = useMemo(() => {
     const meta = new Map<string, { previous?: SNSGodMessage; showDateDivider: boolean }>();
     messages.forEach((message, index) => {
@@ -76,23 +77,29 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
   }, [state.meetingEventSessions]);
   const pendingReplyPhase = state.pendingReplies?.[roomId]?.phase;
   const typing = pendingReplyPhase === 'typing' || pendingReplyPhase === 'generating';
+  const {
+    listRef,
+    onScroll,
+    onContentSizeChange,
+    onLayout,
+    pinToBottom
+  } = useStickToBottomList<SNSGodMessage>({
+    roomKey: roomId,
+    messageCount: messages.length,
+    footerSignal: typing
+  });
 
-  function scrollToLatest(animated = true) {
-    requestAnimationFrame(() => {
-      listRef.current?.scrollToOffset({ offset: 0, animated });
-    });
+  function updateComposerText(value: string) {
+    const cleaned = stripAccidentalSendNewline(textRef.current, value);
+    textRef.current = cleaned;
+    setText(cleaned);
   }
 
   useEffect(() => {
-    scrollToLatest(false);
     if ((state.unreadCounts[roomId] || 0) > 0 || (state.notifications || []).some(item => !item.read && (item.roomId === roomId || item.target?.roomId === roomId))) {
       void commitCurrent(current => markRoomRead(current, roomId));
     }
   }, [roomId]);
-
-  useEffect(() => {
-    scrollToLatest(true);
-  }, [messages.length, typing]);
 
   async function commit(next: SNSGodState) {
     await onChange(next);
@@ -107,10 +114,12 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
   }
 
   async function send() {
-    const content = text.trim();
+    const content = textRef.current.trim() || text.trim();
     if (!content || !room || !character || sending) return;
+    textRef.current = '';
     setText('');
     setSending(true);
+    pinToBottom();
     const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content, createdAt: Date.now() };
     await commitCurrent(current => {
       const next = appendMessage(current, room.id, userMessage);
@@ -351,11 +360,14 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
 
       <FlatList
         ref={listRef}
-        data={displayMessages}
+        data={messages}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.messages}
-        inverted
-        ListHeaderComponent={typing ? <TypingBubble character={character} /> : null}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        onContentSizeChange={onContentSizeChange}
+        onLayout={onLayout}
+        ListHeaderComponent={room.name !== '기본 채팅' ? <View style={styles.roomNotice}><Text style={styles.roomNoticeText}>{room.name}</Text></View> : null}
         renderItem={({ item }) => {
           const meetingSessionId = String(item.meetingEventId || '');
           const messageMeta = messageMetaById.get(item.id);
@@ -367,7 +379,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
             </View>
           );
         }}
-        ListFooterComponent={room.name !== '기본 채팅' ? <View style={styles.roomNotice}><Text style={styles.roomNoticeText}>{room.name}</Text></View> : null}
+        ListFooterComponent={typing ? <TypingBubble character={character} /> : null}
       />
 
       {viewerImage ? <ImageViewer item={viewerImage} onClose={() => setViewerImage(null)} /> : null}
@@ -406,13 +418,20 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
         <Pressable accessibilityLabel="사진 추가" onPress={() => { setShowQuickActions(false); void attachImage(); }} disabled={sending} style={[styles.attachIconButton, sending && styles.sendDisabled]}><Text style={styles.attachIconText}>+</Text></Pressable>
         <TextInput
           value={text}
-          onChangeText={setText}
+          onChangeText={updateComposerText}
           style={styles.composerInput}
           placeholder="메시지 입력"
           placeholderTextColor="#9b9b9b"
           multiline
+          submitBehavior="newline"
+          blurOnSubmit={false}
+          onKeyPress={event => {
+            if (!isComposerSendEnter(event)) return;
+            if (typeof event.preventDefault === 'function') event.preventDefault();
+            void send();
+          }}
         />
-        <Pressable onPress={send} style={[styles.sendButton, (!text.trim() || sending) && styles.sendDisabled]} disabled={!text.trim() || sending}>
+        <Pressable onPress={() => { void send(); }} style={[styles.sendButton, (!text.trim() || sending) && styles.sendDisabled]} disabled={!text.trim() || sending}>
           <Text style={styles.sendText}>전송</Text>
         </Pressable>
       </View>

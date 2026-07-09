@@ -34,6 +34,7 @@ import { flushSaveState, getStoragePaths, loadState, recordSkippedSaveBeforeHydr
 import { colors } from './theme';
 import { SNSGodCharacter, SNSGodState, SNSPost } from './types';
 import { isAutomationQueueBusy, runAutomationQueueTick } from './logic/automationQueue';
+import { maybePromptBatteryOptimizationExemption, setAutomationKeepAliveRunning } from './logic/backgroundAutomation';
 import { appendDebugLog } from './logic/debugLog';
 import { findRandomChat, promoteRandomChatRoom, removeRandomChatRoom } from './logic/randomChat';
 import { allRooms, deleteCharacter, findCharacter, isRoomDisabled } from './logic/stateHelpers';
@@ -139,6 +140,10 @@ export default function App() {
       setHydrated(true);
       void appendDebugLog('app', `state loaded: characters=${next.characters.length}, rooms=${Object.values(next.chatRooms).flat().length}`);
       setTimeout(() => resumeInterruptedReplies(ready), 0);
+      // Only after real device battery-opt check; skips when already excluded.
+      setTimeout(() => {
+        void maybePromptBatteryOptimizationExemption();
+      }, 2500);
     }).catch(error => {
       void appendDebugLog('app', `start failed: ${String(error?.message || error)}`, 'error');
       Alert.alert('시작 실패', String(error?.message || error));
@@ -164,7 +169,11 @@ export default function App() {
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', nextState => {
-      if (nextState === 'active') return;
+      if (nextState === 'active') {
+        // Catch up immediately when returning to the app (or after a freeze).
+        void runAutomationTickOnce('app-active');
+        return;
+      }
       const current = stateRef.current;
       if (current) {
         const summarized = summarizeRoomsBeforeFlush(current);
@@ -172,6 +181,11 @@ export default function App() {
         stateRef.current = snapshot;
         setState(snapshot);
         void flushSaveState(snapshot, { backup: 'force', verify: 'full', reason: 'app background' });
+        // Keep process priority high so setInterval/reply delays continue after Home.
+        if (current.config.autoEnabled !== false) {
+          void setAutomationKeepAliveRunning(true, { force: true });
+          void runAutomationTickOnce('app-background');
+        }
       }
     });
     return () => subscription.remove();
@@ -225,27 +239,54 @@ export default function App() {
   }, [incomingCall]);
 
   useEffect(() => {
-    const timer = setInterval(async () => {
-      const current = stateRef.current;
-      if (!current || isAutomationQueueBusy()) return;
-      const profile = current.config.apiProfiles[current.config.apiType] || {};
-      const hasKey = current.config.apiType === 'vertex'
-        ? Boolean(String(profile.serviceAccountJson || '').trim())
-        : Boolean(profile.apiKey || profile.apiKeys?.some(Boolean));
-      if (!hasKey) return;
-      try {
-        const next = await runAutomationQueueTick(current);
-        if (next !== current) {
-          const latest = stateRef.current;
-          await commit(latest && latest !== current ? mergeAutomationResult(latest, current, next) : next);
-        }
-      } catch (error) {
-        void appendDebugLog('automation', String(error instanceof Error ? error.message : error), 'warn');
-        // Automation failures should not interrupt active use; manual chat still reports errors.
-      }
+    if (!hydrated) return;
+    const autoOn = state?.config.autoEnabled !== false;
+    // Defer native service start slightly so first paint/JS boot is stable.
+    const timer = setTimeout(() => {
+      void setAutomationKeepAliveRunning(autoOn);
+    }, 1500);
+    return () => {
+      clearTimeout(timer);
+      void setAutomationKeepAliveRunning(false);
+    };
+  }, [hydrated, state?.config.autoEnabled]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    // First tick soon after load, then every minute while the process lives.
+    const initial = setTimeout(() => {
+      void runAutomationTickOnce('startup');
+    }, 5000);
+    const timer = setInterval(() => {
+      void runAutomationTickOnce('interval');
     }, 60000);
-    return () => clearInterval(timer);
-  }, []);
+    return () => {
+      clearTimeout(initial);
+      clearInterval(timer);
+    };
+  }, [hydrated]);
+
+  async function runAutomationTickOnce(reason: string) {
+    const current = stateRef.current;
+    if (!current || isAutomationQueueBusy()) return;
+    if (current.config.autoEnabled === false) return;
+    const profile = current.config.apiProfiles[current.config.apiType] || {};
+    const hasKey = current.config.apiType === 'vertex'
+      ? Boolean(String(profile.serviceAccountJson || '').trim())
+      : Boolean(profile.apiKey || profile.apiKeys?.some(Boolean));
+    if (!hasKey) return;
+    try {
+      const next = await runAutomationQueueTick(current);
+      if (next !== current) {
+        const latest = stateRef.current;
+        await commit(latest && latest !== current ? mergeAutomationResult(latest, current, next) : next);
+        void appendDebugLog('automation', `tick applied reason=${reason}`);
+      }
+    } catch (error) {
+      void appendDebugLog('automation', `${reason}: ${String(error instanceof Error ? error.message : error)}`, 'warn');
+      // Automation failures should not interrupt active use; manual chat still reports errors.
+    }
+  }
 
   function visibleRoomIdForRoute(currentRoute: Route): string | undefined {
     if (currentRoute.name === 'chatRoom' || currentRoute.name === 'groupChatRoom' || currentRoute.name === 'randomChatRoom') return currentRoute.roomId;

@@ -467,7 +467,7 @@ async function runProfileImageAutomation(state: SNSGodState): Promise<SNSGodStat
     const now = Date.now();
     try {
       if (shouldProfile) {
-        const prompt = String(character.profileAvatarPrompt || `portrait profile photo, clear face, casual expression, messenger profile picture, ${character.name}. Character personality: ${character.prompt || ''}`);
+        const prompt = 'SNS profile photo';
         const image = await generateImageDataUri(state, prompt, character, { referenceImage: randomReferenceImage(characterReferenceImages(character)), kind: 'profile' });
         const historyItem = { id: makeId('profile_image'), image, prompt, createdAt: now, kind: 'profile' as const };
         return {
@@ -552,15 +552,26 @@ async function runPrivateFirstMessage(state: SNSGodState, firstMessageOnly: bool
     },
     ...(firstMessageOnly ? { __randomFirstSent: { ...((state.__randomFirstSent || {}) as Record<string, string>), [room.id]: new Date().toISOString() } } : {})
   };
+  // If the app was dead past the contact interval, stamp the message as if it
+  // arrived then — not at the moment the user reopened the app.
+  const lastAt = Number(room.lastActivity || room.createdAt || Date.now()) || Date.now();
+  const frequencyMs = Math.max(1, Number(characterWithConversationRhythm(state, character).frequencyMinutes || 10)) * 60000;
+  const plannedAt = lastAt + frequencyMs;
+  const overdue = Date.now() > plannedAt + 15000;
+  let bubbleAt = overdue ? Math.min(Date.now(), Math.max(lastAt + 1000, plannedAt)) : Date.now();
+  if (overdue) {
+    void appendDebugLog('proactive.catchup', `room=${room.id} plannedAt=${new Date(bubbleAt).toISOString()} overdueMs=${Date.now() - plannedAt}`);
+  }
   for (const bubble of reply.messages.length ? reply.messages : [{ content: '뭐해?' }]) {
     next = appendMessage(next, room.id, {
       id: makeId('msg'),
       role: 'character',
       characterId: character.id,
       content: bubble.content,
-      createdAt: Date.now(),
-      sourceMode: firstMessageOnly ? 'random_first' : 'proactive'
+      createdAt: bubbleAt,
+      sourceMode: firstMessageOnly ? 'random_first' : overdue ? 'proactive_catchup' : 'proactive'
     });
+    bubbleAt = Math.min(Date.now(), bubbleAt + 900 + Math.floor(Math.random() * 1600));
   }
   const updatedCharacter = findCharacter(next, character.id);
   if (reply.newMemory?.trim() && updatedCharacter) {
@@ -625,18 +636,26 @@ async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | u
   };
   let deliveredCount = 0;
   let firstDelivered: { speaker: SNSGodCharacter; content: string } | undefined;
+  const groupLastAt = Number(room.lastActivity || room.createdAt || Date.now()) || Date.now();
+  const groupFrequencyMs = Math.max(1, Math.min(...participants.map(character => Number(characterWithConversationRhythm(state, character).frequencyMinutes || 10)))) * 60000;
+  const groupPlannedAt = groupLastAt + groupFrequencyMs;
+  const groupOverdue = Date.now() > groupPlannedAt + 15000;
+  let groupBubbleAt = groupOverdue ? Math.min(Date.now(), Math.max(groupLastAt + 1000, groupPlannedAt)) : Date.now();
   for (const item of normalizedItems) {
-    const createdAt = Date.now() + deliveredCount * 900 + Math.max(0, Math.min(4000, Number(item.delay || 0) * 1000));
+    const createdAt = groupOverdue
+      ? Math.min(Date.now(), groupBubbleAt + Math.max(0, Math.min(4000, Number(item.delay || 0) * 1000)))
+      : Date.now() + deliveredCount * 900 + Math.max(0, Math.min(4000, Number(item.delay || 0) * 1000));
     next = appendGroupMessage(next, room.id, {
       id: makeId('msg'),
       role: 'character',
       characterId: item.speaker.id,
       content: item.content,
       createdAt,
-      sourceMode: 'group_autonomous'
+      sourceMode: groupOverdue ? 'group_autonomous_catchup' : 'group_autonomous'
     });
     firstDelivered = firstDelivered || item;
     deliveredCount += 1;
+    if (groupOverdue) groupBubbleAt = Math.min(Date.now(), groupBubbleAt + 900 + Math.floor(Math.random() * 1400));
   }
   if (!firstDelivered) return undefined;
   return notifyRoomMessage(next, {

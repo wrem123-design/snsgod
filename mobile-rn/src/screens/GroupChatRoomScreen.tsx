@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, Image, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { isComposerSendEnter, stripAccidentalSendNewline } from '../logic/chatComposerKeys';
+import { useStickToBottomList } from '../logic/useStickToBottomList';
 import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
 import { callLLMText, generateImageDataUri, imagePromptWithoutCharacterName, parseJsonObject } from '../logic/api';
@@ -190,32 +192,38 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
   const [showStickers, setShowStickers] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(false);
   const [typingCharacters, setTypingCharacters] = useState<SNSGodCharacter[]>([]);
-  const listRef = useRef<FlatList<SNSGodMessage>>(null);
+  const textRef = useRef('');
   const stateRef = useRef(state);
   stateRef.current = state;
+
+  function updateComposerText(value: string) {
+    const cleaned = stripAccidentalSendNewline(textRef.current, value);
+    textRef.current = cleaned;
+    setText(cleaned);
+  }
   const meetingStatusById = useMemo(() => {
     const status = new Map<string, string | undefined>();
     for (const session of state.meetingEventSessions || []) status.set(session.id, session.status);
     return status;
   }, [state.meetingEventSessions]);
-
-  function scrollToLatest(animated = true) {
-    requestAnimationFrame(() => {
-      listRef.current?.scrollToEnd({ animated });
-    });
-  }
+  const {
+    listRef,
+    onScroll,
+    onContentSizeChange,
+    onLayout,
+    pinToBottom
+  } = useStickToBottomList<SNSGodMessage>({
+    roomKey: roomId,
+    messageCount: messages.length,
+    footerSignal: typingCharacters.length
+  });
 
   useEffect(() => {
-    scrollToLatest(false);
     const current = stateRef.current;
     if ((current.unreadCounts[roomId] || 0) > 0 || (current.notifications || []).some(item => !item.read && (item.roomId === roomId || item.target?.roomId === roomId))) {
       void commit(markRoomRead(current, roomId));
     }
   }, [roomId]);
-
-  useEffect(() => {
-    scrollToLatest(true);
-  }, [messages.length, typingCharacters.length]);
 
   async function commit(next: SNSGodState) {
     stateRef.current = next;
@@ -246,10 +254,12 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
   }
 
   async function send() {
-    const content = text.trim();
+    const content = textRef.current.trim() || text.trim();
     if (!room || !content || sending || !participants.length) return;
+    textRef.current = '';
     setText('');
     setSending(true);
+    pinToBottom();
     const now = Date.now();
     const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content, createdAt: now };
     await commitCurrent(current => ({
@@ -444,8 +454,10 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
         data={messages}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.messages}
-        onContentSizeChange={() => scrollToLatest(false)}
-        onLayout={() => scrollToLatest(false)}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        onContentSizeChange={onContentSizeChange}
+        onLayout={onLayout}
         renderItem={({ item }) => {
           const meetingSessionId = String(item.meetingEventId || '');
           return (
@@ -477,8 +489,21 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
       <View style={styles.composer}>
         <Pressable onPress={() => { setShowQuickActions(false); setShowStickers(value => !value); }} disabled={sending} style={[styles.stickerToggle, sending && styles.disabled]}><Text style={styles.stickerToggleText}>스티커</Text></Pressable>
         <Pressable accessibilityLabel="단톡 만남 이벤트 메뉴" onPress={() => { setShowStickers(false); setShowQuickActions(value => !value); }} disabled={sending || requestingMeeting} style={[styles.eventIconButton, (sending || requestingMeeting) && styles.disabled]}><Text style={styles.eventIconText}>{requestingMeeting ? '…' : '👥'}</Text></Pressable>
-        <TextInput value={text} onChangeText={setText} style={styles.input} placeholder="메시지 입력" multiline />
-        <Pressable onPress={send} disabled={!text.trim() || sending} style={[styles.send, (!text.trim() || sending) && styles.disabled]}>
+        <TextInput
+          value={text}
+          onChangeText={updateComposerText}
+          style={styles.input}
+          placeholder="메시지 입력"
+          multiline
+          submitBehavior="newline"
+          blurOnSubmit={false}
+          onKeyPress={event => {
+            if (!isComposerSendEnter(event)) return;
+            if (typeof event.preventDefault === 'function') event.preventDefault();
+            void send();
+          }}
+        />
+        <Pressable onPress={() => { void send(); }} disabled={!text.trim() || sending} style={[styles.send, (!text.trim() || sending) && styles.disabled]}>
           <Text style={styles.sendText}>전송</Text>
         </Pressable>
       </View>

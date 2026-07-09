@@ -849,15 +849,10 @@ export function imagePromptWithoutCharacterName(prompt: string, character: SNSGo
 
 type ImagePromptKind = 'profile' | 'profile-reference-face' | 'cover' | 'general' | 'meeting';
 
-function samePromptText(a: string, b: string): boolean {
-  return a.replace(/\s+/g, ' ').trim().toLowerCase() === b.replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
 export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodCharacter | undefined, prompt: string, options: { usesReference?: boolean; kind?: ImagePromptKind; state?: SNSGodState } = {}): string {
   const prefix = config.promptPrefix || 'Create a realistic in-character phone photo. Natural lighting, casual composition, no text overlay.';
   const forbiddenRules = editableForbiddenPromptRules(config.forbiddenPromptRules).trim();
   const globalRules = forbiddenRules ? `Global forbidden prompt rules: ${forbiddenRules}` : '';
-  const profilePhotoPrompt = character?.profileAvatarPrompt ? imagePromptWithoutCharacterName(character.profileAvatarPrompt, character) : '';
   const requested = imagePromptWithoutCharacterName(prompt, character);
   const configuredTone = options.state ? configuredPrompt(options.state, 'imageGenerationToneRules') : '';
   const nsfw = config.nsfw
@@ -887,6 +882,16 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
       nsfw
     ].filter(Boolean).join('\n');
   }
+  // Profile photo only: short fixed instruction. Never inject long character profile-photo prompts.
+  if (options.kind === 'profile') {
+    if (options.usesReference) {
+      return [
+        'Use the attached reference image. Keep the same face and facial identity.',
+        'Generate a photo suitable for an SNS profile picture.'
+      ].join('\n');
+    }
+    return 'Generate a photo suitable for an SNS profile picture with a clear face.';
+  }
   if (options.usesReference) {
     if (options.kind === 'profile-reference-face') {
       return [
@@ -908,10 +913,7 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
       nsfw
     ].filter(Boolean).join('\n');
   }
-  const baseIdentity = profilePhotoPrompt && !samePromptText(profilePhotoPrompt, requested)
-    ? `Base visual identity from profile-photo prompt: ${profilePhotoPrompt}`
-    : '';
-  return [prefix, globalRules, baseIdentity, `Requested image: ${requested}`, nsfw].filter(Boolean).join('\n');
+  return [prefix, globalRules, `Requested image: ${requested}`, nsfw].filter(Boolean).join('\n');
 }
 
 function normalizeGrokBaseUrl(value?: string): string {
@@ -949,7 +951,17 @@ async function dataUriToCacheFile(dataUri: string, name: string): Promise<{ uri:
   return { uri, name: `${safeName}.${extension}`, type: mime };
 }
 
-async function appendDataUriImage(form: FormData, field: string, dataUri: string, name: string) {
+type RnFormData = {
+  append: (name: string, value: unknown) => void;
+};
+
+function createFormData(): RnFormData {
+  const Ctor = (globalThis as { FormData?: new () => RnFormData }).FormData;
+  if (!Ctor) throw new Error('FormData is unavailable in this runtime');
+  return new Ctor();
+}
+
+async function appendDataUriImage(form: RnFormData, field: string, dataUri: string, name: string) {
   const file = await dataUriToCacheFile(dataUri, name);
   form.append(field, file as unknown as Blob);
 }
@@ -978,7 +990,7 @@ function mediaTypeForUri(uri: string): string {
   return 'image/jpeg';
 }
 
-async function appendReferenceImage(form: FormData, field: string, uri: string) {
+async function appendReferenceImage(form: RnFormData, field: string, uri: string) {
   if (uri.startsWith('data:')) {
     await appendDataUriImage(form, field, uri, 'reference.png');
     return;
@@ -1008,7 +1020,7 @@ async function generateGrokLocalImage(state: SNSGodState, prompt: string, charac
   const resolution = String(config.grokResolution || config.quality || '1k').includes('1k') ? '1k' : String(config.grokResolution || '1k');
   const aspectRatio = String(config.grokAspectRatio || 'auto');
   if (usesReference) {
-    const form = new FormData();
+    const form = createFormData();
     form.append('prompt', finalPrompt);
     form.append('resolution', resolution);
     await appendReferenceImage(form, 'image', referenceImage);
@@ -1019,7 +1031,7 @@ async function generateGrokLocalImage(state: SNSGodState, prompt: string, charac
     if (!url) throw new Error('Grok i2i 응답에 이미지 URL이 없습니다.');
     return fetchImageAsDataUri(absoluteGrokUrl(baseUrl, String(url)));
   }
-  const form = new FormData();
+  const form = createFormData();
   form.append('prompt', finalPrompt);
   form.append('resolution', resolution);
   form.append('aspect_ratio', aspectRatio === 'auto' ? '1:1' : aspectRatio);

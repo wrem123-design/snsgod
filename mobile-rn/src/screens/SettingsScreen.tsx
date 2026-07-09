@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Image, InteractionManager, Linking, NativeModules, PermissionsAndroid, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Alert, AppState, Image, InteractionManager, Linking, NativeModules, PermissionsAndroid, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
@@ -15,6 +15,7 @@ import { createBackupPayload } from '../logic/backup';
 import { DEFAULT_USER_APPEARANCE_PROMPT } from '../logic/prompts';
 import { MAX_CONTEXT_MESSAGES } from '../logic/limits';
 import { editableForbiddenPromptRules } from '../logic/imagePromptRules';
+import { getRecommendedOptimizationStatus, maybePromptBatteryOptimizationExemption, RecommendedOptimizationStatus } from '../logic/backgroundAutomation';
 
 const PROVIDERS: ApiProvider[] = ['vertex', 'gemini', 'openai', 'anthropic', 'custom'];
 const PROVIDER_PRESETS: Partial<Record<ApiProvider, { endpoint: string; model: string }[]>> = {
@@ -236,6 +237,27 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
 }) {
   const [activeSection, setActiveSection] = useState<SettingsSection>(() => getSettingsSection(state.config.lastSettingsSection));
   const [contentReady, setContentReady] = useState(false);
+  const [optimizationStatus, setOptimizationStatus] = useState<RecommendedOptimizationStatus | null>(null);
+  const [optimizationChecking, setOptimizationChecking] = useState(false);
+
+  const refreshOptimizationStatus = useCallback(async () => {
+    setOptimizationChecking(true);
+    try {
+      const next = await getRecommendedOptimizationStatus();
+      setOptimizationStatus(next);
+    } catch {
+      setOptimizationStatus({
+        ready: false,
+        line: '추천 설정: 확인 실패 · 다시 눌러 검사',
+        batteryExcluded: false,
+        notificationsAllowed: false,
+        keepAliveAvailable: false
+      });
+    } finally {
+      setOptimizationChecking(false);
+    }
+  }, []);
+
   useEffect(() => {
     setContentReady(false);
     const task = InteractionManager.runAfterInteractions(() => {
@@ -243,6 +265,15 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     });
     return () => task.cancel();
   }, [activeSection]);
+
+  useEffect(() => {
+    if (activeSection !== 'user') return;
+    void refreshOptimizationStatus();
+    const sub = AppState.addEventListener('change', next => {
+      if (next === 'active') void refreshOptimizationStatus();
+    });
+    return () => sub.remove();
+  }, [activeSection, refreshOptimizationStatus]);
   const [provider, setProvider] = useState<ApiProvider>(state.config.apiType);
   const profile = useMemo(() => state.config.apiProfiles[provider] || {}, [state.config.apiProfiles, provider]);
   const keySlots = useMemo(() => apiKeySlotsFromProfile(profile), [profile.apiKey, profile.apiKeys]);
@@ -1648,9 +1679,31 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
 
         <View style={[styles.card, activeSection !== 'user' && styles.hidden]}>
           <Text style={styles.cardTitle}>자동화</Text>
-          <Text style={styles.help}>앱이 켜져 있는 동안 약 60초마다 조건을 확인합니다. API 설정이 비어 있으면 자동 생성은 실행되지 않습니다.</Text>
+          <Text style={styles.help}>전체 자동화가 켜져 있으면 약 60초마다 조건을 확인합니다. 홈으로 나가 백그라운드에 둔 상태에서도 알림 표시(자동화 실행 중)로 프로세스를 유지해 선톡·SNS 등을 계속 돌립니다. 최근 앱에서 스와이프해 완전 종료하면 멈춥니다. API 설정이 비어 있으면 자동 생성은 실행되지 않습니다.</Text>
+          <Pressable
+            onPress={() => { void refreshOptimizationStatus(); }}
+            style={[styles.optimizationLine, optimizationStatus?.ready ? styles.optimizationLineOk : styles.optimizationLineWarn]}
+          >
+            <Text style={[styles.optimizationLineText, optimizationStatus?.ready ? styles.optimizationLineTextOk : styles.optimizationLineTextWarn]} numberOfLines={2}>
+              {optimizationChecking
+                ? '추천 설정: 검사 중…'
+                : (optimizationStatus?.line || '추천 설정: 탭해서 검사')}
+            </Text>
+          </Pressable>
           <SwitchLine label="전체 자동화" value={autoEnabled} onChange={setAutoEnabled} />
-          <Text style={styles.help}>전체 자동화: 아래 자동 메시지, 기념일, 프로필 이미지 변경, 전화 초대의 공통 전원입니다.</Text>
+          <Text style={styles.help}>전체 자동화: 아래 자동 메시지, 기념일, 프로필 이미지 변경, 전화 초대의 공통 전원입니다. 켜면 상태바에 「SNSGod 자동화 실행 중」 알림이 뜹니다.</Text>
+          <Pressable
+            onPress={() => {
+              void (async () => {
+                await maybePromptBatteryOptimizationExemption({ force: true });
+                await refreshOptimizationStatus();
+              })();
+            }}
+            style={styles.secondary}
+          >
+            <Text style={styles.secondaryText}>배터리 최적화·절전 제외 설정</Text>
+          </Pressable>
+          <Text style={styles.help}>위 한 줄이 「모두 적용됨」이면 배터리 제외·알림 허용이 된 상태입니다. 설정 후 자동으로 다시 검사하며, 줄을 눌러 수동 검사할 수도 있습니다.</Text>
           <SwitchLine label="개인톡 먼저 말하기" value={privateFirst} onChange={setPrivateFirst} />
           <Text style={styles.help}>개인톡 먼저 말하기: 사용자가 보내지 않아도 캐릭터가 빈도/주도성 설정에 따라 1:1 채팅을 먼저 시작합니다.</Text>
           <SwitchLine label="단톡 먼저 말하기" value={groupFirst} onChange={setGroupFirst} />
@@ -1849,6 +1902,12 @@ const styles = StyleSheet.create({
   secondaryInline: { marginTop: 14, height: 44, borderRadius: 7, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
   dangerInline: { marginTop: 14, height: 44, borderRadius: 7, borderWidth: 1, borderColor: '#f0b7b7', backgroundColor: '#fff1f1', alignItems: 'center', justifyContent: 'center' },
   secondaryText: { color: colors.text, fontWeight: '900' },
+  optimizationLine: { marginTop: 10, marginBottom: 4, minHeight: 40, borderRadius: 8, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 10, justifyContent: 'center' },
+  optimizationLineOk: { backgroundColor: '#eefbf3', borderColor: '#8ac6a5' },
+  optimizationLineWarn: { backgroundColor: '#fff6e8', borderColor: '#e0c48a' },
+  optimizationLineText: { fontSize: 13, fontWeight: '900', lineHeight: 18 },
+  optimizationLineTextOk: { color: '#0f6b48' },
+  optimizationLineTextWarn: { color: '#7a4e00' },
   sectionHeaderRow: { marginTop: 10, marginBottom: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
   smallInline: { minHeight: 34, paddingHorizontal: 12, borderRadius: 7, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
   buttonRow: { flexDirection: 'row', gap: 10 },

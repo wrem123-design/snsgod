@@ -710,8 +710,7 @@ async function generateGroupMeetingStillImage(state: SNSGodState, roomId: string
     const profile = compactText([
       character.name,
       character.prompt,
-      character.statusMessage,
-      character.profileAvatarPrompt
+      character.statusMessage
     ].filter(Boolean).join(' '), 320);
     return `${index + 1}. ${character.name}${index === 0 && referenceImage ? ' (attached reference identity)' : ''}: ${profile || 'use her saved character profile and distinct look'}`;
   }).join('\n');

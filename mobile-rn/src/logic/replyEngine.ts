@@ -85,15 +85,40 @@ function bubbleDelayMs(character: SNSGodCharacter, delay?: number) {
   return Math.max(450, Math.min(8000, base));
 }
 
-function markUserMessagesRead(state: SNSGodState, roomId: string) {
-  const now = Date.now();
+/** Virtual gap between multi-bubble catch-up messages (timestamp only, not real wait). */
+function bubbleStaggerMs(character: SNSGodCharacter, delay?: number) {
+  const thinking = Math.max(1, Math.min(10, Number(character.thinkingTime || 6)));
+  const base = Number.isFinite(Number(delay)) && Number(delay) > 0 ? Number(delay) * 1000 : 900 + thinking * 80;
+  return Math.max(700, Math.min(4500, base));
+}
+
+function markUserMessagesRead(state: SNSGodState, roomId: string, readAt = Date.now()) {
+  const at = Number(readAt) || Date.now();
   return {
     ...state,
     messages: {
       ...state.messages,
-      [roomId]: (state.messages[roomId] || []).map(message => message.role === 'user' && !message.readAt ? { ...message, readAt: now } : message)
+      [roomId]: (state.messages[roomId] || []).map(message => message.role === 'user' && !message.readAt ? { ...message, readAt: at } : message)
     }
   };
+}
+
+/**
+ * Planned delivery clock for immersion:
+ * character "should have" replied at userMessage time + personality delay.
+ * Catch-up (app was dead) uses that past timestamp instead of "now when user opened the app".
+ */
+function planReplyTimeline(userMessageCreatedAt: number | undefined, replyDelayMs: number) {
+  const now = Date.now();
+  const userAt = Math.max(0, Number(userMessageCreatedAt || now) || now);
+  const plannedReplyAt = userAt + Math.max(0, replyDelayMs);
+  const remainingWaitMs = Math.max(0, plannedReplyAt - now);
+  // Treat nearly-due replies as catch-up so reopening the app doesn't show a long fake type.
+  const catchUp = remainingWaitMs <= 1500;
+  const deliveryBaseAt = catchUp
+    ? Math.min(now, Math.max(userAt + 800, plannedReplyAt))
+    : plannedReplyAt;
+  return { now, userAt, plannedReplyAt, remainingWaitMs, catchUp, deliveryBaseAt };
 }
 
 function setPending(state: SNSGodState, roomId: string, jobId: string, phase: NonNullable<SNSGodState['pendingReplies']>[string]['phase']) {
@@ -166,11 +191,25 @@ export async function startReplyJob(input: StartReplyJobInput) {
     const initial = roomStillValid(input.getState(), input.roomId, input.characterId);
     if (!initial) return;
     const replyDelayMs = characterDelayMs(input.getState() || undefined, initial.character);
-    const elapsedSinceUserMessageMs = Math.max(0, Date.now() - Number(input.userMessageCreatedAt || Date.now()));
-    await sleep(Math.max(0, replyDelayMs - elapsedSinceUserMessageMs));
+    const timeline = planReplyTimeline(input.userMessageCreatedAt, replyDelayMs);
+    if (timeline.catchUp) {
+      void appendDebugLog(
+        'reply.catchup',
+        `room=${input.roomId} delayMs=${replyDelayMs} plannedAt=${new Date(timeline.deliveryBaseAt).toISOString()} overdueMs=${Math.max(0, Date.now() - timeline.deliveryBaseAt)}`
+      );
+    } else {
+      await sleep(timeline.remainingWaitMs);
+    }
     if (!isCurrentChatJob(input.roomId, jobId)) return;
 
-    await input.commitCurrent(current => markUserMessagesRead(setPending(current, input.roomId, jobId, 'typing'), input.roomId), { persist: false });
+    // Read receipt sits slightly before the character's first bubble on the planned clock.
+    const readAt = Math.max(timeline.userAt + 200, timeline.deliveryBaseAt - Math.min(2500, Math.max(400, replyDelayMs * 0.08)));
+    if (timeline.catchUp) {
+      // Skip long typing theatre when this reply is already "late" in story time.
+      await input.commitCurrent(current => markUserMessagesRead(setPending(current, input.roomId, jobId, 'generating'), input.roomId, readAt), { persist: false });
+    } else {
+      await input.commitCurrent(current => markUserMessagesRead(setPending(current, input.roomId, jobId, 'typing'), input.roomId, readAt), { persist: false });
+    }
     const promptState = input.getState();
     const promptTarget = roomStillValid(promptState, input.roomId, input.characterId);
     if (!promptState || !promptTarget || !isCurrentChatJob(input.roomId, jobId)) return;
@@ -216,12 +255,18 @@ export async function startReplyJob(input: StartReplyJobInput) {
     if (!reply.messages.length) throw new Error('모델 응답에서 표시할 메시지를 찾지 못했습니다. ETC > 디버그에서 llm.response 원문을 확인하세요.');
     const bubbles = normalizeReplyMessagesForStyle(reply.messages, promptTarget.character);
     let deliveredCount = 0;
+    let bubbleCursor = timeline.deliveryBaseAt;
     for (const bubble of bubbles) {
-      await sleep(bubbleDelayMs(promptTarget.character, bubble.delay ?? reply.reactionDelay));
+      if (!timeline.catchUp) {
+        await sleep(bubbleDelayMs(promptTarget.character, bubble.delay ?? reply.reactionDelay));
+      }
       if (!isCurrentChatJob(input.roomId, jobId)) return;
       const latestForBubble = roomStillValid(input.getState(), input.roomId, input.characterId);
       if (!latestForBubble) return;
-      const phone = phoneCardFromReply(input.getState() || promptState, latestForBubble.character, bubble, 'reply');
+      const bubbleAt = timeline.catchUp
+        ? Math.min(Date.now(), bubbleCursor)
+        : Date.now();
+      const phone = phoneCardFromReply(input.getState() || promptState, latestForBubble.character, bubble, 'reply', { createdAt: bubbleAt });
       let mediaData = '';
       const imageState = input.getState() || promptState;
       const imageAllowed = shouldAllowChatImageGeneration({
@@ -263,12 +308,13 @@ export async function startReplyJob(input: StartReplyJobInput) {
           role: 'character',
           characterId: latestForBubble.character.id,
           content: phone.textContent || '',
-          createdAt: Date.now(),
+          createdAt: bubbleAt,
           sticker: bubble.sticker,
           imagePrompt: mediaData || (imageAllowed && bubble.imageCaption?.trim()) ? bubble.imagePrompt : undefined,
           imageCaption: mediaData || (imageAllowed && bubble.imageCaption?.trim()) ? bubble.imageCaption : undefined,
           mediaData: mediaData || undefined,
-          mediaType: mediaData ? 'image' : undefined
+          mediaType: mediaData ? 'image' : undefined,
+          sourceMode: timeline.catchUp ? 'reply_catchup' : 'reply'
         };
         await input.commitCurrent(current => appendMessage(current, input.roomId, message));
         deliveredCount += 1;
@@ -277,6 +323,7 @@ export async function startReplyJob(input: StartReplyJobInput) {
         await input.commitCurrent(current => appendMessage(current, input.roomId, phone.card as SNSGodMessage));
         deliveredCount += 1;
       }
+      bubbleCursor += bubbleStaggerMs(promptTarget.character, bubble.delay ?? reply.reactionDelay);
     }
     if (deliveredCount === 0 && isCurrentChatJob(input.roomId, jobId)) {
       await input.commitCurrent(current => appendMessage(current, input.roomId, {
@@ -284,7 +331,8 @@ export async function startReplyJob(input: StartReplyJobInput) {
         role: 'character',
         characterId: promptTarget.character.id,
         content: '응, 방금 말 계속 생각하고 있었어.',
-        createdAt: Date.now()
+        createdAt: timeline.catchUp ? Math.min(Date.now(), timeline.deliveryBaseAt) : Date.now(),
+        sourceMode: timeline.catchUp ? 'reply_catchup' : 'reply'
       }));
     }
 

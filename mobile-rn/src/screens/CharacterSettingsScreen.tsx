@@ -5,8 +5,8 @@ import { CalendarEvent, LoreEntry, SNSGodCharacter, SNSGodRoom, SNSGodState } fr
 import { clampNumber, makeId } from '../logic/ids';
 import { findCharacter, updateCharacter } from '../logic/stateHelpers';
 import { isRenderableMediaUri, pickImageDataUri } from '../logic/media';
-import { callLLMText, generateImageDataUri, imagePromptWithoutCharacterName, parseJsonObject } from '../logic/api';
-import { DEFAULT_COVER_BACKGROUND_DIRECTION, LEGACY_COVER_BACKGROUND_DIRECTION, configuredPrompt } from '../logic/prompts';
+import { generateImageDataUri } from '../logic/api';
+import { DEFAULT_COVER_BACKGROUND_DIRECTION, LEGACY_COVER_BACKGROUND_DIRECTION } from '../logic/prompts';
 import { characterReferenceImages, randomReferenceImage } from '../logic/imageReference';
 
 type CharacterSection = 'basic' | 'reply' | 'profile' | 'time' | 'calendar' | 'lore' | 'stickers' | 'prompt';
@@ -186,7 +186,7 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
   const [loreKeys, setLoreKeys] = useState('');
   const [loreContent, setLoreContent] = useState('');
   const [inlineStatus, setInlineStatus] = useState('');
-  const [promptGenerating, setPromptGenerating] = useState<'avatar' | ''>('');
+
   const [replyAdvancedOpen, setReplyAdvancedOpen] = useState(false);
 
   if (!character || !draft) {
@@ -311,7 +311,7 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
     if (!draft) return;
     try {
       const prompt = kind === 'avatar'
-        ? String(draft.profileAvatarPrompt || `portrait profile photo, clear face, casual expression, messenger profile picture, ${draft.name}`)
+        ? 'SNS profile photo'
         : String(draft.profileCoverPrompt || DEFAULT_COVER_BACKGROUND_DIRECTION);
       const referenceImage = kind === 'avatar' ? randomReferenceImage(normalizedReferenceImages(draft)) || '' : '';
       const image = await generateImageDataUri(state, prompt, draft, { referenceImage, kind: kind === 'avatar' ? 'profile' : 'cover' });
@@ -323,46 +323,6 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
       }
     } catch (error) {
       Alert.alert('AI 이미지 생성 실패', error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  async function generateImagePrompt() {
-    if (!draft || promptGenerating) return;
-    setPromptGenerating('avatar');
-    setInlineStatus('프로필사진 프롬프트를 작성 중입니다.');
-    try {
-      const { text } = await callLLMText(state, [
-        {
-          role: 'system',
-          content: [
-            'You write concise English image-generation prompts for a fictional messenger app.',
-            'Return raw JSON only: {"prompt":"..."}. No markdown, no explanation.',
-            'Create a BASE identity prompt for future profile-photo generation, not a one-time scene prompt. Extract only stable visual identity from the character profile: face shape, facial impression, eyes, hair color/style if clearly described, approximate adult age impression, expression range, and overall aura. Do NOT lock in specific clothing, accessories, jewelry, bags, uniforms, brands, pose, camera angle, background, location, season, activity, lighting gimmick, or repeated outfit details unless the character profile explicitly requires them. The prompt must remain reusable across many future images without forcing the same outfit or scene. Keep every identity clearly adult and identity-consistent.',
-            configuredPrompt(state, 'adultBoundaryRules'),
-            'Prompt should be one compact English paragraph or comma-separated tag sentence, 35-80 words.',
-            'If appearance is unclear, infer a grounded non-specific look from the profile without contradicting it.'
-          ].join('\n')
-        },
-        {
-          role: 'user',
-          content: [
-            `Character profile prompt:\n${draft.prompt || '(empty)'}`,
-            draft.profileMessage ? `Profile message:\n${draft.profileMessage}` : '',
-            draft.statusMessage ? `Status message:\n${draft.statusMessage}` : '',
-            `Location: ${draft.locationName || state.config.locationName || 'Seoul'}`,
-            `Existing profile photo prompt:\n${draft.profileAvatarPrompt || '(empty)'}`
-          ].filter(Boolean).join('\n\n')
-        }
-      ]);
-      const prompt = imagePromptWithoutCharacterName(cleanGeneratedImagePrompt(text), draft);
-      if (!prompt) throw new Error('AI 응답에서 이미지 프롬프트를 찾지 못했습니다.');
-      set('profileAvatarPrompt', prompt);
-      setInlineStatus('프로필사진 프롬프트를 자동 작성했습니다.');
-    } catch (error) {
-      Alert.alert('프롬프트 작성 실패', error instanceof Error ? error.message : String(error));
-      setInlineStatus(`프롬프트 작성 실패: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setPromptGenerating('');
     }
   }
 
@@ -552,7 +512,7 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
               onRemove={removeReferenceImage}
             />
             <ImageField label="프로필 배경 사진" value={draft.coverImage} onChoose={() => chooseImage('coverImage')} onClear={() => set('coverImage', '')} onGenerate={() => generateProfileImage('coverImage')} wide />
-            <Field label="프로필사진 프롬프트" value={String(draft.profileAvatarPrompt || '')} onChangeText={value => set('profileAvatarPrompt', value)} multiline actionLabel={promptGenerating === 'avatar' ? '작성 중' : 'AI 작성'} onAction={() => generateImagePrompt()} actionDisabled={Boolean(promptGenerating)} />
+            <Text style={styles.help}>프로필 사진은 레퍼런스 이미지로 얼굴을 유지한 채 SNS 프로필용으로만 생성합니다. 별도 프로필사진 프롬프트는 사용하지 않습니다.</Text>
             <Field label="배경사진 지시문" value={String(draft.profileCoverPrompt || '')} onChangeText={value => set('profileCoverPrompt', value)} multiline help="AI 작성은 사용하지 않습니다. 자동 배경 변경은 최근 대화, 통화, 캐릭터 행적을 기준으로 만들며, 여기는 원하면 추가 방향만 적습니다." />
             <SwitchRow label="상태메시지 자동 변경" value={draft.statusMessageAutoChange !== false} onValueChange={value => set('statusMessageAutoChange', value)} />
             <SwitchRow label="프로필사진 자동 변경" value={draft.profilePhotoAutoChange === true} onValueChange={value => set('profilePhotoAutoChange', value)} />
@@ -759,18 +719,6 @@ function normalizeCalendarEvent(event: Partial<CalendarEvent>): CalendarEvent {
 
 function validChoice(value: string, options: string[][], fallback: string) {
   return options.some(([key]) => key === value) ? value : fallback;
-}
-
-function cleanGeneratedImagePrompt(text: string) {
-  const parsed = parseJsonObject<{ prompt?: string; imagePrompt?: string; profilePrompt?: string; coverPrompt?: string }>(text);
-  const raw = parsed?.prompt || parsed?.imagePrompt || parsed?.profilePrompt || text;
-  return String(raw || '')
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/```$/i, '')
-    .replace(/^\s*["']?(prompt|imagePrompt|profilePrompt|coverPrompt)["']?\s*[:=]\s*/i, '')
-    .replace(/^[{["'\s]+|[}\]"'\s]+$/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
 }
 
 function parseStickers(text: string) {

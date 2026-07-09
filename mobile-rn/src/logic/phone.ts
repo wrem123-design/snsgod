@@ -47,7 +47,8 @@ export function phoneCardFromReply(
   state: SNSGodState,
   character: SNSGodCharacter,
   item: PhoneReplyLike,
-  sourceMode: string
+  sourceMode: string,
+  options?: { createdAt?: number }
 ): { textContent: string; card?: SNSGodMessage } {
   const rawContent = String(item.content || '');
   const cleanContent = stripPhoneCallMarker(rawContent);
@@ -62,7 +63,7 @@ export function phoneCardFromReply(
       role: 'character',
       characterId: character.id,
       content: '',
-      createdAt: Date.now(),
+      createdAt: Number(options?.createdAt || Date.now()),
       mediaType: 'phone-call',
       mediaName: `${character.name} 전화`,
       callInvite: true,

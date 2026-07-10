@@ -8,6 +8,9 @@ import { makeId } from '../logic/ids';
 import { formatPhoneDuration, phoneSummaryFromLines } from '../logic/phone';
 import { isRenderableMediaUri } from '../logic/media';
 import { SNSGodState } from '../types';
+import { canonicalPersonaBlocks } from '../logic/canonicalPersona';
+import { compilePromptBlocks, PromptBlock } from '../logic/promptCompiler';
+import { privateMemoryPromptBlock } from '../logic/memoryBridge';
 
 type CallLine = { id: string; speaker: 'user' | 'character' | 'system'; text: string; createdAt: number };
 type CallPhase = 'dialing' | 'ringing' | 'connected' | 'character_typing' | 'awaiting_next' | 'awaiting_choice' | 'awaiting_text' | 'user_sending' | 'listening' | 'ending' | 'ended';
@@ -329,28 +332,36 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
         .map(item => `${item.speaker === 'user' ? userName : character.name}: ${item.text}`)
         .join('\n');
       const memoryText = (character.memories || []).slice(-10).map(item => `- ${item}`).join('\n');
+      const personaBlocks = canonicalPersonaBlocks(character, state.config.language || 'Korean', {
+        userVisibleName: userName,
+        userProfile: state.config.userDescription,
+        relationshipNote: room?.relationshipNote,
+        memoryBlock: room ? privateMemoryPromptBlock(state, room, character, transcript) : memoryText,
+        memoryVisibility: 'private',
+      });
+      const systemParts = [
+        ...personaBlocks,
+        `You are ${character.name} in a private live phone call with ${userName}.`,
+        phoneArcGuidance(turnNumber, MAX_PHONE_CHARACTER_TURNS),
+        'Return raw JSON only: {"lines":["short spoken line 1","short spoken line 2"],"choices":["user reply option 1","user reply option 2","user reply option 3"],"uiMode":"next|choices|input|mixed","allowDirectReply":true}.',
+        'Lines must contain 1-3 short spoken live phone lines. Each line is shown as one card page. No narration, no action descriptions, no speaker labels, no phone-call markers, no SNS posts.',
+        'Choices must be concise, varied, and directly reply to the spoken lines.',
+        'A bad-connection or hearing-trouble moment such as "Can you hear me?" is a rare live-call flavor. Use it at most once in the entire call, never twice, and do not use it if it already appears in the transcript.',
+        firstTurn
+          ? 'For the first connected turn, uiMode may be next if the character is starting with a short greeting.'
+          : isFinalTurn
+            ? 'Final turn: uiMode must be choices. allowDirectReply must be false. All choices must end the call.'
+            : 'Use choices when the user should answer meaningfully.',
+        `Recent messenger chat before this call:\n${recentChatContext() || '(empty)'}`,
+      ];
       const result = await callLLMText(state, [
         {
           role: 'system',
-          content: [
-            `You are ${character.name} in a private live phone call with ${userName}.`,
-            `Phone call language: ${character.language || state.config.language || 'Korean'}.`,
-            phoneArcGuidance(turnNumber, MAX_PHONE_CHARACTER_TURNS),
-            'Return raw JSON only: {"lines":["short spoken line 1","short spoken line 2"],"choices":["user reply option 1","user reply option 2","user reply option 3"],"uiMode":"next|choices|input|mixed","allowDirectReply":true}.',
-            'Lines must contain 1-3 short spoken live phone lines. Each line is shown as one card page. No narration, no action descriptions, no speaker labels, no phone-call markers, no SNS posts.',
-            'Choices must be concise, varied, and directly reply to the spoken lines.',
-            'A bad-connection or hearing-trouble moment such as "Can you hear me?" is a rare live-call flavor. Use it at most once in the entire call, never twice, and do not use it if it already appears in the transcript.',
-            firstTurn
-              ? 'For the first connected turn, uiMode may be next if the character is starting with a short greeting.'
-              : isFinalTurn
-                ? 'Final turn: uiMode must be choices. allowDirectReply must be false. All choices must end the call.'
-                : 'Use choices when the user should answer meaningfully.',
-            `Character profile:\n${character.prompt || '(empty)'}`,
-            `User profile:\n${state.config.userDescription || '(empty)'}`,
-            memoryText ? `Character memories, including real in-person meetings:\n${memoryText}` : '',
-            room?.relationshipNote ? `Room relationship/context note:\n${room.relationshipNote}` : '',
-            `Recent messenger chat before this call:\n${recentChatContext() || '(empty)'}`
-          ].filter(Boolean).join('\n\n')
+          content: compilePromptBlocks(systemParts.map((part, index): PromptBlock => typeof part === 'string' ? {
+            id: `phone.turn.${index}`,
+            content: part,
+            priority: systemParts.length - index,
+          } : part)).content,
         },
         {
           role: 'user',
@@ -412,15 +423,27 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
       .map(item => `${item.speaker === 'user' ? userName : character.name}: ${item.text}`)
       .join('\n');
     try {
+      const personaBlocks = canonicalPersonaBlocks(character, state.config.language || 'Korean', {
+        userVisibleName: userName,
+        userProfile: state.config.userDescription,
+        relationshipNote: room?.relationshipNote,
+        memoryBlock: room ? privateMemoryPromptBlock(state, room, character, transcript) : '',
+        memoryVisibility: 'private',
+      });
+      const goodbyeParts = [
+        ...personaBlocks,
+        `You are ${character.name} ending a private live phone call with ${userName}.`,
+        'Return raw JSON only: {"line":"one short spoken goodbye line"}.',
+        'No narration, no speaker label, no SNS post, no phone marker.',
+      ];
       const result = await callLLMText(state, [
         {
           role: 'system',
-          content: [
-            `You are ${character.name} ending a private live phone call with ${userName}.`,
-            'Return raw JSON only: {"line":"one short spoken goodbye line"}.',
-            'No narration, no speaker label, no SNS post, no phone marker.',
-            `Character profile:\n${character.prompt || '(empty)'}`
-          ].join('\n\n')
+          content: compilePromptBlocks(goodbyeParts.map((part, index): PromptBlock => typeof part === 'string' ? {
+            id: `phone.goodbye.${index}`,
+            content: part,
+            priority: goodbyeParts.length - index,
+          } : part)).content,
         },
         {
           role: 'user',

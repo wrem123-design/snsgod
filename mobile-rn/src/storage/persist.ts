@@ -11,6 +11,15 @@ import { normalizeNotifications } from '../logic/notifications';
 import { externalizeStateMedia, inspectMediaFiles, MEDIA_MANIFEST_FILE, MEDIA_ROOT_DIR } from '../logic/media';
 import { normalizeSumGodState } from '../logic/sumgod';
 import { migrateMemoryState } from '../logic/memoryPolicy';
+import {
+  calculateEstablishedContentHash,
+  isPersistedStateObject,
+  mergeCriticalArrayBackup,
+  recoveryMetadataRequiresHash,
+  selectAuthoritativeCandidate,
+  storedContentHashMatches,
+  type RecoveryCandidate,
+} from './stateRecoveryPolicy';
 
 const STATE_KEY = 'snsgod.state.v1';
 const LEGACY_BACKUP_KEY = 'snsgod.legacyBackup.v1';
@@ -29,7 +38,11 @@ const PREVIOUS_BACKUP_FILE = `${BACKUP_DIR}state-previous.json`;
 const TMP_BACKUP_FILE = `${BACKUP_DIR}state-latest.tmp.json`;
 
 type StorageSource = 'asyncStorage' | 'sqlite' | 'sqliteUnverified' | 'backupLatest' | 'backupPrevious' | 'default';
-type StateCandidate = { source: StorageSource; raw?: string; state?: SNSGodState; stats?: StorageStats; parseError?: string; pointer?: AsyncStoragePointer };
+type StateCandidate = RecoveryCandidate<SNSGodState, StorageSource, StorageStats> & {
+  raw?: string;
+  parseError?: string;
+  pointer?: AsyncStoragePointer;
+};
 type MessageMap = SNSGodState['messages'];
 type StorageStats = {
   revision: number;
@@ -138,7 +151,11 @@ export async function loadState(): Promise<SNSGodState> {
   const selected = selectBestState(candidates);
   lastHydrationSource = selected.source;
   lastHydrationReason = selected.reason;
-  const normalized = normalizeState(mergeCriticalBackups(selected.state, backups));
+  const normalized = normalizeState(mergeCriticalBackups(
+    selected.state,
+    backups,
+    selected.source === 'default'
+  ));
   if (selected.source === 'sqlite' || selected.source === 'sqliteUnverified') {
     messageRoomSignatures = createMessageRoomSignatures(normalized.messages || {});
     messageRoomSignaturesReady = true;
@@ -391,24 +408,25 @@ function parseArrayBackup<T>(raw: string | null): T[] {
   }
 }
 
-function mergeCriticalBackups(state: SNSGodState, backups: Pick<SNSGodState, 'referenceFaceSlots' | 'meetingEventSessions'>): SNSGodState {
-  const currentReferenceSlots = Array.isArray(state.referenceFaceSlots) ? state.referenceFaceSlots : [];
-  const currentMeetingSessions = Array.isArray(state.meetingEventSessions) ? state.meetingEventSessions : [];
+function mergeCriticalBackups(
+  state: SNSGodState,
+  backups: Pick<SNSGodState, 'referenceFaceSlots' | 'meetingEventSessions'>,
+  stateIsGeneratedDefault = false
+): SNSGodState {
+  const currentReferenceSlots = Array.isArray(state.referenceFaceSlots) ? state.referenceFaceSlots : undefined;
+  const currentMeetingSessions = Array.isArray(state.meetingEventSessions) ? state.meetingEventSessions : undefined;
   return {
     ...state,
-    referenceFaceSlots: currentReferenceSlots.length > 0 ? currentReferenceSlots : backups.referenceFaceSlots || [],
-    meetingEventSessions: currentMeetingSessions.length > 0 ? currentMeetingSessions : backups.meetingEventSessions || []
-  };
-}
-
-async function protectCriticalBackups(state: SNSGodState): Promise<SNSGodState> {
-  const backups = await readCriticalBackups();
-  const referenceFaceSlots = Array.isArray(state.referenceFaceSlots) ? state.referenceFaceSlots : [];
-  const meetingEventSessions = Array.isArray(state.meetingEventSessions) ? state.meetingEventSessions : [];
-  return {
-    ...state,
-    referenceFaceSlots: referenceFaceSlots.length > 0 ? referenceFaceSlots : backups.referenceFaceSlots || [],
-    meetingEventSessions: meetingEventSessions.length > 0 ? meetingEventSessions : backups.meetingEventSessions || []
+    referenceFaceSlots: mergeCriticalArrayBackup(
+      currentReferenceSlots,
+      backups.referenceFaceSlots,
+      stateIsGeneratedDefault
+    ),
+    meetingEventSessions: mergeCriticalArrayBackup(
+      currentMeetingSessions,
+      backups.meetingEventSessions,
+      stateIsGeneratedDefault
+    )
   };
 }
 
@@ -417,12 +435,9 @@ async function preparePersistedPayload(state: SNSGodState, options: { includeFul
   const externalized = perf
     ? await perf.measure('externalizeStateMedia', () => externalizeStateMedia(state))
     : await externalizeStateMedia(state);
-  const protectedState = perf
-    ? await perf.measure('protectCriticalBackups', () => protectCriticalBackups(externalized))
-    : await protectCriticalBackups(externalized);
   const normalized = perf
-    ? perf.measureSync('normalizeState', () => normalizeState(protectedState))
-    : normalizeState(protectedState);
+    ? perf.measureSync('normalizeState', () => normalizeState(externalized))
+    : normalizeState(externalized);
   const counts = perf
     ? perf.measureSync('storage counts', () => getStorageCounts(normalized))
     : getStorageCounts(normalized);
@@ -510,12 +525,41 @@ function buildCandidates(items: { source: StorageSource; raw?: string | null }[]
     if (!item.raw) return { source: item.source };
     try {
       const parsed = JSON.parse(item.raw);
-      if (!parsed || typeof parsed !== 'object') return { source: item.source, raw: item.raw, parseError: 'not an object' };
-      if ((parsed as Record<string, unknown>).__storagePointer) {
-        return { source: item.source, raw: item.raw, pointer: parsed as AsyncStoragePointer, parseError: `pointer only: ${(parsed as Record<string, unknown>).__storagePointer}` };
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { source: item.source, raw: item.raw, parseError: 'not a state object' };
       }
+      const parsedRecord = parsed as Record<string, unknown>;
+      if (parsedRecord.__storagePointer) {
+        return { source: item.source, raw: item.raw, pointer: parsed as AsyncStoragePointer, parseError: `pointer only: ${parsedRecord.__storagePointer}` };
+      }
+      if (!isPersistedStateObject(parsed)) return { source: item.source, raw: item.raw, parseError: 'not a state object' };
       const state = parsed as SNSGodState;
-      return { source: item.source, raw: item.raw, state, stats: getStorageStats(state) };
+      const stats = getStorageStats(state);
+      const hashRequired = recoveryMetadataRequiresHash({
+        revision: state.__revision,
+        writeSeq: state.__writeSeq,
+        savedAt: state.__savedAt
+      });
+      const currentHashMatches = storedContentHashMatches(
+        state.__contentHash,
+        [stats.hash],
+        hashRequired
+      );
+      const establishedHashMatches = !currentHashMatches && Boolean(state.__contentHash?.trim())
+        ? storedContentHashMatches(state.__contentHash, [
+          calculateEstablishedContentHash(stripStorageMetadata(state))
+        ])
+        : false;
+      if (!currentHashMatches && !establishedHashMatches) {
+        const validationError = 'content hash mismatch';
+        return {
+          source: item.source,
+          raw: item.raw,
+          parseError: validationError,
+          validationError
+        };
+      }
+      return { source: item.source, raw: item.raw, state, stats };
     } catch (error) {
       return { source: item.source, raw: item.raw, parseError: error instanceof Error ? error.message : String(error) };
     }
@@ -532,45 +576,15 @@ function hydrateSqliteCandidatesWithMessages(candidates: StateCandidate[], messa
 }
 
 function selectBestState(candidates: StateCandidate[]): { source: StorageSource; state: SNSGodState; reason: string } {
-  const valid = candidates.filter((candidate): candidate is StateCandidate & { state: SNSGodState; stats: StorageStats } => Boolean(candidate.state && candidate.stats));
-  if (!valid.length) {
+  const best = selectAuthoritativeCandidate(candidates);
+  if (!best) {
     return { source: 'default', state: withStorageMetadata(createDefaultState(), 0), reason: 'no persisted state found' };
-  }
-  const sorted = valid.slice().sort(compareCandidates);
-  const best = sorted[0];
-  const richer = sorted.find(candidate => isMeaningfullyRicher(candidate.stats, best.stats));
-  if (richer) {
-    return {
-      source: richer.source,
-      state: richer.state,
-      reason: `selected richer rollback guard candidate over ${best.source}: ${describeStats(richer.stats)} vs ${describeStats(best.stats)}`
-    };
   }
   return {
     source: best.source,
     state: best.state,
-    reason: `selected highest revision/savedAt: ${describeStats(best.stats)}`
+    reason: `selected highest revision/writeSeq/savedAt: ${describeStats(best.stats)}`
   };
-}
-
-function compareCandidates(a: StateCandidate & { stats: StorageStats }, b: StateCandidate & { stats: StorageStats }): number {
-  if (b.stats.revision !== a.stats.revision) return b.stats.revision - a.stats.revision;
-  if (b.stats.savedAt !== a.stats.savedAt) return b.stats.savedAt - a.stats.savedAt;
-  return richnessScore(b.stats) - richnessScore(a.stats);
-}
-
-function isMeaningfullyRicher(candidate: StorageStats, selected: StorageStats): boolean {
-  if (selected.revision > candidate.revision + 1) return false;
-  if (candidate.messageCount > selected.messageCount + 8) return true;
-  if (candidate.characterCount > selected.characterCount) return true;
-  if (candidate.referenceImageCount > selected.referenceImageCount) return true;
-  if (candidate.mediaCount > selected.mediaCount) return true;
-  if (candidate.lastMessageAt > selected.lastMessageAt) return true;
-  return richnessScore(candidate) > richnessScore(selected) + 20 && candidate.revision >= selected.revision;
-}
-
-function richnessScore(stats: StorageStats): number {
-  return stats.messageCount + stats.characterCount * 10 + stats.referenceImageCount * 20 + stats.mediaCount * 5 + Math.floor(stats.lastMessageAt / 1000000000000);
 }
 
 function describeStats(stats: StorageStats): string {
@@ -745,6 +759,10 @@ function withStorageMetadata(state: SNSGodState, revision: number, statsSource: 
 
 function contentHash(state: SNSGodState): string {
   const raw = JSON.stringify(stripStorageMetadata(state));
+  return fnv1aHash(raw);
+}
+
+function fnv1aHash(raw: string): string {
   let hash = 2166136261;
   for (let index = 0; index < raw.length; index += 1) {
     hash ^= raw.charCodeAt(index);
@@ -828,9 +846,13 @@ async function readSqliteState(): Promise<string | undefined> {
       SQLITE_STATE_KEY
     );
     if (!row?.value) return undefined;
-    const stats = statsFromRaw(row.value);
+    const stats = metadataStatsFromRaw(row.value);
     if (!stats) return undefined;
-    if (!row.content_hash || row.content_hash !== stats.hash || Number(row.revision || 0) !== stats.revision || Number(row.payload_size || 0) !== row.value.length) {
+    if (!row.content_hash
+      || row.content_hash !== stats.hash
+      || Number(row.revision || 0) !== stats.revision
+      || Number(row.write_seq || 0) !== stats.writeSeq
+      || Number(row.payload_size || 0) !== row.value.length) {
       lastSaveError = 'SQLite meta/blob mismatch detected; sqlite candidate ignored.';
       return undefined;
     }

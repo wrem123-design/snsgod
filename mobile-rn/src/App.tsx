@@ -46,8 +46,18 @@ import { createGroupMeetingEventSession, createManualGroupMeetingEventPrompt, cr
 import { forceUpdateRoomMemory } from './logic/memoryBridge';
 import { maybeCreateBackgroundAutoSNSPost } from './logic/sns';
 import { bootstrapServer, enqueueServerMessage, flushServerOutbox, isServerMessagingEnabled, registerServerDevice, syncServerMessages, withServerError } from './logic/serverMessaging';
+import {
+  applyStateMediaUriReplacements,
+  collectStateMediaUris,
+  createStateMediaReplacementCache,
+  type StateMediaUriReplacement,
+} from './logic/stateMediaPolicy';
 
 const INTERRUPTED_REPLY_RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const MEDIA_REPLACEMENT_CACHE_TTL_MS = 30_000;
+const MEDIA_REPLACEMENT_CACHE_SWEEP_MS = 5_000;
+const MEDIA_REPLACEMENT_CACHE_MAX_ENTRIES = 12;
+const MEDIA_REPLACEMENT_CACHE_MAX_DATA_URI_CHARACTERS = 6_000_000;
 
 type Route =
   | { name: 'chatList' }
@@ -93,6 +103,11 @@ export default function App() {
   const [runtimeReloadNonce, setRuntimeReloadNonce] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const stateRef = useRef<SNSGodState | null>(null);
+  const persistedMediaUrisRef = useRef(createStateMediaReplacementCache({
+    ttlMs: MEDIA_REPLACEMENT_CACHE_TTL_MS,
+    maxEntries: MEDIA_REPLACEMENT_CACHE_MAX_ENTRIES,
+    maxDataUriCharacters: MEDIA_REPLACEMENT_CACHE_MAX_DATA_URI_CHARACTERS,
+  }));
   const routeRef = useRef<Route>(route);
   const routeHistoryRef = useRef<Route[]>([]);
   const incomingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -125,6 +140,16 @@ export default function App() {
   function goBack(fallback: Route = { name: 'chatList' }) {
     setRoute(() => routeHistoryRef.current.pop() || fallback);
   }
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      persistedMediaUrisRef.current.active(Date.now());
+    }, MEDIA_REPLACEMENT_CACHE_SWEEP_MS);
+    return () => {
+      clearInterval(timer);
+      persistedMediaUrisRef.current.clear();
+    };
+  }, []);
 
   useEffect(() => {
     const storagePaths = getStoragePaths();
@@ -242,7 +267,12 @@ export default function App() {
         const snapshot = summarized === current ? current : withNextRevision(summarized, current);
         stateRef.current = snapshot;
         setState(snapshot);
-        void flushSaveState(snapshot, { backup: 'force', verify: 'full', reason: 'app background' });
+        void flushSaveState(snapshot, {
+          backup: 'force',
+          verify: 'full',
+          reason: 'app background',
+          onMediaExternalized: applyPersistedMediaUris,
+        });
         // Keep process priority high so setInterval/reply delays continue after Home.
         if (current.config.autoEnabled !== false && !isServerMessagingEnabled(current)) {
           void setAutomationKeepAliveRunning(true, { force: true });
@@ -492,14 +522,30 @@ export default function App() {
     };
   }
 
+  function applyPersistedMediaUris(replacements: readonly StateMediaUriReplacement[]): void {
+    const now = Date.now();
+    persistedMediaUrisRef.current.add(replacements, now);
+    const current = stateRef.current;
+    if (!current) return;
+    const patched = applyStateMediaUriReplacements(current, replacements);
+    persistedMediaUrisRef.current.active(now, collectStateMediaUris(patched));
+    if (patched === current) return;
+    stateRef.current = patched;
+    setState(patched);
+  }
+
   async function commit(next: SNSGodState, options: CommitOptions = {}) {
+    const now = Date.now();
+    const knownMediaReplacements = persistedMediaUrisRef.current.active(now);
+    const mediaAwareNext = applyStateMediaUriReplacements(next, knownMediaReplacements);
+    persistedMediaUrisRef.current.active(now, collectStateMediaUris(mediaAwareNext));
     if (options.persist === false) {
-      setState(next);
-      stateRef.current = next;
+      setState(mediaAwareNext);
+      stateRef.current = mediaAwareNext;
       return;
     }
     const previous = stateRef.current;
-    const committed = withNextRevision(withUnreadForNewMessages(previous, next, visibleRoomIdForRoute(routeRef.current)), previous);
+    const committed = withNextRevision(withUnreadForNewMessages(previous, mediaAwareNext, visibleRoomIdForRoute(routeRef.current)), previous);
     setState(committed);
     stateRef.current = committed;
     if (!hydratedRef.current) {
@@ -507,7 +553,10 @@ export default function App() {
       void appendDebugLog('storage', 'skip save before hydration', 'warn');
       return;
     }
-    saveStateDebounced(committed, options.save);
+    saveStateDebounced(committed, {
+      ...options.save,
+      onMediaExternalized: applyPersistedMediaUris,
+    });
   }
 
   async function commitCurrent(patch: (current: SNSGodState) => SNSGodState, options?: CommitOptions) {
@@ -524,7 +573,13 @@ export default function App() {
 
   async function commitAndFlush(next: SNSGodState) {
     await commit(next, { save: { important: true, reason: 'important screen change' } });
-    await flushSaveState(stateRef.current || next, { backup: 'force', verify: 'full', important: true, reason: 'important screen flush' });
+    await flushSaveState(stateRef.current || next, {
+      backup: 'force',
+      verify: 'full',
+      important: true,
+      reason: 'important screen flush',
+      onMediaExternalized: applyPersistedMediaUris,
+    });
   }
 
   async function syncOracleMessages(reason: string) {
@@ -660,7 +715,12 @@ export default function App() {
 
   async function reloadSavedState() {
     const current = stateRef.current;
-    if (current) await flushSaveState(current, { backup: 'force', verify: 'full', reason: 'reload saved state' });
+    if (current) await flushSaveState(current, {
+      backup: 'force',
+      verify: 'full',
+      reason: 'reload saved state',
+      onMediaExternalized: applyPersistedMediaUris,
+    });
     const next = clearRuntimeOnlyState(await loadState());
     setState(next);
     stateRef.current = next;
@@ -670,7 +730,12 @@ export default function App() {
   async function reloadBundle() {
     void appendDebugLog('debug', 'JS bundle reload requested');
     const current = stateRef.current;
-    if (current) await flushSaveState(current, { backup: 'force', verify: 'full', reason: 'reload bundle' });
+    if (current) await flushSaveState(current, {
+      backup: 'force',
+      verify: 'full',
+      reason: 'reload bundle',
+      onMediaExternalized: applyPersistedMediaUris,
+    });
     try {
       DevSettings.reload();
     } catch (error) {
@@ -812,7 +877,12 @@ export default function App() {
       ) : route.name === 'gallery' ? (
         <GalleryScreen state={state} onChange={commit} onBack={goBack} />
       ) : route.name === 'debug' ? (
-        <DebugScreen state={state} onBack={goBack} onReloadState={reloadSavedState} onReloadBundle={reloadBundle} onSaveNow={() => flushSaveState(stateRef.current || undefined, { backup: 'force', verify: 'full', reason: 'debug manual save' })} />
+        <DebugScreen state={state} onBack={goBack} onReloadState={reloadSavedState} onReloadBundle={reloadBundle} onSaveNow={() => flushSaveState(stateRef.current || undefined, {
+          backup: 'force',
+          verify: 'full',
+          reason: 'debug manual save',
+          onMediaExternalized: applyPersistedMediaUris,
+        })} />
       ) : route.name === 'random' ? (
         <RandomChatScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'randomChatRoom', roomId })} />
       ) : route.name === 'sumgod' ? (

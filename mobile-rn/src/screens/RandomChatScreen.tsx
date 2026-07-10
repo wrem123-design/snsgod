@@ -25,7 +25,7 @@ function lastText(state: SNSGodState, room: RandomChatRoom) {
 export function RandomChatScreen({ state, onBack, onChange, onOpenRoom }: {
   state: SNSGodState;
   onBack: () => void;
-  onChange: (next: SNSGodState) => Promise<void> | void;
+  onChange: (next: SNSGodState, options?: { conflict?: 'incoming' | 'latest' }) => Promise<void> | void;
   onOpenRoom: (roomId: string) => void;
 }) {
   const [loading, setLoading] = useState(false);
@@ -55,7 +55,7 @@ export function RandomChatScreen({ state, onBack, onChange, onOpenRoom }: {
         character,
         conceptSeed
       );
-      await onChange(next);
+      await onChange(next, { conflict: 'latest' });
       onOpenRoom(roomId);
     } catch (error) {
       const fallbackSeed = randomTraitBundle(state, gender);
@@ -65,7 +65,7 @@ export function RandomChatScreen({ state, onBack, onChange, onOpenRoom }: {
         { ...fallbackCharacter, firstMessage: `랜덤 캐릭터 생성에 실패했지만 임시 대화를 열었어요.\n${error instanceof Error ? error.message : String(error)}` },
         fallbackSeed
       );
-      await onChange(next);
+      await onChange(next, { conflict: 'latest' });
       onOpenRoom(roomId);
     } finally {
       setLoading(false);

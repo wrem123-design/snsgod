@@ -10,16 +10,19 @@ const ROUND_OPTIONS = [8, 16, 24];
 export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
   state: SNSGodState;
   onBack: () => void;
-  onChange: (next: SNSGodState) => Promise<void> | void;
+  onChange: (next: SNSGodState, options?: { conflict?: 'incoming' | 'latest' }) => Promise<void> | void;
   onOpenRoom: (roomId: string) => void;
 }) {
   const [roundCount, setRoundCount] = useState(16);
   const [includeExisting, setIncludeExisting] = useState(false);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const operationRef = useRef(0);
   const [imageBusy, setImageBusy] = useState(false);
   const [winningCandidate, setWinningCandidate] = useState<BlindDateCandidate | undefined>();
   const overlay = useRef(new Animated.Value(0)).current;
   const imageAttemptedRef = useRef<Set<string>>(new Set());
+  const selectionPairRef = useRef('');
   const progress = getBlindDateProgress(state);
   const session = activeBlindDateSession(state);
   const worldcupSession = session?.mode === 'worldcup' ? session : undefined;
@@ -41,6 +44,10 @@ export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
   useEffect(() => {
     imageAttemptedRef.current.clear();
   }, [worldcupSession?.id]);
+
+  useEffect(() => {
+    selectionPairRef.current = '';
+  }, [currentPair?.id]);
 
   useEffect(() => {
     if (!worldcupSession || champion || currentPair) return;
@@ -65,17 +72,24 @@ export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
   useEffect(() => {
     if (!worldcupSession || !currentPair) return;
     if (currentPair.leftCandidateId && !currentPair.rightCandidateId) {
+      const pairId = currentPair.id;
+      if (selectionPairRef.current === pairId) return;
+      selectionPairRef.current = pairId;
       const candidate = worldcupSession.candidates.find(item => item.id === currentPair.leftCandidateId);
       setWinningCandidate(candidate);
-      Animated.sequence([
+      const animation = Animated.sequence([
         Animated.timing(overlay, { toValue: 1, duration: 160, useNativeDriver: true }),
         Animated.delay(520),
         Animated.timing(overlay, { toValue: 0, duration: 180, useNativeDriver: true })
-      ]).start(() => {
+      ]);
+      animation.start(({ finished }) => {
+        if (!finished || selectionPairRef.current !== pairId) return;
         setWinningCandidate(undefined);
-        void onChange(selectBlindDateWorldcupCandidate(state, worldcupSession.id, currentPair.id, currentPair.leftCandidateId));
+        void onChange(selectBlindDateWorldcupCandidate(state, worldcupSession.id, pairId, currentPair.leftCandidateId), { conflict: 'latest' });
       });
+      return () => animation.stop();
     }
+    return undefined;
   }, [currentPair?.id, worldcupSession?.id]);
 
   useEffect(() => {
@@ -92,39 +106,61 @@ export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
     candidateIds.forEach(candidateId => imageAttemptedRef.current.add(candidateId));
     setImageBusy(true);
     void ensureWorldcupCandidateImages(state, worldcupSession.id, candidateIds)
-      .then(next => onChange(next))
+      .then(next => onChange(next, { conflict: 'latest' }))
       .finally(() => setImageBusy(false));
   }, [currentPair?.id, imageBusy, worldcupSession?.id]);
 
   async function startWorldcup() {
-    if (busy) return;
+    if (busy || busyRef.current) return;
+    busyRef.current = true;
+    const operationId = operationRef.current + 1;
+    operationRef.current = operationId;
     setBusy(true);
     try {
-      await onChange(await createBlindDateSession(state, 'worldcup', roundCount, { includeExistingCharacters: includeExisting }));
+      await onChange(await createBlindDateSession(state, 'worldcup', roundCount, { includeExistingCharacters: includeExisting }), { conflict: 'latest' });
     } finally {
-      setBusy(false);
+      if (operationRef.current === operationId) {
+        busyRef.current = false;
+        setBusy(false);
+      }
     }
   }
 
   function choose(candidate: BlindDateCandidate) {
-    if (!worldcupSession || !currentPair || busy) return;
+    if (!worldcupSession || !currentPair || busy || selectionPairRef.current === currentPair.id) return;
+    const pairId = currentPair.id;
+    selectionPairRef.current = pairId;
     setWinningCandidate(candidate);
-    Animated.sequence([
+    const animation = Animated.sequence([
       Animated.timing(overlay, { toValue: 1, duration: 170, useNativeDriver: true }),
       Animated.delay(620),
       Animated.timing(overlay, { toValue: 0, duration: 190, useNativeDriver: true })
-    ]).start(() => {
+    ]);
+    animation.start(({ finished }) => {
+      if (!finished || selectionPairRef.current !== pairId) return;
       setWinningCandidate(undefined);
-      void onChange(selectBlindDateWorldcupCandidate(state, worldcupSession.id, currentPair.id, candidate.id));
+      void onChange(selectBlindDateWorldcupCandidate(state, worldcupSession.id, pairId, candidate.id), { conflict: 'latest' });
     });
   }
 
-  function importChampion() {
-    if (!worldcupSession || !champion) return;
-    const { next, roomId } = importBlindDateCandidate(state, worldcupSession.id, champion.id);
-    void Promise.resolve(roomId ? createBlindDateFirstDatePrompt(next, roomId) : next).then(withMeetingPrompt => onChange(withMeetingPrompt)).then(() => {
-      if (roomId) onOpenRoom(roomId);
-    });
+  async function importChampion() {
+    if (!worldcupSession || !champion || busy || busyRef.current) return;
+    busyRef.current = true;
+    const operationId = operationRef.current + 1;
+    operationRef.current = operationId;
+    setBusy(true);
+    try {
+      const { next, roomId } = importBlindDateCandidate(state, worldcupSession.id, champion.id);
+      const withMeetingPrompt = roomId ? await createBlindDateFirstDatePrompt(next, roomId) : next;
+      if (operationRef.current !== operationId) return;
+      await onChange(withMeetingPrompt, { conflict: 'latest' });
+      if (operationRef.current === operationId && roomId) onOpenRoom(roomId);
+    } finally {
+      if (operationRef.current === operationId) {
+        busyRef.current = false;
+        setBusy(false);
+      }
+    }
   }
 
   function exitWorldcup() {
@@ -152,12 +188,21 @@ export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
           <Text style={styles.heroSub}>라운드가 클수록 준비 시간이 길어져요. 후보는 필요한 경기부터 자연스럽게 준비합니다.</Text>
           <View style={styles.roundGrid}>
             {ROUND_OPTIONS.map(option => (
-              <Pressable key={option} onPress={() => setRoundCount(option)} style={[styles.roundButton, roundCount === option && styles.roundButtonActive]}>
+              <Pressable
+                key={option}
+                disabled={busy}
+                onPress={() => setRoundCount(option)}
+                style={[styles.roundButton, roundCount === option && styles.roundButtonActive, busy && styles.disabled]}
+              >
                 <Text style={[styles.roundButtonText, roundCount === option && styles.roundButtonTextActive]}>{option}강</Text>
               </Pressable>
             ))}
           </View>
-          <Pressable onPress={() => setIncludeExisting(value => !value)} style={[styles.checkRow, includeExisting && styles.checkRowActive]}>
+          <Pressable
+            disabled={busy}
+            onPress={() => setIncludeExisting(value => !value)}
+            style={[styles.checkRow, includeExisting && styles.checkRowActive, busy && styles.disabled]}
+          >
             <View style={[styles.checkbox, includeExisting && styles.checkboxOn]}><Text style={styles.checkboxText}>{includeExisting ? '✓' : ''}</Text></View>
             <View style={{ flex: 1 }}>
               <Text style={styles.checkTitle}>기존 캐릭터도 참가</Text>
@@ -179,8 +224,8 @@ export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
           {champion.profileImageUri ? <Image source={{ uri: champion.profileImageUri }} style={styles.championImage} /> : <View style={styles.emptyImage}><Text style={styles.emptyText}>{champion.name.slice(0, 1)}</Text></View>}
           <Text style={styles.championTitle}>{champion.name} 우승</Text>
           <Text style={styles.championSub}>{champion.job} · {champion.personalitySummary}</Text>
-          <Pressable onPress={importChampion} style={styles.startButton}><Text style={styles.startButtonText}>그녀에게 연락처 얻기</Text></Pressable>
-          <Pressable onPress={() => void onChange({ ...state, blindDate: { ...progress, activeSessionId: undefined } })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>새 월드컵</Text></Pressable>
+          <Pressable onPress={() => void importChampion()} disabled={busy} style={[styles.startButton, busy && styles.disabled]}><Text style={styles.startButtonText}>{busy ? '연락 준비 중' : '그녀에게 연락처 얻기'}</Text></Pressable>
+          <Pressable onPress={() => void onChange({ ...state, blindDate: { ...progress, activeSessionId: undefined } })} disabled={busy} style={[styles.secondaryButton, busy && styles.disabled]}><Text style={styles.secondaryButtonText}>새 월드컵</Text></Pressable>
         </View>
       ) : left && right && currentImagesStillLoading ? (
         <View style={styles.matchLoadingPanel}>
@@ -197,7 +242,7 @@ export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
           </View>
           {imageBusy ? <Text style={styles.matchSub}>뒤쪽 대진 사진을 백그라운드로 준비 중</Text> : null}
           <View style={styles.versusRow}>
-            <WorldcupCard candidate={left} onPress={() => choose(left)} namePosition="top" />
+            <WorldcupCard candidate={left} onPress={() => choose(left)} disabled={selectionPairRef.current === currentPair?.id} namePosition="top" />
             <View pointerEvents="none" style={styles.vsBadge}>
               <View style={styles.vsGlass} />
               <Text style={styles.vsShadow}>VS</Text>
@@ -205,7 +250,7 @@ export function IdealWorldcupScreen({ state, onBack, onChange, onOpenRoom }: {
               <Text style={styles.vsSparkLeft}>✦</Text>
               <Text style={styles.vsSparkRight}>✧</Text>
             </View>
-            <WorldcupCard candidate={right} onPress={() => choose(right)} namePosition="bottom" />
+            <WorldcupCard candidate={right} onPress={() => choose(right)} disabled={selectionPairRef.current === currentPair?.id} namePosition="bottom" />
           </View>
         </View>
       ) : (
@@ -249,9 +294,9 @@ function CandidateNameBar({ candidate, position }: { candidate: BlindDateCandida
   );
 }
 
-function WorldcupCard({ candidate, onPress, namePosition }: { candidate: BlindDateCandidate; onPress: () => void; namePosition: 'top' | 'bottom' }) {
+function WorldcupCard({ candidate, onPress, disabled, namePosition }: { candidate: BlindDateCandidate; onPress: () => void; disabled?: boolean; namePosition: 'top' | 'bottom' }) {
   return (
-    <Pressable onPress={onPress} style={styles.card}>
+    <Pressable onPress={onPress} disabled={disabled} style={[styles.card, disabled && styles.disabled]}>
       {candidate.profileImageUri ? <Image source={{ uri: candidate.profileImageUri }} style={styles.cardImage} resizeMode="cover" /> : <View style={styles.emptyImage}><Text style={styles.emptyText}>{candidate.name.slice(0, 1)}</Text></View>}
       <CandidateNameBar candidate={candidate} position={namePosition} />
     </Pressable>

@@ -72,6 +72,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 function markUserMessagesRead(state: SNSGodState, roomId: string) {
+  if (!findGroup(state, roomId)) return state;
   const now = Date.now();
   return {
     ...state,
@@ -83,10 +84,16 @@ function markUserMessagesRead(state: SNSGodState, roomId: string) {
 }
 
 function clearGroupReadState(state: SNSGodState, roomId: string) {
+  if (!findGroup(state, roomId)) return state;
   return {
     ...markUserMessagesRead(state, roomId),
     unreadCounts: { ...(state.unreadCounts || {}), [roomId]: 0 }
   };
+}
+
+function appendGroupMessageIfActive(state: SNSGodState, roomId: string, message: SNSGodMessage) {
+  const room = findGroup(state, roomId);
+  return room && room.disabled !== true ? appendGroupMessage(state, roomId, message) : state;
 }
 
 function appendGroupMessage(state: SNSGodState, roomId: string, message: SNSGodMessage) {
@@ -111,6 +118,12 @@ function findGroup(state: SNSGodState, roomId: string) {
 function groupParticipants(state: SNSGodState, roomId: string) {
   const participantIds = Array.isArray(findGroup(state, roomId)?.participantIds) ? findGroup(state, roomId)?.participantIds || [] : [];
   return state.characters.filter(character => participantIds.includes(character.id));
+}
+
+function activeGroupSpeaker(state: SNSGodState, roomId: string, characterId: string): SNSGodCharacter | undefined {
+  const room = findGroup(state, roomId);
+  if (!room || room.disabled === true || !room.participantIds.includes(characterId)) return undefined;
+  return state.characters.find(character => character.id === characterId && character.enabled !== false);
 }
 
 function participantNames(participants: SNSGodCharacter[]) {
@@ -329,7 +342,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
       }
       if (!tryLockGeneratingRoom(roomId, jobId)) {
         const systemMessage: SNSGodMessage = { id: makeId('msg'), role: 'system', content: '이전 그룹 답장 생성이 아직 정리되지 않아 이번 요청을 중단했습니다. 잠시 후 다시 보내주세요.', createdAt: Date.now(), failed: true };
-        await commitCurrent(current => clearGroupReadState(appendGroupMessage(current, roomId, systemMessage), roomId));
+        await commitCurrent(current => clearGroupReadState(appendGroupMessageIfActive(current, roomId, systemMessage), roomId));
         return;
       }
       const promptState = stateRef.current;
@@ -338,10 +351,11 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
       const { text: rawText, keyIndex } = await withTimeout(callLLMText(promptState, prompt), GROUP_REPLY_TIMEOUT_MS, '그룹 답장 생성');
       if (!isCurrentChatJob(roomId, jobId)) return;
       await commitCurrent(current => {
-        const profile = current.config.apiProfiles[current.config.apiType] || {};
+        const requestProvider = promptState.config.apiType;
+        const profile = current.config.apiProfiles[requestProvider] || {};
         return {
           ...current,
-          config: { ...current.config, apiProfiles: { ...current.config.apiProfiles, [current.config.apiType]: { ...profile, apiKeyIndex: keyIndex } } }
+          config: { ...current.config, apiProfiles: { ...current.config.apiProfiles, [requestProvider]: { ...profile, apiKeyIndex: keyIndex } } }
         };
       });
       const parsed = parseJsonObject<GroupReplyPayload>(rawText);
@@ -415,12 +429,14 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
             }
           };
           await commitCurrent(current => {
+            const currentSpeaker = activeGroupSpeaker(current, roomId, speaker.id);
+            if (!currentSpeaker) return current;
             let next = appendGroupMessage(current, roomId, characterMessage);
             if (mediaData) {
-              const runtime = resolveCharacterRuntimeState(next, speaker);
+              const runtime = resolveCharacterRuntimeState(next, currentSpeaker);
               next = {
                 ...next,
-                characters: next.characters.map(character => character.id === speaker.id ? {
+                characters: next.characters.map(character => character.id === currentSpeaker.id ? {
                   ...character,
                   imageContinuity: {
                     dayKey: runtime.dayKey,
@@ -443,7 +459,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
     } catch (error) {
       setTypingCharacters([]);
       const systemMessage: SNSGodMessage = { id: makeId('msg'), role: 'system', content: `그룹 답장 실패: ${error instanceof Error ? error.message : String(error)}`, createdAt: Date.now(), failed: true };
-      await commitCurrent(current => clearGroupReadState(appendGroupMessage(current, roomId, systemMessage), roomId));
+      await commitCurrent(current => clearGroupReadState(appendGroupMessageIfActive(current, roomId, systemMessage), roomId));
       Alert.alert('그룹 답장 실패', error instanceof Error ? error.message : String(error));
     } finally {
       const shouldFinalizeRead = isCurrentChatJob(roomId, jobId);

@@ -23,9 +23,26 @@ const ABSOLUTE_DATING_APP_MIN_AGE = 19;
 const ABSOLUTE_DATING_APP_MAX_AGE = 80;
 const DATING_IMAGE_COOLDOWN_MS = 8500;
 const DATING_IMAGE_RETRY_DELAYS_MS = [12000, 26000];
+const DATING_IMAGE_TIMEOUT_MS = 3 * 60 * 1000;
 
-let datingImageQueue = Promise.resolve();
+let datingImageQueue: Promise<void> = Promise.resolve();
+let datingImageGeneration = 0;
 let lastDatingImageRequestAt = 0;
+
+class DatingImageGenerationCanceledError extends Error {}
+
+function assertDatingImageGeneration(generation: number): void {
+  if (generation !== datingImageGeneration) {
+    throw new DatingImageGenerationCanceledError('이전 데이트 이미지 작업이 복원으로 취소되었습니다.');
+  }
+}
+
+/** Detaches a restored state generation from old image cooldowns and requests. */
+export function resetDatingImageQueue(): void {
+  datingImageGeneration += 1;
+  datingImageQueue = Promise.resolve();
+  lastDatingImageRequestAt = 0;
+}
 
 type GeneratedDatingAppProfile = Record<string, unknown> & Partial<Omit<DatingAppProfile, 'id' | 'photos' | 'createdAt' | 'expiresAt' | 'imagePrompts'>>;
 
@@ -161,6 +178,20 @@ function delay(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function withDatingImageTimeout<T>(task: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      task,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('데이트 프로필 이미지 생성 시간이 너무 오래 걸려 중단했습니다.')), DATING_IMAGE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function isTransientImageError(error: unknown) {
   const message = String(error instanceof Error ? error.message : error || '').toLowerCase();
   return /429|rate|quota|timeout|timed out|network|fetch|socket|econn|503|502|500|busy|overload|temporar/.test(message);
@@ -170,27 +201,35 @@ function datingImageScope(profile: DatingAppProfile, label: string, attempt: num
   return `${profile.name}/${label}/attempt${attempt}`;
 }
 
-async function runQueuedDatingImage<T>(state: SNSGodState, scope: string, task: () => Promise<T>): Promise<T> {
-  const run = datingImageQueue
-    .catch(() => undefined)
-    .then(async () => {
+async function runQueuedDatingImage<T>(state: SNSGodState, scope: string, generation: number, task: () => Promise<T>): Promise<T> {
+  assertDatingImageGeneration(generation);
+  const previous = datingImageQueue;
+  let release: () => void = () => undefined;
+  datingImageQueue = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  await previous.catch(() => undefined);
+  try {
+      assertDatingImageGeneration(generation);
       const elapsed = Date.now() - lastDatingImageRequestAt;
       const waitMs = Math.max(0, DATING_IMAGE_COOLDOWN_MS - elapsed);
       if (waitMs > 0) {
         void appendDebugLog('datingApp.image.queue', `wait ${waitMs}ms before ${scope}`);
         await delay(waitMs);
       }
+      assertDatingImageGeneration(generation);
       void appendDebugLog('datingApp.image.queue', `start ${scope}`);
       try {
-        const result = await task();
+        const result = await withDatingImageTimeout(task());
+        assertDatingImageGeneration(generation);
         void appendDebugLog('datingApp.image.queue', `success ${scope}`);
         return result;
       } finally {
-        lastDatingImageRequestAt = Date.now();
+        if (generation === datingImageGeneration) lastDatingImageRequestAt = Date.now();
       }
-    });
-  datingImageQueue = run.then(() => undefined, () => undefined);
-  return run;
+  } finally {
+    release();
+  }
 }
 
 function realisticBio(edgePreset: typeof EDGE_PROFILE_PRESETS[number] | undefined, interests: string[], job: string) {
@@ -728,7 +767,7 @@ function datingPhotoPrompts(profile: DatingAppProfile) {
   });
 }
 
-async function generateDatingPhotos(state: SNSGodState, profile: DatingAppProfile): Promise<{ photos: DatingAppPhoto[]; imagePrompts: string[] }> {
+async function generateDatingPhotos(state: SNSGodState, profile: DatingAppProfile, generation: number): Promise<{ photos: DatingAppPhoto[]; imagePrompts: string[] }> {
   const prompts = datingPhotoPrompts(profile);
   const photos: DatingAppPhoto[] = [];
   const supportsReference = datingImageProviderSupportsReference(state);
@@ -736,6 +775,7 @@ async function generateDatingPhotos(state: SNSGodState, profile: DatingAppProfil
   const seedReferenceImage = randomDatingFaceReference(state, usedReferences);
   let generatedReferenceImage: string | undefined;
   for (const [index, item] of prompts.entries()) {
+    assertDatingImageGeneration(generation);
     const photo: DatingAppPhoto = {
       id: makeId('dating_photo'),
       label: item.label,
@@ -748,10 +788,11 @@ async function generateDatingPhotos(state: SNSGodState, profile: DatingAppProfil
           ? seedReferenceImage
           : generatedReferenceImage || seedReferenceImage
         : undefined;
-      const uri = await generateDatingImageWithRetry(state, profile, item.label, item.prompt, referenceImage);
+      const uri = await generateDatingImageWithRetry(state, profile, item.label, item.prompt, generation, referenceImage);
       photo.uri = uri;
       if (supportsReference && index === 0) generatedReferenceImage = uri;
     } catch (error) {
+      if (error instanceof DatingImageGenerationCanceledError) throw error;
       photo.error = error instanceof Error ? error.message : String(error);
       void appendDebugLog('datingApp.image', `image failed ${profile.name}/${item.label}: ${photo.error}`, 'warn');
     }
@@ -760,16 +801,18 @@ async function generateDatingPhotos(state: SNSGodState, profile: DatingAppProfil
   return { photos, imagePrompts: prompts.map(item => item.prompt) };
 }
 
-async function generateDatingImageWithRetry(state: SNSGodState, profile: DatingAppProfile, label: string, prompt: string, referenceImage?: string): Promise<string> {
+async function generateDatingImageWithRetry(state: SNSGodState, profile: DatingAppProfile, label: string, prompt: string, generation: number, referenceImage?: string): Promise<string> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= DATING_IMAGE_RETRY_DELAYS_MS.length; attempt += 1) {
+    assertDatingImageGeneration(generation);
     if (attempt > 0) {
       const waitMs = DATING_IMAGE_RETRY_DELAYS_MS[attempt - 1];
       void appendDebugLog('datingApp.image.retry', `wait ${waitMs}ms before retry ${datingImageScope(profile, label, attempt + 1)}`, 'warn');
       await delay(waitMs);
+      assertDatingImageGeneration(generation);
     }
     try {
-      return await runQueuedDatingImage(state, datingImageScope(profile, label, attempt + 1), () =>
+      return await runQueuedDatingImage(state, datingImageScope(profile, label, attempt + 1), generation, () =>
         generateImageDataUri(state, prompt, undefined, {
         referenceImage,
         kind: referenceImage ? 'profile-reference-face' : 'profile'
@@ -785,7 +828,7 @@ async function generateDatingImageWithRetry(state: SNSGodState, profile: DatingA
   throw lastError instanceof Error ? lastError : new Error(String(lastError || 'dating image generation failed'));
 }
 
-async function regenerateDatingPhoto(state: SNSGodState, profile: DatingAppProfile, photo: DatingAppPhoto, referenceImage?: string): Promise<DatingAppPhoto> {
+async function regenerateDatingPhoto(state: SNSGodState, profile: DatingAppProfile, photo: DatingAppPhoto, generation: number, referenceImage?: string): Promise<DatingAppPhoto> {
   const nextPhoto: DatingAppPhoto = {
     ...photo,
     createdAt: Date.now(),
@@ -793,19 +836,21 @@ async function regenerateDatingPhoto(state: SNSGodState, profile: DatingAppProfi
     error: undefined
   };
   try {
-    const uri = await generateDatingImageWithRetry(state, profile, photo.label, photo.prompt, referenceImage);
+    const uri = await generateDatingImageWithRetry(state, profile, photo.label, photo.prompt, generation, referenceImage);
     return { ...nextPhoto, uri };
   } catch (error) {
+    if (error instanceof DatingImageGenerationCanceledError) throw error;
     const message = error instanceof Error ? error.message : String(error);
     void appendDebugLog('datingApp.image.retry', `image retry failed ${profile.name}/${photo.label}: ${message}`, 'warn');
     return { ...nextPhoto, error: message };
   }
 }
 
-async function generateDatingAppProfileBundle(state: SNSGodState, now: number, refreshIntervalHours: number): Promise<DatingAppProfile> {
+async function generateDatingAppProfileBundle(state: SNSGodState, now: number, refreshIntervalHours: number, generation: number): Promise<DatingAppProfile> {
   const parsed = await generateProfileJson(state);
+  assertDatingImageGeneration(generation);
   const profileSeed = normalizeProfile(state, parsed, now, refreshIntervalHours);
-  const generated = await generateDatingPhotos(state, profileSeed);
+  const generated = await generateDatingPhotos(state, profileSeed, generation);
   return {
     ...profileSeed,
     imagePrompts: generated.imagePrompts,
@@ -814,12 +859,19 @@ async function generateDatingAppProfileBundle(state: SNSGodState, now: number, r
 }
 
 export async function ensureDatingAppProfile(state: SNSGodState, force = false): Promise<SNSGodState> {
+  const generation = datingImageGeneration;
   const now = Date.now();
   if (!force && !shouldRefreshDatingApp(state, now)) return state;
   const sourceState = rejectExpiredUnrequestedDatingAppSelection(state, now);
   const refreshIntervalHours = datingAppRefreshHours(state);
   const acceptanceChancePercent = datingAppAcceptanceChance(state);
-  const firstProfile = await generateDatingAppProfileBundle(sourceState, now, refreshIntervalHours);
+  let firstProfile: DatingAppProfile;
+  try {
+    firstProfile = await generateDatingAppProfileBundle(sourceState, now, refreshIntervalHours, generation);
+  } catch (error) {
+    if (error instanceof DatingImageGenerationCanceledError) return state;
+    throw error;
+  }
   const profiles: DatingAppProfile[] = [firstProfile];
   return {
     ...sourceState,
@@ -847,6 +899,7 @@ export async function ensureDatingAppProfile(state: SNSGodState, force = false):
 }
 
 export async function recordDatingAppDecision(state: SNSGodState, profileId: string, decision: 'liked' | 'passed'): Promise<SNSGodState> {
+  const generation = datingImageGeneration;
   const progress = datingAppProgress(state);
   const profiles = datingAppProfiles(progress);
   if (!profiles.some(profile => profile.id === profileId) || datingAppRoundCompleted(progress)) return state;
@@ -862,7 +915,13 @@ export async function recordDatingAppDecision(state: SNSGodState, profileId: str
   let nextProfiles = profiles;
   if (!completed && nextProfiles.length <= decisions.length) {
     const refreshIntervalHours = progress.refreshIntervalHours || datingAppRefreshHours(state);
-    const nextProfile = await generateDatingAppProfileBundle(state, now, refreshIntervalHours);
+    let nextProfile: DatingAppProfile;
+    try {
+      nextProfile = await generateDatingAppProfileBundle(state, now, refreshIntervalHours, generation);
+    } catch (error) {
+      if (error instanceof DatingImageGenerationCanceledError) return state;
+      throw error;
+    }
     nextProfiles = [...nextProfiles, nextProfile];
   }
   const activeProfileIndex = Math.min(decisions.length, Math.max(0, nextProfiles.length - 1));
@@ -884,6 +943,7 @@ export async function recordDatingAppDecision(state: SNSGodState, profileId: str
 }
 
 export async function regenerateActiveDatingAppFailedPhotos(state: SNSGodState): Promise<SNSGodState> {
+  const generation = datingImageGeneration;
   const progress = datingAppProgress(state);
   if (progress.requestStatus === 'pending' || datingAppRoundCompleted(progress)) return state;
   const profiles = datingAppProfiles(progress);
@@ -899,8 +959,14 @@ export async function regenerateActiveDatingAppFailedPhotos(state: SNSGodState):
   const seedReferenceImage = supportsReference && !firstUsablePhoto ? randomDatingFaceReference(state, usedReferences) : undefined;
   const referenceImage = supportsReference ? firstUsablePhoto || seedReferenceImage : undefined;
   const replacements = new Map<string, DatingAppPhoto>();
-  for (const photo of failedPhotos) {
-    replacements.set(photo.id, await regenerateDatingPhoto(state, profile, photo, referenceImage));
+  try {
+    for (const photo of failedPhotos) {
+      assertDatingImageGeneration(generation);
+      replacements.set(photo.id, await regenerateDatingPhoto(state, profile, photo, generation, referenceImage));
+    }
+  } catch (error) {
+    if (error instanceof DatingImageGenerationCanceledError) return state;
+    throw error;
   }
   const nextProfile: DatingAppProfile = {
     ...profile,
@@ -919,6 +985,7 @@ export async function regenerateActiveDatingAppFailedPhotos(state: SNSGodState):
 }
 
 export async function replaceActiveDatingAppProfile(state: SNSGodState): Promise<SNSGodState> {
+  const generation = datingImageGeneration;
   const progress = datingAppProgress(state);
   if (progress.requestStatus === 'pending' || datingAppRoundCompleted(progress)) return state;
   const profiles = datingAppProfiles(progress);
@@ -927,7 +994,13 @@ export async function replaceActiveDatingAppProfile(state: SNSGodState): Promise
   if (!current) return state;
   const decisions = (progress.decisions || []).filter(item => item.profileId !== current.id);
   const refreshIntervalHours = progress.refreshIntervalHours || datingAppRefreshHours(state);
-  const nextProfile = await generateDatingAppProfileBundle(state, Date.now(), refreshIntervalHours);
+  let nextProfile: DatingAppProfile;
+  try {
+    nextProfile = await generateDatingAppProfileBundle(state, Date.now(), refreshIntervalHours, generation);
+  } catch (error) {
+    if (error instanceof DatingImageGenerationCanceledError) return state;
+    throw error;
+  }
   const nextProfiles = profiles.map((item, index) => index === activeIndex ? nextProfile : item);
   const nextActiveIndex = Math.max(0, Math.min(activeIndex, Math.max(0, nextProfiles.length - 1)));
   const nextCurrentProfile = nextProfiles[nextActiveIndex] || nextProfile;

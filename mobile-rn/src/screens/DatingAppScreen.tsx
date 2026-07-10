@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleProp, StyleSheet, Text, View, ViewStyle } from 'react-native';
 import { colors } from '../theme';
 import { DatingAppHistoryEntry, DatingAppPhoto, DatingAppProfile, DatingAppProgress, SNSGodState } from '../types';
@@ -25,7 +25,7 @@ import { isRenderableMediaUri } from '../logic/media';
 
 type Props = {
   state: SNSGodState;
-  onChange: (next: SNSGodState, options?: { persist?: boolean }) => Promise<void> | void;
+  onChange: (next: SNSGodState, options?: { persist?: boolean; conflict?: 'incoming' | 'latest' }) => Promise<void> | void;
   onBack: () => void;
   onOpenRoom: (roomId: string) => void;
 };
@@ -46,6 +46,7 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
   const [preview, setPreview] = useState<DatingAppPhoto | undefined>();
   const [historyDetail, setHistoryDetail] = useState<DatingAppHistoryEntry | undefined>();
   const [nowTick, setNowTick] = useState(Date.now());
+  const generationInFlightRef = useRef(false);
   const refreshHours = datingAppRefreshHours(state);
   const acceptanceChance = datingAppEffectiveAcceptanceChance(state, selectedFinalProfile);
   const remainingMs = datingAppRemainingMs(state, nowTick);
@@ -76,20 +77,22 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
     if (progress.requestStatus !== 'pending') return;
     const timer = setInterval(async () => {
       const result = resolveDatingAppRequest(state);
-      if (result.next !== state) await onChange(result.next);
+      if (result.next !== state) await onChange(result.next, { conflict: 'latest' });
     }, 3000);
     return () => clearInterval(timer);
   }, [state, progress.requestStatus, progress.resolveAt]);
 
   async function generateRound(force: boolean) {
-    if (loading) return;
+    if (loading || generationInFlightRef.current) return;
+    generationInFlightRef.current = true;
     setLoading(true);
     setMessage('');
     setBusyText(force ? '새 소개팅 후보를 불러오는 중...' : '오늘의 첫 소개팅 후보를 준비 중...');
     try {
       const next = await ensureDatingAppProfile(state, force);
-      if (next !== state) await onChange(next);
+      if (next !== state) await onChange(next, { conflict: 'latest' });
     } finally {
+      generationInFlightRef.current = false;
       setBusyText('');
       setLoading(false);
     }
@@ -115,7 +118,7 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
     setBusyText(currentNumber >= 3 ? '결과를 정리하는 중...' : '다음 소개팅 후보를 불러오는 중...');
     try {
       const next = await recordDatingAppDecision(state, profile.id, decision);
-      await onChange(next);
+      await onChange(next, { conflict: 'latest' });
     } finally {
       setBusyText('');
       setLoading(false);
@@ -128,7 +131,7 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
     setBusyText('실패한 사진을 다시 생성하는 중...');
     try {
       const next = await regenerateActiveDatingAppFailedPhotos(state);
-      if (next !== state) await onChange(next);
+      if (next !== state) await onChange(next, { conflict: 'latest' });
     } finally {
       setBusyText('');
       setLoading(false);
@@ -142,7 +145,7 @@ export function DatingAppScreen({ state, onChange, onBack, onOpenRoom }: Props) 
     setBusyText('이 후보를 새로 뽑는 중...');
     try {
       const next = await replaceActiveDatingAppProfile(state);
-      if (next !== state) await onChange(next);
+      if (next !== state) await onChange(next, { conflict: 'latest' });
     } finally {
       setBusyText('');
       setLoading(false);

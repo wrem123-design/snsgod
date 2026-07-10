@@ -36,11 +36,12 @@ type PhotoPreview = { uri: string; name?: string };
 export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode = 'blindDate' }: {
   state: SNSGodState;
   onBack: () => void;
-  onChange: (next: SNSGodState) => Promise<void> | void;
+  onChange: (next: SNSGodState, options?: { conflict?: 'incoming' | 'latest' }) => Promise<void> | void;
   onOpenRoom: (roomId: string) => void;
   entryMode?: 'blindDate' | 'encounter';
 }) {
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [busyMessage, setBusyMessage] = useState<{ title: string; subtitle: string } | undefined>();
   const [customQuestion, setCustomQuestion] = useState('');
   const [encounterText, setEncounterText] = useState('');
@@ -72,7 +73,8 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
   }, [session?.id]);
 
   async function runBusy(work: () => Promise<void>, message?: { title: string; subtitle: string }) {
-    if (busy) return;
+    if (busy || busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setBusyMessage(message);
     try {
@@ -80,6 +82,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
     } catch (error) {
       Alert.alert('블라인드 데이트 오류', error instanceof Error ? error.message : String(error));
     } finally {
+      busyRef.current = false;
       setBusyMessage(undefined);
       setBusy(false);
     }
@@ -87,7 +90,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
 
   function startProfile() {
     void runBusy(async () => {
-      await onChange(await createBlindDateSession(state, 'profile', 3));
+      await onChange(await createBlindDateSession(state, 'profile', 3), { conflict: 'latest' });
     });
   }
 
@@ -97,13 +100,13 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
 
   function startQuestion() {
     void runBusy(async () => {
-      await onChange(await createBlindDateSession(state, 'question', questionCandidateCount, { questionTarget }));
+      await onChange(await createBlindDateSession(state, 'question', questionCandidateCount, { questionTarget }), { conflict: 'latest' });
     });
   }
 
   function startRotation() {
     void runBusy(async () => {
-      await onChange(await createBlindDateSession(state, 'rotation', rotationStartCount));
+      await onChange(await createBlindDateSession(state, 'rotation', rotationStartCount), { conflict: 'latest' });
     });
   }
 
@@ -119,7 +122,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
     if (session.candidates.length - nextIndex <= 2 && !profileRefilling) {
       setProfileRefilling(true);
       void appendBlindDateCandidates(state, session.id, 2)
-        .then(next => onChange(next))
+        .then(next => onChange(next, { conflict: 'latest' }))
         .finally(() => setProfileRefilling(false));
     }
   }
@@ -140,7 +143,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
     if (!clean) return;
     setCustomQuestion('');
     void runBusy(async () => {
-      await onChange(await createBlindDateQuestionRound(state, session.id, clean));
+      await onChange(await createBlindDateQuestionRound(state, session.id, clean), { conflict: 'latest' });
     });
   }
 
@@ -155,7 +158,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
     setRotationText('');
     setRotationCandidateId(candidateId);
     void runBusy(async () => {
-      await onChange(await createBlindDateRotationTurn(state, session.id, candidateId, text));
+      await onChange(await createBlindDateRotationTurn(state, session.id, candidateId, text), { conflict: 'latest' });
     });
   }
 
@@ -170,7 +173,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
     void runBusy(async () => {
       const { next, roomId } = importBlindDateCandidate(state, session.id, candidateId);
       const withMeetingPrompt = roomId ? await createBlindDateFirstDatePrompt(next, roomId) : next;
-      await onChange(withMeetingPrompt);
+      await onChange(withMeetingPrompt, { conflict: 'latest' });
       if (roomId) onOpenRoom(roomId);
     }, {
       title: `${candidate?.name || '그녀'}에게 연락처를 부탁하는 중...`,
@@ -181,21 +184,21 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
   function chooseEncounterLocation(location: string) {
     if (!session || busy) return;
     void runBusy(async () => {
-      await onChange(await startStreetEncounterAtLocation(state, session.id, location));
+      await onChange(await startStreetEncounterAtLocation(state, session.id, location), { conflict: 'latest' });
     });
   }
 
   function approachEncounter(text: string) {
     if (!session || busy) return;
     void runBusy(async () => {
-      await onChange(await approachStreetEncounter(state, session.id, text));
+      await onChange(await approachStreetEncounter(state, session.id, text), { conflict: 'latest' });
     });
   }
 
   function chooseEncounterChoice(choiceId: string) {
     if (!session || busy) return;
     void runBusy(async () => {
-      await onChange(await chooseStreetEncounterOption(state, session.id, choiceId));
+      await onChange(await chooseStreetEncounterOption(state, session.id, choiceId), { conflict: 'latest' });
     });
   }
 
@@ -204,7 +207,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
     if (!session || busy || !clean) return;
     setEncounterText('');
     void runBusy(async () => {
-      await onChange(await chooseStreetEncounterCustomText(state, session.id, clean));
+      await onChange(await chooseStreetEncounterCustomText(state, session.id, clean), { conflict: 'latest' });
     });
   }
 
@@ -250,8 +253,10 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
   }
 
   function importArchive(archiveId: string) {
-    const { next, roomId } = importBlindDateArchive(state, archiveId);
-    void Promise.resolve(roomId ? createBlindDateFirstDatePrompt(next, roomId) : next).then(withMeetingPrompt => onChange(withMeetingPrompt)).then(() => {
+    void runBusy(async () => {
+      const { next, roomId } = importBlindDateArchive(state, archiveId);
+      const withMeetingPrompt = roomId ? await createBlindDateFirstDatePrompt(next, roomId) : next;
+      await onChange(withMeetingPrompt, { conflict: 'latest' });
       if (roomId) onOpenRoom(roomId);
     });
   }
@@ -274,7 +279,7 @@ export function BlindDateScreen({ state, onBack, onChange, onOpenRoom, entryMode
       return;
     }
     void runBusy(async () => {
-      await onChange(await createMixedBlindDateSession(state, mixArchiveIds[0], mixArchiveIds[1]));
+      await onChange(await createMixedBlindDateSession(state, mixArchiveIds[0], mixArchiveIds[1]), { conflict: 'latest' });
       setMixArchiveIds([]);
     });
   }
@@ -552,7 +557,7 @@ function ArchiveBlock({ archives, mixArchiveIds, onToggleMix, onCreateMix, onImp
       </View>
       {archives.slice(0, 8).map(archive => (
         <View key={archive.id} style={[styles.archiveRow, mixArchiveIds.includes(archive.id) && styles.archiveRowSelected]}>
-          <Pressable onPress={() => onToggleMix(archive.id)} style={[styles.mixCheck, mixArchiveIds.includes(archive.id) && styles.mixCheckActive]}>
+          <Pressable onPress={() => onToggleMix(archive.id)} disabled={busy} style={[styles.mixCheck, mixArchiveIds.includes(archive.id) && styles.mixCheckActive, busy && styles.disabled]}>
             <Text style={[styles.mixCheckText, mixArchiveIds.includes(archive.id) && styles.mixCheckTextActive]}>{mixArchiveIds.includes(archive.id) ? '✓' : '+'}</Text>
           </Pressable>
           {archive.candidate.profileImageUri ? <Image source={{ uri: archive.candidate.profileImageUri }} style={styles.archiveImage} /> : <View style={styles.archiveFallback}><Text style={styles.rankFallbackText}>{archive.candidate.name.slice(0, 1)}</Text></View>}
@@ -561,8 +566,8 @@ function ArchiveBlock({ archives, mixArchiveIds, onToggleMix, onCreateMix, onImp
             <Text style={styles.archiveSub}>{archive.candidate.job} · {archive.candidate.personalitySummary}</Text>
           </View>
           <View style={styles.archiveActions}>
-            <Pressable onPress={() => onImport(archive.id)} style={styles.archiveButton}><Text style={styles.archiveButtonText}>연락하기</Text></Pressable>
-            <Pressable onPress={() => onDelete(archive.id)} style={styles.archiveDeleteButton}><Text style={styles.archiveDeleteText}>삭제</Text></Pressable>
+            <Pressable onPress={() => onImport(archive.id)} disabled={busy} style={[styles.archiveButton, busy && styles.disabled]}><Text style={styles.archiveButtonText}>연락하기</Text></Pressable>
+            <Pressable onPress={() => onDelete(archive.id)} disabled={busy} style={[styles.archiveDeleteButton, busy && styles.disabled]}><Text style={styles.archiveDeleteText}>삭제</Text></Pressable>
           </View>
         </View>
       ))}

@@ -47,21 +47,21 @@ export function ReferenceFaceScreen({ state, onBack, onChange }: {
       return;
     }
     const emptyCount = MAX_REFERENCE_SLOTS - slots.length;
-    const images = await pickPersistentReferenceImageUris(emptyCount);
-    if (!images?.length) return;
-    if (images.length > emptyCount) {
-      Alert.alert('슬롯 부족', `빈 슬롯은 ${emptyCount}개입니다. ${emptyCount}장 이하로 선택해주세요.`);
-      return;
-    }
-    const createdAt = Date.now();
-    const nextSlots: ReferenceFaceSlot[] = images.map((image, index) => ({
-      id: makeId('refface'),
-      image,
-      name: `레퍼런스 ${slots.length + index + 1}`,
-      createdAt
-    }));
     setSaving(true);
     try {
+      const images = await pickPersistentReferenceImageUris(emptyCount);
+      if (!images?.length) return;
+      if (images.length > emptyCount) {
+        Alert.alert('슬롯 부족', `빈 슬롯은 ${emptyCount}개입니다. ${emptyCount}장 이하로 선택해주세요.`);
+        return;
+      }
+      const createdAt = Date.now();
+      const nextSlots: ReferenceFaceSlot[] = images.map((image, index) => ({
+        id: makeId('refface'),
+        image,
+        name: `레퍼런스 ${slots.length + index + 1}`,
+        createdAt
+      }));
       await onChange({ ...state, referenceFaceSlots: [...slots, ...nextSlots].slice(0, MAX_REFERENCE_SLOTS) });
     } finally {
       setSaving(false);

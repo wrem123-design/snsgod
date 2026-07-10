@@ -17,6 +17,7 @@ import { appendDebugLog } from './debugLog';
 import { characterWithConversationRhythm } from './conversationRhythm';
 import { resolveCharacterRuntimeState } from './characterWorld';
 import { ingestCharacterMemory } from './memoryPolicy';
+import { mergeStaleState, preserveLatestDeletionInvariants } from './staleStateMergePolicy';
 
 type CommitPatch = (patch: (current: SNSGodState) => SNSGodState, options?: { persist?: boolean }) => Promise<void> | void;
 
@@ -34,6 +35,11 @@ type StartReplyJobInput = {
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const REPLY_LLM_TIMEOUT_MS = 12 * 60 * 1000;
 let replyLlmQueue: Promise<void> = Promise.resolve();
+
+/** Starts a fresh reply generation queue after a full state-generation change. */
+export function resetReplyLlmQueue(): void {
+  replyLlmQueue = Promise.resolve();
+}
 
 async function withTimeout<T>(task: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -56,9 +62,9 @@ async function runQueuedReplyLlm<T>(roomId: string, jobId: string, task: () => P
     release = resolve;
   });
   await previous.catch(() => undefined);
-  if (!isCurrentChatJob(roomId, jobId)) throw new Error('답장 작업이 새 메시지로 교체되었습니다.');
-  await appendDebugLog('reply.queue', `LLM reply job started room=${roomId} job=${jobId}`);
   try {
+    if (!isCurrentChatJob(roomId, jobId)) throw new Error('답장 작업이 새 메시지로 교체되었습니다.');
+    await appendDebugLog('reply.queue', `LLM reply job started room=${roomId} job=${jobId}`);
     return await withTimeout(task(), REPLY_LLM_TIMEOUT_MS, 'AI 답장 생성');
   } finally {
     release();
@@ -98,6 +104,7 @@ function bubbleStaggerMs(character: SNSGodCharacter, delay?: number) {
 }
 
 function markUserMessagesRead(state: SNSGodState, roomId: string, readAt = Date.now()) {
+  if (!Object.prototype.hasOwnProperty.call(state.messages, roomId)) return state;
   const at = Number(readAt) || Date.now();
   return {
     ...state,
@@ -144,6 +151,8 @@ function clearPending(state: SNSGodState, roomId: string, jobId: string) {
 }
 
 function mergeGeneratedSns(current: SNSGodState, before: SNSGodState, generated: SNSGodState): SNSGodState {
+  if (!Object.is(current.__importedAt, before.__importedAt)) return current;
+  const mergedState = mergeStaleState(current, before, generated, { conflict: 'latest' });
   const beforePostIds = new Set((before.snsPosts || []).map(post => post.id));
   const currentPostIds = new Set((current.snsPosts || []).map(post => post.id));
   const newPosts = (generated.snsPosts || []).filter(post => !beforePostIds.has(post.id) && !currentPostIds.has(post.id));
@@ -157,18 +166,12 @@ function mergeGeneratedSns(current: SNSGodState, before: SNSGodState, generated:
     ...(generated.notifications || []).filter(item => !(current.notifications || []).some(existing => existing.id === item.id)),
     ...(current.notifications || [])
   ].slice(0, 100);
-  return {
+  const candidate: SNSGodState = {
     ...current,
     snsPosts,
     snsDmThreads,
     notifications,
-    config: generated.config?.apiProfiles ? {
-      ...current.config,
-      apiProfiles: {
-        ...current.config.apiProfiles,
-        ...generated.config.apiProfiles
-      }
-    } : current.config,
+    config: mergedState.config,
     characters: current.characters.map(character => {
       const generatedCharacter = generated.characters.find(item => item.id === character.id);
       if (!generatedCharacter) return character;
@@ -178,6 +181,7 @@ function mergeGeneratedSns(current: SNSGodState, before: SNSGodState, generated:
       return { ...character, lastSnsMessageCount: generatedCount };
     })
   };
+  return preserveLatestDeletionInvariants(candidate, current, before);
 }
 
 function roomStillValid(state: SNSGodState | null, roomId: string, characterId: string): { room: SNSGodRoom; character: SNSGodCharacter } | undefined {
@@ -187,6 +191,17 @@ function roomStillValid(state: SNSGodState | null, roomId: string, characterId: 
   if (!room || !character) return undefined;
   if (isRoomDisabled(state, roomId)) return undefined;
   return { room, character };
+}
+
+function appendPrivateMessageIfValid(
+  state: SNSGodState,
+  roomId: string,
+  characterId: string,
+  message: SNSGodMessage,
+): SNSGodState {
+  return roomStillValid(state, roomId, characterId)
+    ? appendMessage(state, roomId, message)
+    : state;
 }
 
 export function isReplyPending(state: SNSGodState, roomId: string): boolean {
@@ -249,14 +264,15 @@ export async function startReplyJob(input: StartReplyJobInput) {
     }
 
     await input.commitCurrent(current => {
-      const activeProfile = current.config.apiProfiles[current.config.apiType] || {};
+      const requestProvider = promptState.config.apiType;
+      const activeProfile = current.config.apiProfiles[requestProvider] || {};
       return {
         ...current,
         config: {
           ...current.config,
           apiProfiles: {
             ...current.config.apiProfiles,
-            [current.config.apiType]: { ...activeProfile, apiKeyIndex: keyIndex }
+            [requestProvider]: { ...activeProfile, apiKeyIndex: keyIndex }
           }
         }
       };
@@ -334,9 +350,11 @@ export async function startReplyJob(input: StartReplyJobInput) {
           }
         };
         await input.commitCurrent(current => {
+          const currentTarget = roomStillValid(current, input.roomId, input.characterId);
+          if (!currentTarget) return current;
           let next = appendMessage(current, input.roomId, message);
           if (mediaData) {
-            const currentCharacter = findCharacter(next, latestForBubble.character.id);
+            const currentCharacter = findCharacter(next, currentTarget.character.id);
             if (currentCharacter) {
               const runtime = resolveCharacterRuntimeState(next, currentCharacter);
               next = updateCharacter(next, currentCharacter.id, {
@@ -357,13 +375,18 @@ export async function startReplyJob(input: StartReplyJobInput) {
         deliveredCount += 1;
       }
       if (phone.card) {
-        await input.commitCurrent(current => appendMessage(current, input.roomId, phone.card as SNSGodMessage));
+        await input.commitCurrent(current => appendPrivateMessageIfValid(
+          current,
+          input.roomId,
+          input.characterId,
+          phone.card as SNSGodMessage,
+        ));
         deliveredCount += 1;
       }
       bubbleCursor += bubbleStaggerMs(promptTarget.character, bubble.delay ?? reply.reactionDelay);
     }
     if (deliveredCount === 0 && isCurrentChatJob(input.roomId, jobId)) {
-      await input.commitCurrent(current => appendMessage(current, input.roomId, {
+      await input.commitCurrent(current => appendPrivateMessageIfValid(current, input.roomId, input.characterId, {
         id: makeId('msg'),
         role: 'character',
         characterId: promptTarget.character.id,
@@ -382,7 +405,9 @@ export async function startReplyJob(input: StartReplyJobInput) {
 
     if (!isCurrentChatJob(input.roomId, jobId)) return;
     if (reply.newMemory?.trim()) {
-      await input.commitCurrent(current => ingestCharacterMemory(current, input.characterId, reply.newMemory || '', input.roomId));
+      await input.commitCurrent(current => roomStillValid(current, input.roomId, input.characterId)
+        ? ingestCharacterMemory(current, input.characterId, reply.newMemory || '', input.roomId)
+        : current);
     }
 
     if (input.randomMode) {
@@ -398,11 +423,14 @@ export async function startReplyJob(input: StartReplyJobInput) {
             const sourceState = input.getState() || beforeMeeting;
             const generated = await createMeetingEventSession(sourceState, input.roomId, meeting);
             if (generated !== sourceState) {
-              await input.commitCurrent(current => ({
-                ...generated,
-                messages: { ...current.messages, ...generated.messages },
-                pendingReplies: current.pendingReplies
-              }));
+              await input.commitCurrent(current => {
+                if (!roomStillValid(current, input.roomId, input.characterId)) return current;
+                if ((current.meetingEventSessions || []).some(session => (
+                  session.roomId === input.roomId
+                  && (session.status === 'pending' || session.status === 'active')
+                ))) return current;
+                return mergeStaleState(current, sourceState, generated, { conflict: 'latest' });
+              });
               return;
             }
           }
@@ -422,7 +450,9 @@ export async function startReplyJob(input: StartReplyJobInput) {
           await appendDebugLog('sns.auto', `reply-hook try room=${input.roomId} character=${snsTarget.character.id}`);
           const generated = await maybeCreateAutoSNSPost(beforeSns, snsTarget.character, input.roomId);
           if (generated !== beforeSns) {
-            await input.commitCurrent(current => mergeGeneratedSns(current, beforeSns, generated));
+            await input.commitCurrent(current => roomStillValid(current, input.roomId, input.characterId)
+              ? mergeGeneratedSns(current, beforeSns, generated)
+              : current);
             await appendDebugLog('sns.auto', `reply-hook committed room=${input.roomId} character=${snsTarget.character.id}`);
           }
         } catch (error) {
@@ -440,12 +470,9 @@ export async function startReplyJob(input: StartReplyJobInput) {
         try {
           const summarized = await maybeRefreshPrivateRoomLlmSummary(beforeSummary, input.roomId);
           if (summarized && isCurrentChatJob(input.roomId, jobId)) {
-            await input.commitCurrent(current => ({
-              ...summarized,
-              messages: current.messages,
-              pendingReplies: current.pendingReplies,
-              unreadCounts: current.unreadCounts
-            }));
+            await input.commitCurrent(current => (
+              mergeStaleState(current, beforeSummary, summarized, { conflict: 'latest' })
+            ));
           }
         } catch (error) {
           await appendDebugLog('memory.summary', `llm room summary failed room=${input.roomId}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
@@ -454,7 +481,7 @@ export async function startReplyJob(input: StartReplyJobInput) {
     }
   } catch (error) {
     if (isCurrentChatJob(input.roomId, jobId)) {
-      await input.commitCurrent(current => markUserMessagesRead(appendMessage(current, input.roomId, {
+      await input.commitCurrent(current => markUserMessagesRead(appendPrivateMessageIfValid(current, input.roomId, input.characterId, {
         id: makeId('msg'),
         role: 'system',
         content: `답장 생성 실패: ${error instanceof Error ? error.message : String(error)}`,

@@ -551,7 +551,9 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
   const profile = state.config.apiProfiles[state.config.apiType] || {};
   const commentCount = sns.autoComments === false ? 0 : commentCountHint(sns.commentQty);
   const posts = normalizeGeneratedPlatforms(parsed, platform, character).map(item => toPost(item, character, platform, commentCount));
-  const postsWithImages = await applySnsImagePolicy(state, posts, character, options, dailyMicro ? { ...sns, autoImage: false } : sns, text);
+  const postsWithImages = (
+    await applySnsImagePolicy(state, posts, character, options, dailyMicro ? { ...sns, autoImage: false } : sns, text)
+  ).map(post => options.roomId ? { ...post, generationRoomId: options.roomId } : post);
   const parsedDms = filterUserFromPostDms(toPostDms(parsed), state.config.userName || 'User', includeUserInDm);
   const postDms = sns.noDM ? [] : ensureThirdPartyDms(parsedDms, postsWithImages[0], character, includeUserInDm ? sns : { ...sns, thirdPartyDM: true });
   const createdDmThreads = postDms.length && postsWithImages[0] ? postDmsToThreads(postsWithImages[0], postDms, character) : [];

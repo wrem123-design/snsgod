@@ -5,6 +5,14 @@ import { pushNotification } from './notifications';
 import { SUMGOD_QUESTIONS } from './sumgodQuestions';
 
 const SUMGOD_BACKUP_KEY = 'snsgod.sumgod.backup.v1';
+let sumGodBackupGeneration = 0;
+let sumGodBackupWriteQueue: Promise<void> = Promise.resolve();
+
+function enqueueSumGodBackupWrite(task: () => Promise<void>): Promise<void> {
+  const operation = sumGodBackupWriteQueue.catch(() => undefined).then(task);
+  sumGodBackupWriteQueue = operation.catch(() => undefined);
+  return operation;
+}
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -118,7 +126,8 @@ export function normalizeSumGodProgress(raw: unknown, fallbackCharacterId = ''):
     questionOpen: record.questionOpen === true,
     entries,
     characterArchives: archives,
-    backedUpAt: record.backedUpAt ? Number(record.backedUpAt) : undefined
+    backedUpAt: record.backedUpAt ? Number(record.backedUpAt) : undefined,
+    stateImportedAt: Number.isFinite(Number(record.stateImportedAt)) ? Number(record.stateImportedAt) : undefined,
   };
 }
 
@@ -228,20 +237,53 @@ export async function loadSumGodBackup(): Promise<SumGodProgress | undefined> {
   }
 }
 
-export async function saveSumGodBackup(sum: SumGodProgress): Promise<void> {
+export async function saveSumGodBackup(sum: SumGodProgress, stateImportedAt?: number): Promise<void> {
+  const generation = sumGodBackupGeneration;
   try {
-    const snapshot = normalizeSumGodProgress({ ...sum, backedUpAt: Date.now() });
+    const snapshot = normalizeSumGodProgress({ ...sum, backedUpAt: Date.now(), stateImportedAt });
     if (!snapshot.entries.length && !snapshot.characterId) return;
-    const existing = await loadSumGodBackup();
-    if (existing && progressScore(existing) > progressScore(snapshot)) return;
-    await AsyncStorage.setItem(SUMGOD_BACKUP_KEY, JSON.stringify(snapshot));
+    await enqueueSumGodBackupWrite(async () => {
+      if (generation !== sumGodBackupGeneration) return;
+      const existing = await loadSumGodBackup();
+      if (generation !== sumGodBackupGeneration) return;
+      if (
+        existing
+        && Object.is(existing.stateImportedAt, snapshot.stateImportedAt)
+        && progressScore(existing) > progressScore(snapshot)
+      ) return;
+      await AsyncStorage.setItem(SUMGOD_BACKUP_KEY, JSON.stringify(snapshot));
+    });
   } catch {
     // SumGod backup must not block normal app usage.
   }
 }
 
+/** Invalidates writes captured by the runtime generation that is being replaced. */
+export function invalidateSumGodBackupWrites(): number {
+  sumGodBackupGeneration += 1;
+  return sumGodBackupGeneration;
+}
+
+/** Replaces the recovery copy exactly after the authoritative import succeeds. */
+export async function replaceSumGodBackup(
+  sum: SumGodProgress,
+  stateImportedAt: number | undefined,
+  generation = invalidateSumGodBackupWrites(),
+): Promise<void> {
+  const snapshot = normalizeSumGodProgress({ ...sum, backedUpAt: Date.now(), stateImportedAt });
+  await enqueueSumGodBackupWrite(async () => {
+    if (generation !== sumGodBackupGeneration) return;
+    if (!snapshot.entries.length && !snapshot.characterId) {
+      await AsyncStorage.removeItem(SUMGOD_BACKUP_KEY);
+      return;
+    }
+    await AsyncStorage.setItem(SUMGOD_BACKUP_KEY, JSON.stringify(snapshot));
+  });
+}
+
 export function restoreSumGodBackupIfBetter(state: SNSGodState, backup?: SumGodProgress): SNSGodState {
   if (!backup) return state;
+  if (!Object.is(backup.stateImportedAt, state.__importedAt)) return state;
   const current = getSumGodProgress(state);
   return progressScore(backup) > progressScore(current)
     ? normalizeSumGodState({ ...state, config: { ...state.config, sumGod: backup }, sumGod: backup })

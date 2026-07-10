@@ -73,14 +73,14 @@ export function SumGodScreen({ state, onBack, onChange, onCommitCurrent }: {
     if (onCommitCurrent) {
       const result = await onCommitCurrent(current => {
         const next = patch(current);
-        void saveSumGodBackup(getSumGodProgress(next));
+        void saveSumGodBackup(getSumGodProgress(next), next.__importedAt);
         return next;
       });
       return result;
     }
     const next = patch(state);
     await onChange(next);
-    void saveSumGodBackup(getSumGodProgress(next));
+    void saveSumGodBackup(getSumGodProgress(next), next.__importedAt);
     return next;
   }
 

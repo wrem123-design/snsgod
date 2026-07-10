@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Alert, Image, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { colors } from '../theme';
 import { CalendarEvent, CharacterMemory, LoreEntry, SNSGodCharacter, SNSGodRoom, SNSGodState } from '../types';
@@ -189,6 +189,7 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
   const [loreContent, setLoreContent] = useState('');
   const [inlineStatus, setInlineStatus] = useState('');
   const [memoryArchiveBusyId, setMemoryArchiveBusyId] = useState('');
+  const imageGenerationRequestRef = useRef({ avatar: 0, coverImage: 0 });
   const [savedSignature, setSavedSignature] = useState(() => character
     ? settingsSignature(normalizeDraft(character), (character.memories || []).join('\n'), (character.stickers || []).map(item => item.id + '|' + item.name + '|' + (item.description || '') + '|' + (item.data || item.mediaData || '')).join('\n'))
     : '');
@@ -283,9 +284,10 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
         setInlineStatus('\uC774 \uC7A5\uBA74\uC5D0\uC11C \uC7A5\uAE30 \uC0AC\uC2E4\uB85C \uD655\uC815\uD560 \uB0B4\uC6A9\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uC6D0\uBB38\uC740 \uCD94\uC5B5 \uC7A5\uBA74\uC5D0 \uADF8\uB300\uB85C \uBCF4\uAD00\uB429\uB2C8\uB2E4.');
         return;
       }
-      const existing = partitionMemoryEntries(memoryText.split(/\r?\n/)).facts;
-      const combined = partitionMemoryEntries([...existing, ...facts]).facts;
-      setMemoryText(combined.join('\n'));
+      setMemoryText(current => {
+        const existing = partitionMemoryEntries(current.split(/\r?\n/)).facts;
+        return partitionMemoryEntries([...existing, ...facts]).facts.join('\n');
+      });
       setInlineStatus(`\uC0AC\uC2E4 ${facts.length}\uAC1C\uB97C \uCD94\uCD9C\uD588\uC2B5\uB2C8\uB2E4. \uCE90\uB9AD\uD130 \uC800\uC7A5\uC744 \uB204\uB974\uBA74 \uC801\uC6A9\uB429\uB2C8\uB2E4.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -376,6 +378,11 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
 
   async function generateProfileImage(kind: 'avatar' | 'coverImage') {
     if (!draft) return;
+    const requestId = imageGenerationRequestRef.current[kind] + 1;
+    imageGenerationRequestRef.current[kind] = requestId;
+    const originalImage = kind === 'avatar'
+      ? String(draft.avatar || draft.profileImage || '')
+      : String(draft.coverImage || '');
     try {
       const prompt = kind === 'avatar'
         ? 'SNS profile photo'
@@ -384,12 +391,22 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
       const image = await generateImageDataUri(state, prompt, draft, { referenceImage, kind: kind === 'avatar' ? 'profile' : 'cover' });
       const historyItem = { id: makeId('profile_image'), image, prompt, createdAt: Date.now(), kind: kind === 'avatar' ? 'profile' as const : 'cover' as const };
       if (kind === 'avatar') {
-        setDraft(prev => prev ? { ...prev, avatar: image, profileImage: image, profileImageHistory: [historyItem, ...(prev.profileImageHistory || [])].slice(0, 60) } : prev);
+        setDraft(prev => {
+          if (!prev || imageGenerationRequestRef.current.avatar !== requestId) return prev;
+          if (String(prev.avatar || prev.profileImage || '') !== originalImage) return prev;
+          return { ...prev, avatar: image, profileImage: image, profileImageHistory: [historyItem, ...(prev.profileImageHistory || [])].slice(0, 60) };
+        });
       } else {
-        setDraft(prev => prev ? { ...prev, coverImage: image, profileImageHistory: [historyItem, ...(prev.profileImageHistory || [])].slice(0, 60) } : prev);
+        setDraft(prev => {
+          if (!prev || imageGenerationRequestRef.current.coverImage !== requestId) return prev;
+          if (String(prev.coverImage || '') !== originalImage) return prev;
+          return { ...prev, coverImage: image, profileImageHistory: [historyItem, ...(prev.profileImageHistory || [])].slice(0, 60) };
+        });
       }
     } catch (error) {
-      Alert.alert('AI 이미지 생성 실패', error instanceof Error ? error.message : String(error));
+      if (imageGenerationRequestRef.current[kind] === requestId) {
+        Alert.alert('AI 이미지 생성 실패', error instanceof Error ? error.message : String(error));
+      }
     }
   }
 

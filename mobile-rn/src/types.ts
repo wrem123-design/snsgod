@@ -47,6 +47,7 @@ export type ImageGenerationConfig = {
 export type ServerMessagingConfig = {
   enabled?: boolean;
   baseUrl?: string;
+  connectionRequestId?: string;
   pairingSecret?: string;
   deviceId?: string;
   deviceToken?: string;
@@ -960,6 +961,7 @@ export type SumGodProgress = {
   entries: SumGodEntry[];
   characterArchives?: SumGodArchivedProgress[];
   backedUpAt?: number;
+  stateImportedAt?: number;
 };
 
 export type SNSGodState = {

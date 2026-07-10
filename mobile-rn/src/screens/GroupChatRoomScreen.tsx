@@ -12,7 +12,8 @@ import { chatBubbleLayoutFor, ChatBubbleLayout } from '../logic/chatBubbleLayout
 import { MAX_CONTEXT_MESSAGES, MAX_GROUP_ROOM_MESSAGES } from '../logic/limits';
 import { MeetingEventSession, SNSGodCharacter, SNSGodMessage, SNSGodState, Sticker } from '../types';
 import { markRoomRead } from '../logic/notifications';
-import { beginChatJob, endChatJob, isCurrentChatJob, tryLockGeneratingRoom } from '../logic/chatJobs';
+import { beginChatJob, cancelChatJob, endChatJob, isCurrentChatJob, tryLockGeneratingRoom } from '../logic/chatJobs';
+import { deleteMessageCascade } from '../logic/deletionCascadePolicy';
 import { shouldAllowChatImageGeneration } from '../logic/chatImageGuard';
 import { appendDebugLog } from '../logic/debugLog';
 import { isRenderableMediaUri } from '../logic/media';
@@ -527,23 +528,9 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
   async function deleteMessage(messageId: string) {
     if (!roomId || !messageId) return;
     await commitCurrent(current => {
-      const roomList = current.messages[roomId] || [];
-      const target = roomList.find(item => item.id === messageId);
-      if (!target) return current;
-      const meetingId = String(target.meetingEventId || '');
-      return {
-        ...current,
-        messages: {
-          ...current.messages,
-          [roomId]: roomList.filter(item => item.id !== messageId)
-        },
-        meetingEventSessions: meetingId
-          ? (current.meetingEventSessions || []).filter(session => {
-            if (session.id !== meetingId) return true;
-            return session.status === 'active' || session.status === 'ended';
-          })
-          : current.meetingEventSessions
-      };
+      const deletion = deleteMessageCascade(current, roomId, messageId);
+      for (const affectedRoomId of deletion.cancelledJobRoomIds) cancelChatJob(affectedRoomId);
+      return deletion.state;
     });
   }
 

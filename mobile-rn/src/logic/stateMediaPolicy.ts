@@ -16,6 +16,16 @@ export type StateMediaExternalizationTarget = {
   force: boolean;
 };
 
+/** One persisted state field that currently points at a media URI. */
+export type StateMediaReference = {
+  /** Stable logical path used for diagnostics and duplicate-reference counts. */
+  key: string;
+  /** URI stored in the state field. */
+  uri: string;
+  /** Whether persistence must externalize this reference regardless of size. */
+  force: boolean;
+};
+
 export type StateMediaReplacementCache = {
   add(replacements: readonly StateMediaUriReplacement[], now: number): void;
   active(now: number, referencedUris?: ReadonlySet<string>): StateMediaUriReplacement[];
@@ -164,7 +174,7 @@ function visitStateMediaValues(state: SNSGodState, visit: StateMediaVisitor): vo
     participant.avatar,
     `sns_dm_${thread.id}_${participant.id}`,
   )));
-  state.referenceFaceSlots?.slice(0, 50).forEach(slot => visit(
+  state.referenceFaceSlots?.forEach(slot => visit(
     slot.image,
     `reference_face_${slot.id}`,
     true,
@@ -200,13 +210,24 @@ export function collectStateMediaExternalizationTargets(
   return [...targets.values()];
 }
 
+/**
+ * Returns every known state-to-media edge without deduplicating shared URIs.
+ *
+ * GC uses the full edge list so one remaining owner protects a shared asset and
+ * diagnostics can report how many independent fields still reference it.
+ */
+export function collectStateMediaReferences(state: SNSGodState): StateMediaReference[] {
+  const references: StateMediaReference[] = [];
+  visitStateMediaValues(state, (value, key, force = false) => {
+    if (!value) return;
+    references.push({ key, uri: value, force });
+  });
+  return references;
+}
+
 /** Returns the distinct URIs currently referenced by known media-bearing state fields. */
 export function collectStateMediaUris(state: SNSGodState): Set<string> {
-  const uris = new Set<string>();
-  visitStateMediaValues(state, value => {
-    if (value) uris.add(value);
-  });
-  return uris;
+  return new Set(collectStateMediaReferences(state).map(reference => reference.uri));
 }
 
 /**

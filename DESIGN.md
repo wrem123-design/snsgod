@@ -22,6 +22,7 @@ The app uses warm messenger surfaces with soft contrast, compact controls, and c
 - dating.shadow: `rgba(39,34,27,0.16)`
 
 ## Typography
+- font.family: native system sans, selected for Korean legibility and fully offline rendering
 - screen.title: 19px, 900
 - screen.subtitle: 12px, 700
 - chat.body: 16px, line-height 22
@@ -40,6 +41,11 @@ The app uses warm messenger surfaces with soft contrast, compact controls, and c
 - bubble.round: 16px
 - image.round: 12px
 - meeting.round: 14px
+
+## Interaction
+- control.touch: 42px minimum height
+- control.pressedOpacity: 0.78
+- control.disabledOpacity: 0.5
 
 ## Components
 - Chat bubbles use warm off-white for other speakers and yellow for the user.

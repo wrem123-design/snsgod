@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Alert, FlatList, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme';
 import { SNSGodState } from '../types';
-import { isRenderableMediaUri } from '../logic/media';
+import { isRenderableMediaUri, type MediaGarbageCollectionResult } from '../logic/media';
 
 type GalleryItem = {
   id: string;
@@ -125,16 +125,25 @@ function removeGalleryItem(state: SNSGodState, item: GalleryItem): SNSGodState {
   };
 }
 
-export function GalleryScreen({ state, onBack, onChange }: {
+export function GalleryScreen({
+  state,
+  onBack,
+  onChange,
+  onPreviewMediaCleanup,
+  onTrashMediaCleanup,
+}: {
   state: SNSGodState;
   onBack: () => void;
   onChange: (next: SNSGodState) => Promise<void> | void;
+  onPreviewMediaCleanup: () => Promise<MediaGarbageCollectionResult>;
+  onTrashMediaCleanup: () => Promise<MediaGarbageCollectionResult>;
 }) {
   const items = useMemo(
     () => collectGalleryItems(state),
     [state.characters, state.snsPosts, state.messages]
   );
   const [selected, setSelected] = useState<GalleryItem | null>(null);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
 
   async function deleteItem(item: GalleryItem) {
     await onChange(removeGalleryItem(state, item));
@@ -143,13 +152,60 @@ export function GalleryScreen({ state, onBack, onChange }: {
 
   function confirmDelete(item: GalleryItem) {
     Alert.alert(
-      '이미지 삭제',
-      item.kind === 'sns' ? 'SNS 글은 남기고 이 이미지와 생성 프롬프트만 삭제합니다.' : '이 이미지를 갤러리에서 삭제합니다.',
+      '이미지 연결 해제',
+      item.kind === 'sns'
+        ? 'SNS 글은 남기고 이미지와 생성 프롬프트 연결만 해제합니다. 공유 파일은 유지되며, 실제 미사용 파일은 “미사용 정리”에서 휴지통으로 옮길 수 있습니다.'
+        : '이 이미지를 갤러리에서 연결 해제합니다. 공유 파일은 유지되며, 실제 미사용 파일은 “미사용 정리”에서 휴지통으로 옮길 수 있습니다.',
       [
         { text: '취소', style: 'cancel' },
-        { text: '삭제', style: 'destructive', onPress: () => { void deleteItem(item); } }
+        { text: '연결 해제', style: 'destructive', onPress: () => { void deleteItem(item); } }
       ]
     );
+  }
+
+  async function moveUnusedMediaToTrash() {
+    if (cleanupBusy) return;
+    setCleanupBusy(true);
+    try {
+      const preview = await onPreviewMediaCleanup();
+      const count = preview.candidateEntries.length;
+      if (!count) {
+        Alert.alert('미디어 정리', '정리할 미사용 파일이 없습니다.');
+        return;
+      }
+      const sizeText = preview.totalCandidateBytes > 0
+        ? ` · 약 ${(preview.totalCandidateBytes / 1024 / 1024).toFixed(1)}MB`
+        : '';
+      Alert.alert(
+        '미사용 파일 정리',
+        `${count}개${sizeText}를 앱 휴지통으로 옮길까요?\n\n공유 중인 파일은 유지되며, 다른 폴더의 파일은 건드리지 않습니다.`,
+        [
+          { text: '취소', style: 'cancel' },
+          {
+            text: '휴지통으로 이동',
+            style: 'destructive',
+            onPress: () => {
+              setCleanupBusy(true);
+              void onTrashMediaCleanup()
+                .then(result => {
+                  Alert.alert(
+                    '정리 완료',
+                    `${result.trashedEntries.length}개 파일을 휴지통으로 옮겼습니다.${result.missingCandidateEntries.length ? `\n이미 없던 기록 ${result.missingCandidateEntries.length}개도 정리했습니다.` : ''}`,
+                  );
+                })
+                .catch(error => {
+                  Alert.alert('미디어 정리 실패', error instanceof Error ? error.message : String(error));
+                })
+                .finally(() => setCleanupBusy(false));
+            },
+          },
+        ],
+      );
+    } catch (error) {
+      Alert.alert('미디어 검사 실패', error instanceof Error ? error.message : String(error));
+    } finally {
+      setCleanupBusy(false);
+    }
   }
 
   return (
@@ -177,6 +233,17 @@ export function GalleryScreen({ state, onBack, onChange }: {
           <Text style={styles.title}>갤러리</Text>
           <Text style={styles.subtitle}>{items.length}개</Text>
         </View>
+        <Pressable
+          disabled={cleanupBusy}
+          onPress={() => { void moveUnusedMediaToTrash(); }}
+          style={({ pressed }) => [
+            styles.cleanupButton,
+            pressed && styles.cleanupButtonPressed,
+            cleanupBusy && styles.cleanupButtonDisabled,
+          ]}
+        >
+          <Text style={styles.cleanupButtonText}>{cleanupBusy ? '검사 중' : '미사용 정리'}</Text>
+        </Pressable>
       </View>
       <FlatList
         data={items}
@@ -205,11 +272,15 @@ export function GalleryScreen({ state, onBack, onChange }: {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   header: { minHeight: 72, paddingTop: 10, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.panel, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  back: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 21, backgroundColor: '#eee8dc' },
+  back: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 21, backgroundColor: colors.surfaceAlt },
   backText: { fontSize: 34, lineHeight: 36, color: colors.text },
   titleBlock: { flex: 1 },
   title: { fontSize: 21, color: colors.text, fontWeight: '900' },
   subtitle: { marginTop: 2, color: colors.sub, fontWeight: '800' },
+  cleanupButton: { minHeight: 42, paddingHorizontal: 12, borderRadius: 8, backgroundColor: colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
+  cleanupButtonPressed: { opacity: 0.78 },
+  cleanupButtonDisabled: { opacity: 0.5 },
+  cleanupButtonText: { color: colors.text, fontSize: 12, fontWeight: '900' },
   grid: { padding: 10, paddingBottom: 26, gap: 4 },
   row: { gap: 4 },
   albumTile: { flex: 1, aspectRatio: 1, marginBottom: 4, borderRadius: 4, overflow: 'hidden', backgroundColor: '#eee8dc' },

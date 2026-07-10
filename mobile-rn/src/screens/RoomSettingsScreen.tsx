@@ -2,8 +2,9 @@ import React, { useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors } from '../theme';
 import { SNSGodRoom, SNSGodState } from '../types';
-import { deleteRoom, findCharacter, findRoom, updateRoom } from '../logic/stateHelpers';
-import { isRandomRoom, removeRandomChatRoom } from '../logic/randomChat';
+import { cancelChatJob } from '../logic/chatJobs';
+import { deleteRoomCascade } from '../logic/deletionCascadePolicy';
+import { findCharacter, findRoom, updateRoom } from '../logic/stateHelpers';
 import { normalizeRoomPromptForSave, summarizePrivateRoomWithLlm } from '../logic/roomConversationSummary';
 import { applyPrivateRoomLlmSummary, replaceAutoSummaryBlock } from '../logic/memoryBridge';
 
@@ -77,8 +78,9 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange, onCommitCu
         text: '삭제',
         style: 'destructive',
         onPress: async () => {
-          const next = isRandomRoom(state, room) ? removeRandomChatRoom(state, roomId) : deleteRoom(state, roomId);
-          await onChange(next);
+          const deletion = deleteRoomCascade(state, roomId);
+          for (const affectedRoomId of deletion.cancelledJobRoomIds) cancelChatJob(affectedRoomId);
+          await onChange(deletion.state);
           onBack();
         }
       }

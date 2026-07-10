@@ -3,6 +3,7 @@ import { makeId } from './ids';
 import { MAX_ROOM_MESSAGES } from './limits';
 import { updateRoomMemoryAfterAppend } from './memoryBridge';
 import { applyMessageToCharacterWorld } from './characterWorld';
+import { deleteCharacterCascade, deleteRoomCascade } from './deletionCascadePolicy';
 
 function randomRoomAsChatRoom(room: RandomChatRoom): SNSGodRoom {
   return {
@@ -107,25 +108,7 @@ export function updateRoom(state: SNSGodState, roomId: string, patch: Partial<SN
 }
 
 export function deleteRoom(state: SNSGodState, roomId: string): SNSGodState {
-  const room = findRoom(state, roomId);
-  if (!room) return state;
-  const chatRooms = { ...state.chatRooms };
-  const messages = { ...state.messages };
-  const unreadCounts = { ...state.unreadCounts };
-  chatRooms[room.characterId] = (chatRooms[room.characterId] || []).filter(item => item.id !== roomId);
-  delete messages[roomId];
-  delete unreadCounts[roomId];
-  return {
-    ...state,
-    chatRooms,
-    messages,
-    unreadCounts,
-    roomSummaries: (state.roomSummaries || []).filter(summary => summary.roomId !== roomId),
-    groupRoomSummaries: (state.groupRoomSummaries || []).filter(summary => summary.roomId !== roomId),
-    characterMemories: (state.characterMemories || []).filter(memory => memory.sourceRoomId !== roomId),
-    notifications: (state.notifications || []).filter(item => item.roomId !== roomId && item.target?.roomId !== roomId),
-    selectedRoomId: state.selectedRoomId === roomId ? undefined : state.selectedRoomId
-  };
+  return deleteRoomCascade(state, roomId).state;
 }
 
 export function updateCharacter(state: SNSGodState, characterId: string, patch: Partial<SNSGodCharacter>): SNSGodState {
@@ -182,43 +165,5 @@ export function normalizeRandomChats(state: SNSGodState): SNSGodState {
 }
 
 export function deleteCharacter(state: SNSGodState, characterId: string): SNSGodState {
-  const removedRooms = state.chatRooms[characterId] || [];
-  const removedRoomIds = new Set(removedRooms.map(room => room.id));
-  const removedPostIds = new Set((state.snsPosts || []).filter(post => post.characterId === characterId).map(post => post.id));
-  const chatRooms = { ...state.chatRooms };
-  const messages = { ...state.messages };
-  const unreadCounts = { ...state.unreadCounts };
-  delete chatRooms[characterId];
-  for (const roomId of removedRoomIds) {
-    delete messages[roomId];
-    delete unreadCounts[roomId];
-  }
-
-  const groupRooms = (state.groupRooms || []).flatMap(room => {
-    const participantIds = (room.participantIds || []).filter(id => id !== characterId);
-    if (participantIds.length < 2) {
-      delete messages[room.id];
-      delete unreadCounts[room.id];
-      removedRoomIds.add(room.id);
-      return [];
-    }
-    return [{ ...room, participantIds }];
-  });
-
-  return {
-    ...state,
-    characters: state.characters.filter(character => character.id !== characterId),
-    chatRooms,
-    messages,
-    unreadCounts,
-    groupRooms,
-    roomSummaries: (state.roomSummaries || []).filter(summary => !removedRoomIds.has(summary.roomId) && !summary.characterIds.includes(characterId)),
-    groupRoomSummaries: (state.groupRoomSummaries || []).filter(summary => !removedRoomIds.has(summary.roomId) && !summary.characterIds.includes(characterId)),
-    characterMemories: (state.characterMemories || []).filter(memory => memory.characterId !== characterId && !memory.knownByCharacterIds.includes(characterId) && !removedRoomIds.has(memory.sourceRoomId)),
-    loreEntries: (state.loreEntries || []).filter(entry => entry.characterId !== characterId),
-    snsPosts: (state.snsPosts || []).filter(post => post.characterId !== characterId),
-    snsDmThreads: (state.snsDmThreads || []).filter(thread => thread.characterId !== characterId && !removedPostIds.has(String(thread.postId || ''))),
-    notifications: (state.notifications || []).filter(item => item.characterId !== characterId && !removedRoomIds.has(String(item.roomId || ''))),
-    selectedRoomId: state.selectedRoomId && removedRoomIds.has(state.selectedRoomId) ? undefined : state.selectedRoomId
-  };
+  return deleteCharacterCascade(state, characterId).state;
 }

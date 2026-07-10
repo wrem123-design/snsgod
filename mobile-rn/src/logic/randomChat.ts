@@ -3,6 +3,7 @@ import { parseJsonObject } from './api';
 import { makeId } from './ids';
 import { pickPersonalitySeed } from './personalityPresets';
 import { configuredPrompt } from './prompts';
+import { deleteRoomCascade } from './deletionCascadePolicy';
 import { createRoom } from './stateHelpers';
 
 export type RandomGender = 'any' | 'male' | 'female';
@@ -220,23 +221,7 @@ export function addRandomChatRoom(state: SNSGodState, character: SNSGodCharacter
 }
 
 export function removeRandomChatRoom(state: SNSGodState, roomId: string): SNSGodState {
-  const room = findRandomChat(state, roomId);
-  if (!room) return state;
-  const messages = { ...state.messages };
-  const unreadCounts = { ...state.unreadCounts };
-  delete messages[roomId];
-  delete unreadCounts[roomId];
-  return {
-    ...state,
-    messages,
-    unreadCounts,
-    randomChats: randomChatRooms(state).filter(item => item.id !== roomId),
-    roomSummaries: (state.roomSummaries || []).filter(summary => summary.roomId !== roomId),
-    groupRoomSummaries: (state.groupRoomSummaries || []).filter(summary => summary.roomId !== roomId),
-    characterMemories: (state.characterMemories || []).filter(memory => memory.sourceRoomId !== roomId),
-    notifications: (state.notifications || []).filter(item => item.roomId !== roomId && item.target?.roomId !== roomId),
-    selectedRoomId: state.selectedRoomId === roomId ? undefined : state.selectedRoomId
-  };
+  return deleteRoomCascade(state, roomId).state;
 }
 
 function cloneCharacterForPromotion(character: SNSGodCharacter, state: SNSGodState): SNSGodCharacter {

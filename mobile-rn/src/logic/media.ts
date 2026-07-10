@@ -5,19 +5,24 @@ import * as ImagePicker from 'expo-image-picker';
 import { SNSGodState } from '../types';
 import {
   createCanonicalMediaAssetStore,
+  createMediaGarbageCollector,
   createSerializedMediaManifestStore,
   decodeBase64Bytes,
+  isUriWithinRoot,
   parseMediaManifestText,
   replaceTextFileAtomically,
+  type MediaGarbageCollectionResult,
   type MediaManifestEntry,
+  type MediaTrashEntry,
 } from './mediaStoragePolicy';
 import {
   applyStateMediaUriReplacements,
   collectStateMediaExternalizationTargets,
+  type StateMediaReference,
   type StateMediaUriReplacement,
 } from './stateMediaPolicy';
 
-export type { MediaManifestEntry } from './mediaStoragePolicy';
+export type { MediaGarbageCollectionResult, MediaManifestEntry } from './mediaStoragePolicy';
 
 const MEDIA_DIR = `${FileSystem.documentDirectory || ''}snsgod-media/`;
 export const MEDIA_ROOT_DIR = MEDIA_DIR;
@@ -25,6 +30,10 @@ export const REFERENCE_MEDIA_DIR = `${MEDIA_DIR}reference/`;
 export const MEDIA_MANIFEST_FILE = `${MEDIA_DIR}mediaManifest.json`;
 const MEDIA_MANIFEST_TEMP_FILE = `${MEDIA_DIR}mediaManifest.tmp.json`;
 const MEDIA_MANIFEST_PREVIOUS_FILE = `${MEDIA_DIR}mediaManifest.previous.json`;
+const MEDIA_TRASH_DIR = `${MEDIA_DIR}.trash/`;
+const MEDIA_TRASH_MANIFEST_FILE = `${MEDIA_DIR}mediaTrashManifest.json`;
+const MEDIA_TRASH_MANIFEST_TEMP_FILE = `${MEDIA_DIR}mediaTrashManifest.tmp.json`;
+const MEDIA_TRASH_MANIFEST_PREVIOUS_FILE = `${MEDIA_DIR}mediaTrashManifest.previous.json`;
 const EXTERNALIZE_THRESHOLD = 180_000;
 
 export async function pickImageDataUri(): Promise<string | undefined> {
@@ -161,6 +170,107 @@ const mediaManifestStore = createSerializedMediaManifestStore({
   replaceAtomically: replaceMediaManifestAtomically,
 });
 
+function parseMediaTrashManifestText(value: string): MediaTrashEntry[] {
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed)) throw new Error('Media trash manifest must be an array.');
+  const trashUris = new Set<string>();
+  return parsed.map(item => {
+    if (!item || typeof item !== 'object') {
+      throw new Error('Media trash manifest contains an invalid entry.');
+    }
+    const candidate = item as Partial<MediaTrashEntry>;
+    if (
+      !candidate.entry
+      || typeof candidate.trashFileUri !== 'string'
+      || !isUriWithinRoot(candidate.trashFileUri, MEDIA_TRASH_DIR)
+      || typeof candidate.trashedAt !== 'number'
+      || !Number.isFinite(candidate.trashedAt)
+      || candidate.trashedAt < 0
+      || (candidate.status !== 'prepared' && candidate.status !== 'committed')
+      || trashUris.has(candidate.trashFileUri)
+    ) {
+      throw new Error('Media trash manifest contains an invalid entry.');
+    }
+    const [entry] = parseMediaManifestText(JSON.stringify([candidate.entry]));
+    trashUris.add(candidate.trashFileUri);
+    return {
+      entry,
+      trashFileUri: candidate.trashFileUri,
+      trashedAt: candidate.trashedAt,
+      status: candidate.status,
+    };
+  });
+}
+
+async function readMediaTrashManifestFromDisk(): Promise<MediaTrashEntry[]> {
+  let foundManifest = false;
+  for (const fileUri of [
+    MEDIA_TRASH_MANIFEST_FILE,
+    MEDIA_TRASH_MANIFEST_TEMP_FILE,
+    MEDIA_TRASH_MANIFEST_PREVIOUS_FILE,
+  ]) {
+    const info = await FileSystem.getInfoAsync(fileUri);
+    if (!info.exists) continue;
+    foundManifest = true;
+    try {
+      return parseMediaTrashManifestText(await FileSystem.readAsStringAsync(fileUri, {
+        encoding: FileSystem.EncodingType.UTF8,
+      }));
+    } catch {
+      // Continue to the next recoverable manifest generation.
+    }
+  }
+  if (foundManifest) throw new Error('복구 가능한 미디어 휴지통 manifest를 찾지 못했습니다.');
+  return [];
+}
+
+async function replaceMediaTrashManifestAtomically(
+  entries: readonly MediaTrashEntry[],
+): Promise<void> {
+  await ensureMediaDir();
+  await replaceTextFileAtomically({
+    async exists(path) {
+      return (await FileSystem.getInfoAsync(path)).exists;
+    },
+    async read(path) {
+      return FileSystem.readAsStringAsync(path, { encoding: FileSystem.EncodingType.UTF8 });
+    },
+    async write(path, contents) {
+      await FileSystem.writeAsStringAsync(path, contents, { encoding: FileSystem.EncodingType.UTF8 });
+    },
+    async move(from, to) {
+      await FileSystem.moveAsync({ from, to });
+    },
+    async remove(path) {
+      await FileSystem.deleteAsync(path, { idempotent: true });
+    },
+  }, {
+    primary: MEDIA_TRASH_MANIFEST_FILE,
+    temporary: MEDIA_TRASH_MANIFEST_TEMP_FILE,
+    previous: MEDIA_TRASH_MANIFEST_PREVIOUS_FILE,
+  }, JSON.stringify(entries, null, 2), parseMediaTrashManifestText);
+}
+
+const mediaGarbageCollector = createMediaGarbageCollector({
+  manifestStore: mediaManifestStore,
+  readTrashManifest: readMediaTrashManifestFromDisk,
+  replaceTrashManifest: replaceMediaTrashManifestAtomically,
+  async fileExists(fileUri) {
+    return (await FileSystem.getInfoAsync(fileUri)).exists;
+  },
+  async moveFile(from, to) {
+    await FileSystem.moveAsync({ from, to });
+  },
+  async removeFile(fileUri) {
+    await FileSystem.deleteAsync(fileUri, { idempotent: true });
+  },
+  trashFileUri(entry, now) {
+    const fileName = entry.fileUri.split('/').pop() || `${entry.mediaId}.bin`;
+    const extension = fileName.includes('.') ? fileName.split('.').pop() || 'bin' : 'bin';
+    return `${MEDIA_TRASH_DIR}${entry.mediaId}-${now}-${Crypto.randomUUID()}.${extension}`;
+  },
+});
+
 export async function readMediaManifest(): Promise<MediaManifestEntry[]> {
   return mediaManifestStore.read();
 }
@@ -278,6 +388,46 @@ export async function inspectMediaFiles(): Promise<{ manifest: MediaManifestEntr
     mediaDir: MEDIA_DIR,
     manifestFile: MEDIA_MANIFEST_FILE
   };
+}
+
+/** Previews unreachable app-owned media without changing files or manifests. */
+export async function previewMediaGarbageCollection(
+  references: readonly StateMediaReference[],
+): Promise<MediaGarbageCollectionResult> {
+  return mediaGarbageCollector.collect(references, {
+    dryRun: true,
+    mediaRootUri: MEDIA_ROOT_DIR,
+    now: Date.now(),
+  });
+}
+
+/** Moves unreachable app-owned media into the recoverable local trash. */
+export async function trashUnreachableMedia(
+  references: readonly StateMediaReference[],
+): Promise<MediaGarbageCollectionResult> {
+  await ensureMediaSubdir('.trash');
+  return mediaGarbageCollector.collect(references, {
+    dryRun: false,
+    mediaRootUri: MEDIA_ROOT_DIR,
+    now: Date.now(),
+  });
+}
+
+/** Permanently removes committed trash entries older than the given timestamp. */
+export async function purgeMediaTrash(before: number): Promise<{
+  deletedCount: number;
+  failedCount: number;
+}> {
+  const result = await mediaGarbageCollector.purge({ before, dryRun: false });
+  return { deletedCount: result.deletedCount, failedCount: result.failedEntries.length };
+}
+
+/** Recovers a media move interrupted between trash preparation and manifest commit. */
+export async function recoverInterruptedMediaGarbageCollection(): Promise<{
+  restoredCount: number;
+  committedCount: number;
+}> {
+  return mediaGarbageCollector.recoverInterruptedCollection();
 }
 
 export async function externalizeDataUri(value: string, hint: string, force = false): Promise<string> {

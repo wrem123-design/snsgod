@@ -4,6 +4,7 @@ import { primaryCharacterReferenceImage } from './imageReference';
 import { makeId } from './ids';
 import { DEFAULT_USER_APPEARANCE_PROMPT, configuredPrompt, userNameFor } from './prompts';
 import { appendMessage, findCharacter, findRoom, roomMessages, updateCharacter } from './stateHelpers';
+import { appendMessageToHistory } from './messageHistoryPolicy';
 import { SNSGodCharacter, SNSGodRoom, SNSGodState, MeetingEventSession, MeetingEventLine, GroupRoom, SNSGodMessage, CharacterMemory, GroupRoomSummary, MeetingEventType, MeetingScenarioPhase, MeetingStats, MeetingResultCard } from '../types';
 
 export type MeetingStartResult = {
@@ -239,7 +240,7 @@ function appendMeetingMessage(state: SNSGodState, roomId: string, message: SNSGo
   if (group) {
     return {
       ...state,
-      messages: { ...state.messages, [roomId]: [...(state.messages[roomId] || []), message].slice(-300) },
+      messages: { ...state.messages, [roomId]: appendMessageToHistory(state.messages[roomId], message) },
       groupRooms: (state.groupRooms || []).map(item => item.id === roomId ? { ...item, lastActivity: message.createdAt } : item)
     };
   }

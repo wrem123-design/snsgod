@@ -530,12 +530,17 @@ test('persistence publishes media replacements only after a successful current r
     persistSource.indexOf('export async function saveState'),
   );
   const staleGuard = writeStateSource.indexOf('prepared.stats.revision < persistedRevision');
+  const bundleWrite = writeStateSource.indexOf("perf.measure('SQLite bundle write'");
   const revisionCommit = writeStateSource.lastIndexOf('persistedRevision = prepared.stats.revision');
   const runtimePublish = writeStateSource.indexOf('options.onMediaExternalized(prepared.mediaReplacements)');
 
   assert.ok(staleGuard >= 0 && staleGuard < runtimePublish);
+  assert.ok(bundleWrite >= 0 && bundleWrite < runtimePublish);
   assert.ok(revisionCommit >= 0 && revisionCommit < runtimePublish);
-  assert.match(writeStateSource, /writeMessagesState\(prepared\.normalizedState\.messages/);
+  assert.match(
+    writeStateSource,
+    /writeSqliteBundle\(\s*prepared\.payload,\s*prepared\.snapshot,\s*prepared\.normalizedState\.messages/s,
+  );
   assert.match(
     writeStateSource,
     /pendingState = applyStateMediaUriReplacements\(pendingState, prepared\.mediaReplacements\)/,

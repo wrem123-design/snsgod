@@ -5,7 +5,8 @@ import { InteractionManager } from 'react-native';
 import { SNSGodState } from '../types';
 import { createDefaultState } from '../data/defaultState';
 import { ensureCharacterRooms, normalizeRandomChats } from '../logic/stateHelpers';
-import { MAX_GROUP_ROOM_MESSAGES, MAX_ROOM_MESSAGES, STATE_SCHEMA_VERSION } from '../logic/limits';
+import { STATE_SCHEMA_VERSION } from '../logic/limits';
+import { messageHistoryRecordsMatch, normalizeMessageHistoryRecord, planMessageHistoryWrite } from '../logic/messageHistoryPolicy';
 import { normalizeLoreEntries } from '../logic/loreEngine';
 import { normalizeNotifications } from '../logic/notifications';
 import { externalizeStateMediaWithResult, inspectMediaFiles, MEDIA_MANIFEST_FILE, MEDIA_ROOT_DIR } from '../logic/media';
@@ -45,6 +46,7 @@ type StateCandidate = RecoveryCandidate<SNSGodState, StorageSource, StorageStats
   pointer?: AsyncStoragePointer;
 };
 type MessageMap = SNSGodState['messages'];
+type MessageList = MessageMap[string];
 type StorageStats = {
   revision: number;
   writeSeq: number;
@@ -132,8 +134,8 @@ let pendingOptions: SaveStateOptions | undefined;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let saveMaxTimer: ReturnType<typeof setTimeout> | undefined;
 let dbPromise: Promise<SQLite.SQLiteDatabase | undefined> | undefined;
-let messageRoomSignatures = new Map<string, string>();
-let messageRoomSignaturesReady = false;
+let persistedMessageRooms = new Map<string, MessageList>();
+let persistedMessageRoomsReady = false;
 let persistPerfEntries: PersistPerfEntry[] = [];
 
 export async function loadState(): Promise<SNSGodState> {
@@ -162,11 +164,11 @@ export async function loadState(): Promise<SNSGodState> {
     selected.source === 'default'
   ));
   if (selected.source === 'sqlite' || selected.source === 'sqliteUnverified') {
-    messageRoomSignatures = createMessageRoomSignatures(normalized.messages || {});
-    messageRoomSignaturesReady = true;
+    persistedMessageRooms = new Map(Object.entries(normalized.messages || {}));
+    persistedMessageRoomsReady = true;
   } else {
-    messageRoomSignatures = new Map();
-    messageRoomSignaturesReady = false;
+    persistedMessageRooms = new Map();
+    persistedMessageRoomsReady = false;
   }
   const stats = getStorageStats(normalized);
   persistedRevision = stats.revision;
@@ -283,8 +285,12 @@ async function writeStateNow(state: SNSGodState, options: SaveStateOptions = {})
         lastSkippedOldRevisionSave = `skip old payload rev=${prepared.stats.revision}, writeSeq=${prepared.stats.writeSeq}; persisted rev=${persistedRevision}, writeSeq=${persistedWriteSeq}`;
         return;
       }
-      await perf.measure('SQLite write', () => writeSqliteState(prepared.payload, prepared.snapshot, prepared.stats));
-      await perf.measure('messages write', () => writeMessagesState(prepared.normalizedState.messages || {}));
+      await perf.measure('SQLite bundle write', () => writeSqliteBundle(
+        prepared.payload,
+        prepared.snapshot,
+        prepared.normalizedState.messages || {},
+        prepared.stats,
+      ));
       lastSQLiteSaveTime = Date.now();
       if (writeBackup) {
         await perf.measure('backup write', () => writeBackupFile(prepared.fullPayload || prepared.payload, prepared.fullSnapshot || prepared.snapshot, options.reason || (options.important ? 'important save' : 'scheduled snapshot'), prepared.backupStats || prepared.stats));
@@ -295,7 +301,7 @@ async function writeStateNow(state: SNSGodState, options: SaveStateOptions = {})
       if (options.verify === 'full') {
         await perf.measure('verify read', () => verifyStateWrite(prepared.payload, prepared.fullPayload || prepared.payload, prepared.fullSnapshot || prepared.snapshot, writeBackup));
       } else if (options.verify === 'sqlite') {
-        await perf.measure('verify read', () => verifySQLiteWrite(prepared.payload));
+        await perf.measure('verify read', () => verifySQLiteWrite(prepared.payload, prepared.normalizedState));
       }
       persistedRevision = prepared.stats.revision;
       persistedWriteSeq = prepared.stats.writeSeq;
@@ -392,8 +398,7 @@ async function flushPendingStateNow(): Promise<void> {
 
 export async function importState(state: SNSGodState, originalJson: string): Promise<SNSGodState> {
   const prepared = await preparePersistedPayload({ ...state, __importedAt: Date.now(), __revision: Math.max(Number(state.__revision || 0), persistedRevision) + 1 }, { includeFullBackupPayload: true });
-  await writeSqliteState(prepared.payload, prepared.snapshot);
-  await writeMessagesState(prepared.normalizedState.messages || {});
+  await writeSqliteBundle(prepared.payload, prepared.snapshot, prepared.normalizedState.messages || {});
   await writeBackupFile(prepared.fullPayload || prepared.payload, prepared.fullSnapshot || prepared.snapshot, 'import state');
   await writeAsyncStoragePointer(prepared, originalJson).catch(error => {
     lastAsyncStorageWarning = `AsyncStorage import pointer warning: ${error instanceof Error ? error.message : String(error)}`;
@@ -507,9 +512,10 @@ async function writeAsyncStoragePointer(prepared: PersistedPayload, legacyBackup
 
 async function verifyStateWrite(sqlitePayload: string, backupPayload: string, snapshot: SNSGodState, requireBackup = true): Promise<void> {
   const payload = sqlitePayload;
-  const [sqliteSaved, fileSaved] = await Promise.all([
+  const [sqliteSaved, fileSaved, sqliteMessages] = await Promise.all([
     readSqliteState(),
-    readBackupFile(BACKUP_FILE)
+    readBackupFile(BACKUP_FILE),
+    readMessagesByRoom(),
   ]);
   if (sqliteSaved !== payload) {
     throw new Error('저장 검증 실패: SQLite 저장 직후 읽은 데이터가 일치하지 않습니다.');
@@ -517,17 +523,23 @@ async function verifyStateWrite(sqlitePayload: string, backupPayload: string, sn
   if (requireBackup && fileSaved !== backupPayload) {
     throw new Error('저장 검증 실패: 백업 파일 저장 직후 읽은 데이터가 일치하지 않습니다.');
   }
+  if (!messageHistoryRecordsMatch(snapshot.messages || {}, sqliteMessages)) {
+    throw new Error('저장 검증 실패: SQLite 방별 메시지가 원문과 일치하지 않습니다.');
+  }
   const stats = getStorageStats(snapshot);
   if (stats.hash !== snapshot.__contentHash) {
     throw new Error('저장 검증 실패: snapshot hash 메타데이터가 일치하지 않습니다.');
   }
 }
 
-async function verifySQLiteWrite(payload: string): Promise<void> {
+async function verifySQLiteWrite(payload: string, snapshot: SNSGodState): Promise<void> {
   const sqlitePayload = payload;
-  const sqliteSaved = await readSqliteState();
+  const [sqliteSaved, sqliteMessages] = await Promise.all([readSqliteState(), readMessagesByRoom()]);
   if (sqliteSaved !== sqlitePayload) {
     throw new Error('저장 검증 실패: SQLite 저장 직후 읽은 데이터가 일치하지 않습니다.');
+  }
+  if (!messageHistoryRecordsMatch(snapshot.messages || {}, sqliteMessages)) {
+    throw new Error('저장 검증 실패: SQLite 방별 메시지가 원문과 일치하지 않습니다.');
   }
 }
 
@@ -806,12 +818,6 @@ function stripStorageMetadata(value: unknown): unknown {
     .map(([key, item]) => [key, stripStorageMetadata(item)]));
 }
 
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  if (!value || typeof value !== 'object') return JSON.stringify(value);
-  return `{${Object.keys(value as Record<string, unknown>).sort().map(key => `${JSON.stringify(key)}:${stableStringify((value as Record<string, unknown>)[key])}`).join(',')}}`;
-}
-
 async function getDb(): Promise<SQLite.SQLiteDatabase | undefined> {
   if (!dbPromise) {
     dbPromise = SQLite.openDatabaseAsync(SQLITE_DB_NAME)
@@ -903,40 +909,36 @@ async function readSqliteStateWithoutMetaValidation(): Promise<string | undefine
   }
 }
 
-async function writeSqliteState(payload: string, snapshot: SNSGodState, preparedStats?: StorageStats): Promise<void> {
-  const db = await getDb();
-  if (!db) return;
+async function writeSqliteStateRows(
+  db: SQLite.SQLiteDatabase,
+  payload: string,
+  snapshot: SNSGodState,
+  preparedStats?: StorageStats,
+): Promise<void> {
   const stats = preparedStats || getStorageStats(snapshot);
   const savedAt = snapshot.__savedAt || Date.now();
-  await db.execAsync('BEGIN IMMEDIATE TRANSACTION');
-  try {
-    await db.runAsync(
-      'INSERT OR REPLACE INTO app_state (key, value, updated_at) VALUES (?, ?, ?)',
-      SQLITE_STATE_KEY,
-      payload,
-      savedAt
-    );
-    await db.runAsync(
-      `INSERT OR REPLACE INTO app_state_meta
-       (key, revision, write_seq, content_hash, message_count, character_count, reference_image_count, media_count, last_message_at, payload_size, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      SQLITE_STATE_KEY,
-      stats.revision,
-      stats.writeSeq,
-      stats.hash,
-      stats.messageCount,
-      stats.characterCount,
-      stats.referenceImageCount,
-      stats.mediaCount,
-      stats.lastMessageAt,
-      payload.length,
-      savedAt
-    );
-    await db.execAsync('COMMIT');
-  } catch (error) {
-    await db.execAsync('ROLLBACK').catch(() => undefined);
-    throw error;
-  }
+  await db.runAsync(
+    'INSERT OR REPLACE INTO app_state (key, value, updated_at) VALUES (?, ?, ?)',
+    SQLITE_STATE_KEY,
+    payload,
+    savedAt
+  );
+  await db.runAsync(
+    `INSERT OR REPLACE INTO app_state_meta
+     (key, revision, write_seq, content_hash, message_count, character_count, reference_image_count, media_count, last_message_at, payload_size, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    SQLITE_STATE_KEY,
+    stats.revision,
+    stats.writeSeq,
+    stats.hash,
+    stats.messageCount,
+    stats.characterCount,
+    stats.referenceImageCount,
+    stats.mediaCount,
+    stats.lastMessageAt,
+    payload.length,
+    savedAt
+  );
 }
 
 async function readMessagesByRoom(): Promise<MessageMap> {
@@ -962,80 +964,85 @@ async function readMessagesByRoom(): Promise<MessageMap> {
   }
 }
 
-async function writeMessagesState(messages: MessageMap): Promise<void> {
-  const db = await getDb();
-  if (!db) return;
+async function writeMessagesStateRows(
+  db: SQLite.SQLiteDatabase,
+  messages: MessageMap,
+  nextRooms: Map<string, MessageList>,
+): Promise<void> {
   const now = Date.now();
-  const nextSignatures = createMessageRoomSignatures(messages || {});
-  if (messageRoomSignaturesReady && areMapsEqual(messageRoomSignatures, nextSignatures)) return;
-  const changedRoomIds = messageRoomSignaturesReady
-    ? [...nextSignatures.keys()].filter(roomId => messageRoomSignatures.get(roomId) !== nextSignatures.get(roomId))
-    : [...nextSignatures.keys()];
-  const removedRoomIds = messageRoomSignaturesReady
-    ? [...messageRoomSignatures.keys()].filter(roomId => !nextSignatures.has(roomId))
+  const changedRoomIds = persistedMessageRoomsReady
+    ? [...nextRooms.keys()].filter(roomId => persistedMessageRooms.get(roomId) !== nextRooms.get(roomId))
+    : [...nextRooms.keys()];
+  const removedRoomIds = persistedMessageRoomsReady
+    ? [...persistedMessageRooms.keys()].filter(roomId => !nextRooms.has(roomId))
     : [];
-  await db.execAsync('BEGIN IMMEDIATE TRANSACTION');
-  try {
-    if (!messageRoomSignaturesReady) {
-      await db.runAsync('DELETE FROM messages');
-      await db.runAsync('DELETE FROM message_rooms');
-    } else {
-      for (const roomId of removedRoomIds) {
-        await db.runAsync('DELETE FROM messages WHERE room_id = ?', roomId);
-        await db.runAsync('DELETE FROM message_rooms WHERE room_id = ?', roomId);
-      }
-    }
-    for (const roomId of changedRoomIds) {
-      const list = messages?.[roomId];
-      const safeList = Array.isArray(list) ? list : [];
+  if (!persistedMessageRoomsReady) {
+    await db.runAsync('DELETE FROM messages');
+    await db.runAsync('DELETE FROM message_rooms');
+  } else {
+    for (const roomId of removedRoomIds) {
       await db.runAsync('DELETE FROM messages WHERE room_id = ?', roomId);
-      if (!safeList.length) {
-        await db.runAsync('DELETE FROM message_rooms WHERE room_id = ?', roomId);
-        continue;
-      }
-      for (let index = 0; index < safeList.length; index += 1) {
-        const message = safeList[index];
-        const messageId = String(message.id || `${roomId}_${index}`);
-        await db.runAsync(
-          'INSERT OR REPLACE INTO messages (room_id, message_id, message_index, created_at, value) VALUES (?, ?, ?, ?, ?)',
-          roomId,
-          messageId,
-          index,
-          Number(message.createdAt || 0),
-          JSON.stringify(message)
-        );
-      }
-      const lastMessageAt = safeList.reduce((max, message) => Math.max(max, Number(message.createdAt || 0)), 0);
+      await db.runAsync('DELETE FROM message_rooms WHERE room_id = ?', roomId);
+    }
+  }
+  for (const roomId of changedRoomIds) {
+    const list = messages?.[roomId];
+    const safeList = Array.isArray(list) ? list : [];
+    const writePlan = persistedMessageRoomsReady
+      ? planMessageHistoryWrite(persistedMessageRooms.get(roomId), safeList)
+      : { mode: 'replace' as const, appendFrom: 0 };
+    if (writePlan.mode === 'unchanged') continue;
+    if (writePlan.mode === 'replace') {
+      await db.runAsync('DELETE FROM messages WHERE room_id = ?', roomId);
+    }
+    if (!safeList.length) {
+      await db.runAsync('DELETE FROM message_rooms WHERE room_id = ?', roomId);
+      continue;
+    }
+    const writeFrom = writePlan.mode === 'append' ? writePlan.appendFrom : 0;
+    for (let index = writeFrom; index < safeList.length; index += 1) {
+      const message = safeList[index];
+      const messageId = String(message.id || `${roomId}_${index}`);
       await db.runAsync(
-        'INSERT OR REPLACE INTO message_rooms (room_id, message_count, last_message_at, updated_at) VALUES (?, ?, ?, ?)',
+        'INSERT OR REPLACE INTO messages (room_id, message_id, message_index, created_at, value) VALUES (?, ?, ?, ?, ?)',
         roomId,
-        safeList.length,
-        lastMessageAt,
-        now
+        messageId,
+        index,
+        Number(message.createdAt || 0),
+        JSON.stringify(message)
       );
     }
+    const lastMessageAt = safeList.reduce((max, message) => Math.max(max, Number(message.createdAt || 0)), 0);
+    await db.runAsync(
+      'INSERT OR REPLACE INTO message_rooms (room_id, message_count, last_message_at, updated_at) VALUES (?, ?, ?, ?)',
+      roomId,
+      safeList.length,
+      lastMessageAt,
+      now
+    );
+  }
+}
+
+async function writeSqliteBundle(
+  payload: string,
+  snapshot: SNSGodState,
+  messages: MessageMap,
+  preparedStats?: StorageStats,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const nextRooms = new Map(Object.entries(messages || {}));
+  await db.execAsync('BEGIN IMMEDIATE TRANSACTION');
+  try {
+    await writeSqliteStateRows(db, payload, snapshot, preparedStats);
+    await writeMessagesStateRows(db, messages, nextRooms);
     await db.execAsync('COMMIT');
-    messageRoomSignatures = nextSignatures;
-    messageRoomSignaturesReady = true;
+    persistedMessageRooms = nextRooms;
+    persistedMessageRoomsReady = true;
   } catch (error) {
     await db.execAsync('ROLLBACK').catch(() => undefined);
     throw error;
   }
-}
-
-function createMessageRoomSignatures(messages: MessageMap): Map<string, string> {
-  return new Map(Object.entries(messages || {}).map(([roomId, list]) => {
-    const safeList = Array.isArray(list) ? list : [];
-    return [roomId, stableStringify(safeList)];
-  }));
-}
-
-function areMapsEqual(left: Map<string, string>, right: Map<string, string>): boolean {
-  if (left.size !== right.size) return false;
-  for (const [key, value] of left) {
-    if (right.get(key) !== value) return false;
-  }
-  return true;
 }
 
 async function ensureBackupDir(): Promise<boolean> {
@@ -1221,7 +1228,7 @@ function migrateState(state: SNSGodState): SNSGodState {
       userStickers: Array.isArray(next.userStickers) ? next.userStickers : []
     };
   }
-  if (version < 2) next = normalizeMessageCaps(next);
+  if (version < 2) next = normalizeMessageHistory(next);
   if (version < 3) {
     next = {
       ...next,
@@ -1265,7 +1272,7 @@ function normalizeState(state: SNSGodState): SNSGodState {
     }
   };
   const migrated = migrateState(merged);
-  const normalized = normalizeMessageCaps(normalizeSumGodState(normalizeNotifications(normalizeLoreEntries(normalizeRandomChats(ensureCharacterRooms(normalizeSnsOptions(normalizeApiProfiles(normalizeProfileImages(migrated)))))))));
+  const normalized = normalizeMessageHistory(normalizeSumGodState(normalizeNotifications(normalizeLoreEntries(normalizeRandomChats(ensureCharacterRooms(normalizeSnsOptions(normalizeApiProfiles(normalizeProfileImages(migrated)))))))));
   return migrateMemoryState(normalized);
 }
 
@@ -1275,13 +1282,8 @@ function prepareStateForSave(state: SNSGodState, options: { includeMessages?: bo
   return withStorageMetadata(storageState, Number(normalized.__revision || 0), normalized);
 }
 
-function normalizeMessageCaps(state: SNSGodState): SNSGodState {
-  const groupIds = new Set((state.groupRooms || []).map(room => room.id));
-  const messages = Object.fromEntries(Object.entries(state.messages || {}).map(([roomId, list]) => [
-    roomId,
-    (Array.isArray(list) ? list : []).slice(-(groupIds.has(roomId) ? MAX_GROUP_ROOM_MESSAGES : MAX_ROOM_MESSAGES))
-  ]));
-  return { ...state, messages };
+function normalizeMessageHistory(state: SNSGodState): SNSGodState {
+  return { ...state, messages: normalizeMessageHistoryRecord(state.messages) };
 }
 
 function normalizeApiProfiles(state: SNSGodState): SNSGodState {

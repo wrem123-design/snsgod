@@ -1,7 +1,8 @@
 import { PromptSet, SNSGodCharacter, SNSGodRoom, SNSGodState } from '../types';
 import { MAX_CONTEXT_MESSAGES } from './limits';
 import { selectPromptContext } from './messageHistoryPolicy';
-import { compilePromptBlocks, withoutLatestUserInput } from './promptCompiler';
+import { compilePromptBlocks, PromptBlock, withoutLatestUserInput } from './promptCompiler';
+import { hasPromptWeather, resolvePromptCapabilities } from './promptCapabilities';
 import { lorePromptBlock, resolveActiveLore } from './loreEngine';
 import { buildTimeRealityInstruction } from './timeReality';
 import { characterWithConversationRhythm, conversationRhythmInstruction } from './conversationRhythm';
@@ -147,7 +148,7 @@ export function userProfileFor(state: SNSGodState, character: SNSGodCharacter): 
   return state.config.userDescription || '';
 }
 
-function weatherContext(character: SNSGodCharacter, state: SNSGodState): string {
+export function weatherContext(character: SNSGodCharacter, state: SNSGodState): string {
   const weather = character.weather || character.weatherContext || state.config.weather || state.config.weatherContext;
   if (typeof weather === 'string' && weather.trim()) return `Current weather/context: ${weather.trim()}`;
   if (weather && typeof weather === 'object') {
@@ -199,14 +200,14 @@ function timeContextSnapshot(character: SNSGodCharacter, state: SNSGodState): { 
   return { timeZone, formatted, hour, dayPart, koreanDayPart, guard };
 }
 
-function localTimeContext(character: SNSGodCharacter, state: SNSGodState): string {
+export function localTimeContext(character: SNSGodCharacter, state: SNSGodState, includeTime: boolean, includeWeather: boolean): string {
   const snapshot = timeContextSnapshot(character, state);
   return [
     '## Current Real-Time Context',
-    `Current local time for ${character.name}: ${snapshot.formatted}, ${snapshot.dayPart} (${snapshot.koreanDayPart}), hour=${snapshot.hour}, timezone ${snapshot.timeZone}.`,
-    `Time consistency rule: ${snapshot.guard}`,
-    'If the visible chat timestamp or current local time is at night, keep greetings and assumptions consistent with night. Do not invent morning, commute, work-start, school-start, breakfast, or weather-at-start-of-day context.',
-    weatherContext(character, state),
+    includeTime ? `Current local time for ${character.name}: ${snapshot.formatted}, ${snapshot.dayPart} (${snapshot.koreanDayPart}), hour=${snapshot.hour}, timezone ${snapshot.timeZone}.` : '',
+    includeTime ? `Time consistency rule: ${snapshot.guard}` : '',
+    includeTime ? 'If the visible chat timestamp or current local time is at night, keep greetings and assumptions consistent with night. Do not invent morning, commute, work-start, school-start, breakfast, or weather-at-start-of-day context.' : '',
+    includeWeather ? weatherContext(character, state) : '',
     'Use this naturally when relevant. Do not force a time or weather mention in every reply.'
   ].filter(Boolean).join('\n');
 }
@@ -364,11 +365,22 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
   const bridgedMemoryText = privateMemoryPromptBlock(state, room, character, latestUserText);
   const groupBridgeText = groupBridgeContextForPrivateRoom(state, character, room.id);
   const stickerText = availableStickerText(state, character);
+  const weatherSource = character.weather || character.weatherContext || state.config.weather || state.config.weatherContext;
+  const capabilities = resolvePromptCapabilities({
+    latestUserText,
+    mode: options.mode || 'reply',
+    timeEnabled: character.timeContextEnabled !== false,
+    weatherEnabled: character.weatherEnabled !== false,
+    hasWeather: hasPromptWeather(weatherSource),
+    imageEnabled: state.config.imageGeneration?.enabled !== false,
+    hasImageInput: Boolean(latestImageData),
+    phoneEnabled: state.config.characterPhoneCallEnabled !== false,
+    hasStickers: Boolean(stickerText && stickerText !== 'none'),
+  });
   const manualRoomPrompt = stripAutoSummaryBlock(String(room.roomPrompt || ''));
   const roomNote = [room.relationshipNote, manualRoomPrompt].filter(Boolean).join('\n');
-  const imageInstruction = state.config.imageGeneration?.enabled === false
-    ? 'Image sending is disabled. Do not include imagePrompt or imageCaption.'
-    : [
+  const imageInstruction = capabilities.image
+    ? [
       prompts.chatImageRules,
       'You may also include imagePrompt if the immediately recent chat already established that the character is about to send a photo.',
       'If the user asks situational questions about food, cafe, being outside, travel, scenery, outfit, what the character is wearing, or what the character is doing, you may include one relevant phone-photo imagePrompt.',
@@ -377,7 +389,8 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
         : 'Write imagePrompt as a specific, grounded phone-photo scene.',
       'If you include imagePrompt, include it on exactly one message and make the visible content clearly introduce the photo naturally.',
       'Do not claim you attached a photo unless imagePrompt is included.'
-    ].join(' ');
+    ].join(' ')
+    : '';
   const systemParts = [
     '## 1. Common mandatory rules',
     applyPromptPlaceholders(prompts.systemRules, state, character, room, messages),
@@ -397,9 +410,10 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
 
     '## 3. Current time, activity, emotion, and availability',
     runtimeStatePromptBlock(runtimeState),
-    localTimeContext(character, state),
-    dateGroundingInstruction(state, character),
-    buildTimeRealityInstruction(state, character, options.mode === 'proactive' ? 'proactive' : 'reply'),
+    { id: 'capability.time', content: capabilities.time ? localTimeContext(character, state, true, false) : '', enabled: capabilities.time, priority: 70 },
+    { id: 'capability.weather', content: capabilities.weather ? weatherContext(character, state) : '', enabled: capabilities.weather, priority: 60 },
+    { id: 'capability.date', content: capabilities.date ? dateGroundingInstruction(state, character) : '', enabled: capabilities.date, priority: 80 },
+    capabilities.time ? buildTimeRealityInstruction(state, character, options.mode === 'proactive' ? 'proactive' : 'reply') : '',
     `Reply timing: delivery is planned after about ${Math.round(options.replyDelaySeconds || 0)} seconds. Availability and energy may make the reply brief, but do not repeatedly explain the delay.`,
 
     '## 4. Room relationship and user identity',
@@ -422,30 +436,24 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
 
     '## 8. Mode and available actions',
     modeInstruction(state, character, room, options.mode || 'reply'),
-    imageInstruction,
-    imageContinuityPromptBlock(character, runtimeState),
-    state.config.characterPhoneCallEnabled === false
-      ? 'Character-initiated call cards are disabled. Do not output call markers.'
-      : 'When a call is clearly agreed to or naturally begins, append exactly [[PHONE_CALL]] to the same visible bubble or set callInvite:true. Do not use it for vague call talk.',
-    /\uC804\uD654|\uD1B5\uD654|\uC804\uD654\uD574|\uC804\uD654\uD558\uC790|call/i.test(latestUserText)
-      ? 'The user explicitly mentioned a call. Include a call marker only if the character agrees or proceeds; omit it when refusing or postponing.'
-      : '',
-    stickerText && stickerText !== 'none' ? `Available stickers:\n${stickerText}` : 'Available stickers: none',
+    { id: 'capability.image', content: capabilities.image ? [imageInstruction, imageContinuityPromptBlock(character, runtimeState)].filter(Boolean).join('\n') : '', enabled: capabilities.image, priority: 50 },
+    { id: 'capability.phone', content: capabilities.phone ? 'The user explicitly mentioned a call. If the character agrees or proceeds, append exactly [[PHONE_CALL]] to the same visible bubble or set callInvite:true; omit it when refusing or postponing.' : '', enabled: capabilities.phone, priority: 50 },
+    { id: 'capability.stickers', content: capabilities.stickers ? `Available stickers:\n${stickerText}` : '', enabled: capabilities.stickers, priority: 30 },
 
     '## 10. Output format (apply last)',
     applyPromptPlaceholders(prompts.characterActing, state, character, room, messages),
     messageStyleInstruction(rhythmCharacter),
     applyPromptPlaceholders(prompts.memoryRules, state, character, room, messages),
-    applyPromptPlaceholders(prompts.stickerRules, state, character, room, messages),
+    capabilities.stickers ? applyPromptPlaceholders(prompts.stickerRules, state, character, room, messages) : '',
     applyPromptPlaceholders(prompts.jsonFormat, state, character, room, messages),
     'Return valid JSON only, with no markdown fences. Visible content must contain only the character new reply. Never echo, rewrite, summarize, or delete the latest user message.'
   ];
-  const system = compilePromptBlocks(systemParts.map((content, index) => ({
+  const system = compilePromptBlocks(systemParts.map((part, index): PromptBlock => typeof part === 'string' ? {
     id: `direct.system.${index}`,
-    content,
+    content: part,
     required: index === 0 || index >= systemParts.length - 7,
     priority: systemParts.length - index,
-  }))).content;
+  } : part)).content;
   const userParts = [
     `Recent private DM timeline with ${character.name}:\n${transcript || '(empty)'}`,
     `Latest user message: ${latestUserText}`,

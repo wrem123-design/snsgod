@@ -68,7 +68,13 @@ export function privateMemoryPromptBlock(state: SNSGodState, room: SNSGodRoom, c
   return pieces.join('\n\n');
 }
 
-export function groupMemoryPromptBlock(state: SNSGodState, roomId: string, participants: SNSGodCharacter[], latestText: string): string {
+export function groupMemoryPromptBlock(
+  state: SNSGodState,
+  roomId: string,
+  participants: SNSGodCharacter[],
+  latestText: string,
+  options: { includePrivateHints?: boolean } = {},
+): string {
   const groupSummary = latestGroupSummary(state, roomId);
   const participantIds = participants.map(character => character.id);
   const publicMemories = (state.characterMemories || [])
@@ -77,7 +83,7 @@ export function groupMemoryPromptBlock(state: SNSGodState, roomId: string, parti
     .filter(memory => memory.knownByCharacterIds.some(id => participantIds.includes(id)))
     .sort((a, b) => scoreMemory(b, latestText) - scoreMemory(a, latestText))
     .slice(0, 8);
-  const privateHints = participants
+  const privateHints = options.includePrivateHints !== false ? participants
     .map(character => {
       const relevant = selectRelevantMemories(state, character.id, latestText, {
         includePrivate: true,
@@ -91,7 +97,7 @@ export function groupMemoryPromptBlock(state: SNSGodState, roomId: string, parti
       if (!memories.length) return '';
       return `${character.name}: ${memories.map(memory => memory.content).join(' / ')}`;
     })
-    .filter(Boolean);
+    .filter(Boolean) : [];
   return [
     groupSummary ? [
       `Current group room summary: ${groupSummary.summary}`,

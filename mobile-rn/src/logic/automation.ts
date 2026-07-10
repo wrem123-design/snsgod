@@ -12,7 +12,9 @@ import { notifyRoomMessage, pushNotification } from './notifications';
 import { runDailyDiaryMemory } from './dailyDiary';
 import { characterReferenceImages, randomReferenceImage } from './imageReference';
 import { characterWithConversationRhythm, conversationRhythmInstruction } from './conversationRhythm';
-import { groupMemoryPromptBlock } from './memoryBridge';
+import { groupMemoryPromptBlock, privateMemoryPromptBlock } from './memoryBridge';
+import { canonicalPersonaBlocks, canonicalPersonaContextBlocks, canonicalPersonaCoreBlocks } from './canonicalPersona';
+import { compilePromptBlocks, PromptBlock } from './promptCompiler';
 import { maybeCreateBackgroundAutoSNSPost } from './sns';
 import { refreshCharacterWorldState, resolveCharacterRuntimeState } from './characterWorld';
 import { proactiveDecision } from './proactivePolicy';
@@ -211,14 +213,25 @@ async function runCalendarEvent(state: SNSGodState): Promise<SNSGodState | undef
     if (!event) continue;
     const marker = `${character.id}:${event.id || event.title}:${todayKey()}`;
     if (sent[marker]) continue;
-    const prompt = [
+    const personaBlocks = canonicalPersonaBlocks(character, state.config.language || 'Korean', {
+      userVisibleName: userNameFor(state, character, room),
+      userProfile: userProfileFor(state, character),
+      relationshipNote: room.relationshipNote,
+      memoryBlock: privateMemoryPromptBlock(state, room, character, String(event.title || event.prompt || '')),
+      memoryVisibility: 'private',
+    });
+    const promptParts = [
       { ...DEFAULT_PROMPTS, ...(state.config.prompts || {}) }.systemRules,
+      ...personaBlocks,
       `Act as ${character.name}. Today is this event: ${event.title}.`,
       event.prompt || 'Start a private DM that naturally acknowledges the event.',
-      `User visible name: ${userNameFor(state, character, room)}.`,
-      `Character profile: ${character.prompt || '(empty)'}`,
-      'Return only JSON: {"reactionDelay":0,"messages":[{"content":"short natural Korean message"}]}.'
-    ].join('\n\n');
+      'Return only JSON: {"reactionDelay":0,"messages":[{"content":"short natural message in the canonical language"}]}.'
+    ];
+    const prompt = compilePromptBlocks(promptParts.map((part, index): PromptBlock => typeof part === 'string' ? {
+      id: `proactive.calendar.${index}`,
+      content: part,
+      priority: promptParts.length - index,
+    } : part)).content;
     const { reply, keyIndex } = await callLLM(state, [{ role: 'system', content: prompt }]);
     let next: SNSGodState = {
       ...state,
@@ -541,20 +554,30 @@ async function runPrivateFirstMessage(state: SNSGodState, firstMessageOnly: bool
   const { character, room } = candidates[Math.floor(Math.random() * candidates.length)];
   const messages = (state.messages[room.id] || []).slice(-8);
   const transcript = messages.map(message => `${message.role === 'user' ? userNameFor(state, character, room) : character.name}: ${message.content}`).join('\n');
-  const prompt = [
+  const personaBlocks = canonicalPersonaBlocks(character, state.config.language || 'Korean', {
+    userVisibleName: userNameFor(state, character, room),
+    userProfile: userProfileFor(state, character),
+    relationshipNote: room.relationshipNote,
+    memoryBlock: privateMemoryPromptBlock(state, room, character, transcript),
+    memoryVisibility: 'private',
+  });
+  const promptParts = [
     { ...DEFAULT_PROMPTS, ...(state.config.prompts || {}) }.systemRules,
+    ...personaBlocks,
     firstMessageOnly
       ? `Act as ${character.name}. Send the first natural private DM before the user starts the conversation.`
       : `Act as ${character.name}. Start a natural private DM first, without waiting for the user.`,
-    `User visible name: ${userNameFor(state, character, room)}.`,
-    `User profile: ${userProfileFor(state, character) || '(empty)'}`,
-    `Character profile: ${character.prompt || '(empty)'}`,
     `Recent chat:\n${transcript || '(empty)'}`,
     firstMessageOnly ? '' : proactiveInstruction(state, character, room.id),
     conversationRhythmInstruction(state, character),
     buildTimeRealityInstruction(state, character, 'proactive'),
-    'Return only JSON: {"reactionDelay":0,"messages":[{"content":"short natural Korean message"}]}.'
-  ].join('\n\n');
+    'Return only JSON: {"reactionDelay":0,"messages":[{"content":"short natural message in the canonical language"}]}.'
+  ];
+  const prompt = compilePromptBlocks(promptParts.map((part, index): PromptBlock => typeof part === 'string' ? {
+    id: `proactive.private.${index}`,
+    content: part,
+    priority: promptParts.length - index,
+  } : part)).content;
   let { reply, keyIndex } = await callLLM(state, [{ role: 'system', content: prompt }]);
   const nowContext = chatNowContext(state, character);
   const replyText = () => reply.messages.map(message => message.content || '').join('\n');
@@ -641,28 +664,40 @@ async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | u
     const character = participants.find(item => item.id === message.characterId);
     return `${character?.name || 'Character'}: ${message.content}`;
   }).join('\n');
-  const memoryBlock = groupMemoryPromptBlock(state, room.id, participants, transcript || room.relationshipNote || room.name);
+  const memoryBlock = groupMemoryPromptBlock(state, room.id, participants, transcript || room.relationshipNote || room.name, { includePrivateHints: false });
   const lastCharacterId = [...messages].reverse().find(message => message.role === 'character')?.characterId;
   const speakerHint = lastCharacterId === speaker.id
     ? 'The initially suggested speaker spoke recently, so it is okay to let someone else start if that feels more natural.'
     : `${speaker.name} is a good candidate to start, but not mandatory.`;
-  const prompt = [
+  const personaBlocks = [
+    ...participants.flatMap(character => canonicalPersonaCoreBlocks(character, state.config.language || 'Korean')),
+    ...canonicalPersonaContextBlocks(speaker, {
+      userVisibleName: state.config.userName || '나',
+      userProfile: state.config.userDescription,
+      relationshipNote: room.relationshipNote,
+      memoryBlock,
+      memoryVisibility: 'group_public',
+    }),
+  ];
+  const promptParts = [
     { ...DEFAULT_PROMPTS, ...(state.config.prompts || {}) }.systemRules,
+    ...personaBlocks,
     'This is a private fictional group messenger. Stay in character and return JSON only.',
     `Group room: ${room.name}.`,
-    `Allowed participants:\n${participants.map(character => `- ${character.id} (@${character.handle || character.id}) ${character.name}: ${character.prompt || '(empty)'}`).join('\n')}`,
-    `User profile: ${state.config.userDescription || '(empty)'}`,
-    `Room-only relationship/context note: ${room.relationshipNote || '(empty)'}`,
-    memoryBlock,
     `Recent group chat:\n${transcript || '(empty)'}`,
     speakerHint,
     'The user may be absent. The group can talk without directly addressing the user.',
     'Start or continue a natural group chat from the room mood, recent topic, current time, shared public memory, or one participant noticing something.',
     'The conversation may be one person talking twice, two people chatting with each other, several people reacting, or a topic drifting naturally. Not everyone needs to speak.',
     'Do not force every message to mention the user. Do not wait for the user. Do not narrate actions outside chat bubbles.',
-    'Write 1 to 6 Korean chat bubbles. Keep each bubble casual and messenger-like, with distinct voices.',
-    'Every message must include characterId from the allowed participants. Return raw JSON only: {"topic":"","conversationMode":"one_person|side_chat|everyone|topic_drift","messages":[{"characterId":"allowed id","content":"Korean chat bubble","delay":0}]}'
-  ].join('\n\n');
+    'Write 1 to 6 chat bubbles in each speaker canonical language. Keep each bubble casual and messenger-like, with distinct voices.',
+    'Every message must include characterId from the allowed participants. Return raw JSON only: {"topic":"","conversationMode":"one_person|side_chat|everyone|topic_drift","messages":[{"characterId":"allowed id","content":"chat bubble","delay":0}]}'
+  ];
+  const prompt = compilePromptBlocks(promptParts.map((part, index): PromptBlock => typeof part === 'string' ? {
+    id: `proactive.group.${index}`,
+    content: part,
+    priority: promptParts.length - index,
+  } : part)).content;
   const { text, keyIndex } = await callLLMText(state, [{ role: 'system', content: prompt }]);
   const parsed = parseJsonObject<GroupAutonomousPayload>(text);
   const normalizedItems = normalizeGroupAutonomousItems(parsed, speaker, participants, messages);

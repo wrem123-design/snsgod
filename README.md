@@ -67,6 +67,8 @@ Oracle Ubuntu 배포 절차는 [`docs/ORACLE_SERVER_DEPLOYMENT_GUIDE.md`](docs/O
 
 프롬프트 block 조립, trace, budget과 최신 사용자 입력 중복 방지 정책은 [`docs/PROMPT_COMPILER.md`](docs/PROMPT_COMPILER.md)를 참고하십시오.
 
+개인톡·단톡·선톡·통화가 공유하는 캐릭터 정체성·언어·기억 경계는 [`docs/CANONICAL_PERSONA_POLICY.md`](docs/CANONICAL_PERSONA_POLICY.md)를 참고하십시오.
+
 ## 검증 명령
 
 ```powershell

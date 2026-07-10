@@ -1,6 +1,6 @@
 import { RandomChatRoom, SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
 import { makeId } from './ids';
-import { MAX_ROOM_MESSAGES } from './limits';
+import { appendMessageToHistory } from './messageHistoryPolicy';
 import { updateRoomMemoryAfterAppend } from './memoryBridge';
 import { applyMessageToCharacterWorld } from './characterWorld';
 import { deleteCharacterCascade, deleteRoomCascade } from './deletionCascadePolicy';
@@ -76,7 +76,7 @@ export function createRoom(characterId: string, name = '기본 채팅'): SNSGodR
 
 export function appendMessage(state: SNSGodState, roomId: string, message: SNSGodMessage): SNSGodState {
   const room = findRoom(state, roomId);
-  const messages = { ...state.messages, [roomId]: [...(state.messages[roomId] || []), message].slice(-MAX_ROOM_MESSAGES) };
+  const messages = { ...state.messages, [roomId]: appendMessageToHistory(state.messages[roomId], message) };
   const chatRooms = { ...state.chatRooms };
   const randomChats = Array.isArray(state.randomChats)
     ? state.randomChats.map(item => item.id === roomId ? { ...item, lastActivity: message.createdAt } : item)

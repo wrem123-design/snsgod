@@ -9,7 +9,8 @@ import { callLLMText, generateImageDataUri, imagePromptWithoutCharacterName, par
 import { makeId } from '../logic/ids';
 import { formatMessageTime } from '../logic/time';
 import { chatBubbleLayoutFor, ChatBubbleLayout } from '../logic/chatBubbleLayout';
-import { MAX_CONTEXT_MESSAGES, MAX_GROUP_ROOM_MESSAGES } from '../logic/limits';
+import { MAX_CONTEXT_MESSAGES } from '../logic/limits';
+import { appendMessageToHistory, selectPromptContext } from '../logic/messageHistoryPolicy';
 import { MeetingEventSession, SNSGodCharacter, SNSGodMessage, SNSGodState, Sticker } from '../types';
 import { markRoomRead } from '../logic/notifications';
 import { beginChatJob, cancelChatJob, endChatJob, isCurrentChatJob, tryLockGeneratingRoom } from '../logic/chatJobs';
@@ -102,7 +103,7 @@ function appendGroupMessage(state: SNSGodState, roomId: string, message: SNSGodM
     ...state,
     messages: {
       ...state.messages,
-      [roomId]: [...(state.messages[roomId] || []), message].slice(-MAX_GROUP_ROOM_MESSAGES)
+      [roomId]: appendMessageToHistory(state.messages[roomId], message)
     },
     groupRooms: (state.groupRooms || []).map(item => item.id === roomId ? { ...item, lastActivity: message.createdAt } : item)
   }, roomId);
@@ -134,7 +135,7 @@ function participantNames(participants: SNSGodCharacter[]) {
 function buildGroupPrompt(state: SNSGodState, roomId: string, participants: SNSGodCharacter[], latestUserText: string) {
   const prompts = resolvedPrompts(state);
   const profile = state.config.apiProfiles[state.config.apiType] || {};
-  const messages = (state.messages[roomId] || []).slice(-Number(profile.contextMessageLimit || MAX_CONTEXT_MESSAGES));
+  const messages = selectPromptContext(state.messages[roomId], Number(profile.contextMessageLimit || MAX_CONTEXT_MESSAGES));
   const transcript = messages.map(message => {
     if (message.role === 'user') return `${state.config.userName || 'User'}: ${message.content}`;
     const character = participants.find(item => item.id === message.characterId);

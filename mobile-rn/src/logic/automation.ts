@@ -4,7 +4,8 @@ import { makeId } from './ids';
 import { DEFAULT_COVER_BACKGROUND_DIRECTION, DEFAULT_PROMPTS, LEGACY_COVER_BACKGROUND_DIRECTION, proactiveInstruction, userNameFor, userProfileFor } from './prompts';
 import { buildTimeRealityInstruction, chatNowContext, isImplausibleCompletedActivity, repairTimeRealityInstruction, softenImplausibleCompletedActivity } from './timeReality';
 import { appendMessage, findCharacter, isRoomDisabled } from './stateHelpers';
-import { MAX_GROUP_ROOM_MESSAGES, MAX_SNS_DM_CONTEXT_MESSAGES } from './limits';
+import { MAX_SNS_DM_CONTEXT_MESSAGES } from './limits';
+import { appendMessageToHistory } from './messageHistoryPolicy';
 import { GroupRoom, SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
 import { isRoomBusy } from './chatJobs';
 import { notifyRoomMessage, pushNotification } from './notifications';
@@ -136,7 +137,7 @@ function eligibleGroupRooms(state: SNSGodState): { room: GroupRoom; speaker: SNS
 function appendGroupMessage(state: SNSGodState, roomId: string, message: SNSGodMessage): SNSGodState {
   return {
     ...state,
-    messages: { ...state.messages, [roomId]: [...(state.messages[roomId] || []), message].slice(-MAX_GROUP_ROOM_MESSAGES) },
+    messages: { ...state.messages, [roomId]: appendMessageToHistory(state.messages[roomId], message) },
     groupRooms: (state.groupRooms || []).map(room => room.id === roomId ? { ...room, lastActivity: message.createdAt } : room)
   };
 }

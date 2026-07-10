@@ -1,5 +1,6 @@
 import { PromptSet, SNSGodCharacter, SNSGodRoom, SNSGodState } from '../types';
 import { MAX_CONTEXT_MESSAGES } from './limits';
+import { selectPromptContext } from './messageHistoryPolicy';
 import { lorePromptBlock, resolveActiveLore } from './loreEngine';
 import { buildTimeRealityInstruction } from './timeReality';
 import { characterWithConversationRhythm, conversationRhythmInstruction } from './conversationRhythm';
@@ -348,7 +349,7 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
   const rhythmCharacter = characterWithConversationRhythm(state, character);
   const prompts = resolvedPrompts(state);
   const contextLimit = Number(state.config.apiProfiles[state.config.apiType]?.contextMessageLimit || MAX_CONTEXT_MESSAGES);
-  const messages = (state.messages[room.id] || []).slice(-contextLimit);
+  const messages = selectPromptContext(state.messages[room.id], contextLimit);
   const latestImageData = options.latestUserImageData || latestUserImage(messages);
   const transcript = messages.filter(message => message.role === 'user' || message.role === 'character').map(message => {
     const speaker = message.role === 'user' ? userNameFor(state, character, room) : character.name;

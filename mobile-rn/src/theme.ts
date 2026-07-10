@@ -10,6 +10,7 @@ export const colors = {
   modalSurface: '#1d1d1d',
   successSoft: '#e7fff3',
   accent: '#f1d15b',
+  accentText: '#241a00',
   kakao: '#fee500',
   danger: '#ff665e',
   datingHeart: '#d0006f',

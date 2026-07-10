@@ -3,29 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 import { DEFAULT_PROMPTS } from '../logic/prompts';
 import { colors } from '../theme';
 import { PromptSet, SNSGodState } from '../types';
-
-const FIELDS: Array<{ key: keyof PromptSet; label: string }> = [
-  { key: 'systemRules', label: '시스템 규칙' },
-  { key: 'roleObjective', label: '역할/목표' },
-  { key: 'characterActing', label: '캐릭터 연기' },
-  { key: 'jsonFormat', label: '메시지 JSON 형식' },
-  { key: 'memoryRules', label: '메모리 생성' },
-  { key: 'stickerRules', label: '스티커 사용' },
-  { key: 'language', label: '언어' },
-  { key: 'adultBoundaryRules', label: '성인/미성년자 경계 규칙' },
-  { key: 'chatImageRules', label: '1:1 채팅 이미지 규칙' },
-  { key: 'groupChatImageRules', label: '단톡 이미지 규칙' },
-  { key: 'imageGenerationToneRules', label: '이미지 생성 톤/전역 규칙' },
-  { key: 'meetingEventRules', label: '만남 이벤트 발동 규칙' },
-  { key: 'blindDateCandidateRules', label: '블라인드/우연한 만남 후보 생성 규칙' },
-  { key: 'datingAppProfileRules', label: '데이트앱 프로필 생성 규칙' },
-  { key: 'randomCharacterRules', label: 'AI 랜덤 캐릭터 생성 규칙' },
-  { key: 'sumgodRules', label: '썸갓 성인 질문 응답 규칙' },
-  { key: 'snsPosting', label: 'SNS 게시' },
-  { key: 'snsSubjectGuide', label: 'SNS 주제 해석 규칙' },
-  { key: 'snsNsfwBackAccount', label: 'SNS NSFW 뒷계' },
-  { key: 'profileCreation', label: '캐릭터 생성' }
-];
+import { PROMPT_SETTING_DEFINITIONS } from '../logic/promptSettingsPolicy';
 
 export function PromptSettingsScreen({ state, onBack, onChange }: {
   state: SNSGodState;
@@ -52,7 +30,7 @@ export function PromptSettingsScreen({ state, onBack, onChange }: {
         <Pressable onPress={save} style={styles.save}><Text style={styles.saveText}>저장</Text></Pressable>
       </View>
       <ScrollView contentContainerStyle={styles.content}>
-        {FIELDS.map(field => (
+        {PROMPT_SETTING_DEFINITIONS.map(field => (
           <View key={field.key} style={styles.card}>
             <Text style={styles.label}>{field.label}</Text>
             <TextInput
@@ -62,7 +40,7 @@ export function PromptSettingsScreen({ state, onBack, onChange }: {
               multiline
               textAlignVertical="top"
             />
-            <Text style={styles.help}>비워두면 답변 품질이 크게 흔들릴 수 있습니다.</Text>
+            <Text style={styles.help}>{field.help}</Text>
           </View>
         ))}
       </ScrollView>
@@ -73,16 +51,16 @@ export function PromptSettingsScreen({ state, onBack, onChange }: {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   header: { minHeight: 72, paddingTop: 10, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.panel, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  back: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 21, backgroundColor: '#eee8dc' },
+  back: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 21, backgroundColor: colors.surfaceAlt },
   backText: { fontSize: 34, lineHeight: 36, color: colors.text },
   title: { flex: 1, color: colors.text, fontSize: 20, fontWeight: '900' },
-  secondary: { minHeight: 38, paddingHorizontal: 12, borderRadius: 8, backgroundColor: '#eee8dc', alignItems: 'center', justifyContent: 'center' },
+  secondary: { minHeight: 38, paddingHorizontal: 12, borderRadius: 8, backgroundColor: colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
   secondaryText: { color: colors.text, fontWeight: '900' },
   save: { minHeight: 38, paddingHorizontal: 14, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
-  saveText: { color: '#241a00', fontWeight: '900' },
+  saveText: { color: colors.accentText, fontWeight: '900' },
   content: { padding: 14, gap: 12 },
   card: { padding: 14, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panel, gap: 8 },
   label: { color: colors.text, fontWeight: '900' },
-  textarea: { minHeight: 120, borderWidth: 1, borderColor: colors.border, borderRadius: 7, paddingHorizontal: 12, paddingVertical: 10, color: colors.text, backgroundColor: '#fffefa' },
+  textarea: { minHeight: 120, borderWidth: 1, borderColor: colors.border, borderRadius: 7, paddingHorizontal: 12, paddingVertical: 10, color: colors.text, backgroundColor: colors.panelSoft },
   help: { color: colors.sub, fontSize: 12 }
 });

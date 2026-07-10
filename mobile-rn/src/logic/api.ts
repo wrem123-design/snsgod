@@ -872,6 +872,8 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
   const configuredTone = options.state ? configuredPrompt(options.state, 'imageGenerationToneRules') : '';
   const runtimeState = options.state && character ? resolveCharacterRuntimeState(options.state, character) : undefined;
   const continuity = runtimeState && character ? imageContinuityPromptBlock(character, runtimeState) : '';
+  const illustrationTags = String(character?.illustrationTags || '').trim();
+  const characterVisualIdentity = illustrationTags ? `Character visual identity tags: ${illustrationTags}` : '';
   const nsfw = config.nsfw
     ? `NSFW/private fictional adult image tone is enabled. ${configuredTone || 'Keep every depicted person clearly adult.'}`
     : configuredTone || 'Mature fictional adult tone is allowed when it fits the character and scene. Keep every depicted person clearly adult.';
@@ -892,6 +894,7 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
         : '',
       'Create a realistic horizontal cinematic still from an in-person meeting event, not a phone call, not a messenger screenshot, not SNS.',
       continuity,
+      characterVisualIdentity,
       'Show the fictional female character and the male user as two distinct people when the scene calls for both. Keep their clothing and posture grounded in the recent conversation, time, place, and mood.',
       prefix,
       globalRules,
@@ -926,13 +929,14 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
     return [
       'Use the attached reference image as the visual identity reference. Create the same person from the reference image, preserving face, hairstyle, and overall likeness.',
       continuity,
+      characterVisualIdentity,
       prefix,
       globalRules,
       `Requested scene: ${requested}`,
       nsfw
     ].filter(Boolean).join('\n');
   }
-  return [prefix, continuity, globalRules, `Requested image: ${requested}`, nsfw].filter(Boolean).join('\n');
+  return [prefix, continuity, characterVisualIdentity, globalRules, `Requested image: ${requested}`, nsfw].filter(Boolean).join('\n');
 }
 
 function normalizeGrokBaseUrl(value?: string): string {

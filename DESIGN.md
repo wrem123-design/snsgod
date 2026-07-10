@@ -6,10 +6,13 @@ The app uses warm messenger surfaces with soft contrast, compact controls, and c
 ## Color
 - app.bg: `#f7f4ed`
 - app.panel: `#fffdf7`
+- app.panelSoft: `#fffefa`
+- app.surfaceAlt: `#eee8dc`
 - app.text: `#27221b`
 - app.sub: `#766f64`
 - app.border: `#ded5c6`
 - app.accent: `#f1d15b`
+- app.accentText: `#241a00`
 - app.kakao: `#fee500`
 - app.danger: `#ff665e`
 - meeting.ink: `#edf2f6`

@@ -4,7 +4,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { Alert, NativeModules, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { exportFullBackupZip, importFullBackupZip } from '../logic/backup';
+import { exportFullBackupZip } from '../logic/backup';
 import { clearDebugLogs, DebugLogEntry, readDebugLogs } from '../logic/debugLog';
 import { inspectMediaFiles } from '../logic/media';
 import { getStorageDiagnostics, saveState } from '../storage/persist';
@@ -15,10 +15,10 @@ const TermuxBridge = NativeModules.TermuxBridge as undefined | {
   copyText: (text: string) => Promise<string>;
 };
 
-export function DebugScreen({ state, onBack, onRestoreState, onReloadState, onReloadBundle, onSaveNow }: {
+export function DebugScreen({ state, onBack, onRestoreFullBackup, onReloadState, onReloadBundle, onSaveNow }: {
   state: SNSGodState | null;
   onBack: () => void;
-  onRestoreState: (base: SNSGodState, state: SNSGodState) => Promise<void> | void;
+  onRestoreFullBackup: (base: SNSGodState, uri: string) => Promise<void> | void;
   onReloadState: (options?: { discardRuntime?: boolean }) => Promise<void> | void;
   onReloadBundle: () => Promise<void> | void;
   onSaveNow: () => Promise<void> | void;
@@ -167,13 +167,14 @@ export function DebugScreen({ state, onBack, onRestoreState, onReloadState, onRe
     try {
       const picked = await DocumentPicker.getDocumentAsync({ type: ['application/zip', 'application/x-zip-compressed', '*/*'], copyToCacheDirectory: true });
       if (picked.canceled || !picked.assets?.[0]) return;
-      const imported = await importFullBackupZip(picked.assets[0].uri);
       if (!state) throw new Error('현재 state가 아직 준비되지 않았습니다.');
-      await onRestoreState(state, imported);
+      await onRestoreFullBackup(state, picked.assets[0].uri);
       setStatus('전체 백업에서 복구하고 화면 데이터도 갱신했습니다.');
       await refresh();
     } catch (error) {
-      setStatus(`전체 백업 복구 실패: ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(`전체 백업 복구 실패: ${message}`);
+      Alert.alert('전체 백업 복구 실패', message);
     }
   }
 

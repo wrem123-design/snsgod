@@ -60,6 +60,7 @@ import { hasSameServerIdentity, mergeStaleState } from './logic/staleStateMergeP
 import { canCommitRuntimeEpoch } from './logic/runtimeEpochPolicy';
 import { getSumGodProgress, invalidateSumGodBackupWrites, replaceSumGodBackup } from './logic/sumgod';
 import { resetDatingImageQueue } from './logic/datingApp';
+import { importFullBackupZip, type PreparedFullBackupRestore } from './logic/backup';
 
 const INTERRUPTED_REPLY_RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MEDIA_REPLACEMENT_CACHE_TTL_MS = 30_000;
@@ -864,15 +865,15 @@ export default function App() {
     }
   }
 
-  async function restoreImportedState(base: SNSGodState, imported: SNSGodState): Promise<void> {
-    if (restoringRef.current) return;
+  async function executeImportedStateRestore(
+    base: SNSGodState,
+    prepare: () => Promise<Pick<PreparedFullBackupRestore, 'state'> & Partial<Pick<PreparedFullBackupRestore, 'rollback'>>>,
+  ): Promise<void> {
+    if (restoringRef.current) throw new Error('다른 백업을 복원하는 중입니다.');
     const currentBeforeRestore = stateRef.current;
     if (currentBeforeRestore && !Object.is(currentBeforeRestore.__importedAt, base.__importedAt)) {
       throw new Error('이 파일을 읽는 동안 다른 복구가 완료되어 이전 복구 요청을 취소했습니다.');
     }
-    const candidate = currentBeforeRestore && currentBeforeRestore !== base
-      ? mergeStaleState(currentBeforeRestore, base, imported, { intent: 'import' })
-      : imported;
     restoringRef.current = true;
     runtimeEpochRef.current += 1;
     cancelAllChatJobs();
@@ -886,8 +887,15 @@ export default function App() {
       clearTimeout(incomingTimerRef.current);
       incomingTimerRef.current = null;
     }
+    let prepared: Awaited<ReturnType<typeof prepare>> | undefined;
+    let stateImportStarted = false;
     try {
       await flushSaveState(undefined, { reason: 'before full backup import' });
+      prepared = await prepare();
+      const candidate = currentBeforeRestore && currentBeforeRestore !== base
+        ? mergeStaleState(currentBeforeRestore, base, prepared.state, { intent: 'import' })
+        : prepared.state;
+      stateImportStarted = true;
       await importState(candidate, JSON.stringify(candidate));
       const next = clearRuntimeOnlyState(await loadState());
       await replaceSumGodBackup(
@@ -908,17 +916,45 @@ export default function App() {
       setRuntimeReloadNonce(value => value + 1);
       void appendDebugLog('debug', `full backup restored: characters=${next.characters.length}`);
     } catch (error) {
-      const current = stateRef.current;
-      if (current) {
-        const recovered = clearRuntimeOnlyState(current);
+      const rollbackErrors: Error[] = [];
+      if (prepared?.rollback) {
+        try {
+          await prepared.rollback();
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError)));
+        }
+      }
+      if (stateImportStarted && currentBeforeRestore) {
+        try {
+          await importState(currentBeforeRestore, JSON.stringify(currentBeforeRestore));
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError)));
+        }
+      }
+      if (currentBeforeRestore) {
+        const recovered = clearRuntimeOnlyState(currentBeforeRestore);
         stateRef.current = recovered;
         setState(recovered);
       }
       setRuntimeReloadNonce(value => value + 1);
+      if (rollbackErrors.length) {
+        throw new AggregateError(
+          [error instanceof Error ? error : new Error(String(error)), ...rollbackErrors],
+          '백업 복원에 실패했고 일부 rollback도 완료하지 못했습니다.',
+        );
+      }
       throw error;
     } finally {
       restoringRef.current = false;
     }
+  }
+
+  async function restoreImportedState(base: SNSGodState, imported: SNSGodState): Promise<void> {
+    await executeImportedStateRestore(base, async () => ({ state: imported }));
+  }
+
+  async function restoreFullBackup(base: SNSGodState, uri: string): Promise<void> {
+    await executeImportedStateRestore(base, () => importFullBackupZip(uri));
   }
 
   async function reloadSavedState(options: { discardRuntime?: boolean } = {}) {
@@ -1126,6 +1162,7 @@ export default function App() {
           onChange={commitRenderedState}
           onCommitCurrent={commitRenderedCurrentForScreen}
           onRestoreState={restoreImportedState}
+          onRestoreFullBackup={restoreFullBackup}
           onBack={goBackRendered}
           onOpenLorebook={() => navigateRendered({ name: 'lorebook' })}
           onOpenPrompts={() => navigateRendered({ name: 'prompts' })}
@@ -1166,7 +1203,7 @@ export default function App() {
           onTrashMediaCleanup={trashCurrentUnreachableMedia}
         />
       ) : route.name === 'debug' ? (
-        <DebugScreen state={state} onBack={goBackRendered} onRestoreState={restoreImportedState} onReloadState={reloadSavedState} onReloadBundle={reloadBundle} onSaveNow={() => flushSaveState(stateRef.current || undefined, {
+        <DebugScreen state={state} onBack={goBackRendered} onRestoreFullBackup={restoreFullBackup} onReloadState={reloadSavedState} onReloadBundle={reloadBundle} onSaveNow={() => flushSaveState(stateRef.current || undefined, {
           backup: 'force',
           verify: 'full',
           reason: 'debug manual save',

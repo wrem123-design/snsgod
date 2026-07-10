@@ -1298,7 +1298,7 @@ test('route-bound navigation cannot hijack the user while background state work 
 
 test('restore resets auxiliary queues and binds the SumGod sidecar to the imported generation', () => {
   const restoreSource = appSource.slice(
-    appSource.indexOf('async function restoreImportedState'),
+    appSource.indexOf('async function executeImportedStateRestore'),
     appSource.indexOf('async function reloadSavedState'),
   );
 
@@ -1361,14 +1361,15 @@ test('DatingApp generation uses a synchronous in-flight guard across mount effec
 
 test('full backup restore reloads imported state without flushing stale runtime state over it', () => {
   const restoreSource = appSource.slice(
-    appSource.indexOf('async function restoreImportedState'),
+    appSource.indexOf('async function executeImportedStateRestore'),
     appSource.indexOf('async function reloadSavedState'),
   );
 
-  assert.match(debugScreenSource, /await onRestoreState\(state, imported\)/);
+  assert.match(debugScreenSource, /await onRestoreFullBackup\(state, picked\.assets\[0\]\.uri\)/);
   assert.match(settingsScreenSource, /await onRestoreState\(state, next\)/);
+  assert.match(settingsScreenSource, /onRestoreFullBackup\(state, uri\)/);
   assert.match(debugScreenSource, /전체 백업에서 복구하고 화면 데이터도 갱신했습니다/);
-  assert.match(restoreSource, /mergeStaleState\(currentBeforeRestore, base, imported, \{ intent: 'import' \}\)/);
+  assert.match(restoreSource, /mergeStaleState\(currentBeforeRestore, base, prepared\.state, \{ intent: 'import' \}\)/);
   assert.match(restoreSource, /restoringRef\.current = true/);
   assert.match(restoreSource, /runtimeEpochRef\.current \+= 1/);
   assert.match(restoreSource, /cancelAllChatJobs\(\)/);
@@ -1376,6 +1377,7 @@ test('full backup restore reloads imported state without flushing stale runtime 
   assert.match(restoreSource, /meetingEventWorkRef\.current\.clear\(\)/);
   assert.match(restoreSource, /await flushSaveState\(undefined, \{ reason: 'before full backup import' \}\)/);
   assert.match(restoreSource, /await importState\(candidate, JSON\.stringify\(candidate\)\)/);
+  assert.match(restoreSource, /await importState\(currentBeforeRestore, JSON\.stringify\(currentBeforeRestore\)\)/);
   assert.match(restoreSource, /clearRuntimeOnlyState\(await loadState\(\)\)/);
   assert.match(restoreSource, /setRuntimeReloadNonce\(value => value \+ 1\)/);
   assert.match(restoreSource, /catch \(error\)[\s\S]*?setState\(recovered\)[\s\S]*?setRuntimeReloadNonce/);

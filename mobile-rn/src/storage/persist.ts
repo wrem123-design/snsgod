@@ -8,7 +8,8 @@ import { ensureCharacterRooms, normalizeRandomChats } from '../logic/stateHelper
 import { MAX_GROUP_ROOM_MESSAGES, MAX_ROOM_MESSAGES, STATE_SCHEMA_VERSION } from '../logic/limits';
 import { normalizeLoreEntries } from '../logic/loreEngine';
 import { normalizeNotifications } from '../logic/notifications';
-import { externalizeStateMedia, inspectMediaFiles, MEDIA_MANIFEST_FILE, MEDIA_ROOT_DIR } from '../logic/media';
+import { externalizeStateMediaWithResult, inspectMediaFiles, MEDIA_MANIFEST_FILE, MEDIA_ROOT_DIR } from '../logic/media';
+import { applyStateMediaUriReplacements, type StateMediaUriReplacement } from '../logic/stateMediaPolicy';
 import { normalizeSumGodState } from '../logic/sumgod';
 import { migrateMemoryState } from '../logic/memoryPolicy';
 import {
@@ -72,12 +73,14 @@ type AsyncStoragePointer = {
 };
 type PersistedPayload = {
   snapshot: SNSGodState;
+  normalizedState: SNSGodState;
   payload: string;
   asyncPayload: string;
   stats: StorageStats;
   backupStats?: StorageStats;
   fullSnapshot?: SNSGodState;
   fullPayload?: string;
+  mediaReplacements: StateMediaUriReplacement[];
 };
 export type PersistPerfEntry = {
   id: string;
@@ -103,6 +106,7 @@ export type SaveStateOptions = {
   important?: boolean;
   reason?: string;
   defer?: boolean;
+  onMediaExternalized?: (replacements: readonly StateMediaUriReplacement[]) => void;
 };
 
 let lastHydrationSource: StorageSource = 'default';
@@ -110,6 +114,7 @@ let lastHydrationReason = 'not loaded yet';
 let lastSuccessfulSaveTime = 0;
 let lastSaveError = '';
 let lastAsyncStorageWarning = '';
+let lastMediaRuntimeSyncWarning = '';
 let lastSkippedOldRevisionSave = '';
 let lastAtomicBackupWriteResult = 'not written yet';
 let lastBackupSnapshotTime = 0;
@@ -193,7 +198,8 @@ function mergeSaveOptions(current: SaveStateOptions | undefined, next: SaveState
     verify: verifyRank[nextVerify] > verifyRank[currentVerify] ? nextVerify : currentVerify,
     important: Boolean(current?.important || next?.important),
     defer: current?.defer !== false && next?.defer !== false,
-    reason: next?.reason || current?.reason
+    reason: next?.reason || current?.reason,
+    onMediaExternalized: next?.onMediaExternalized || current?.onMediaExternalized,
   };
 }
 
@@ -278,7 +284,7 @@ async function writeStateNow(state: SNSGodState, options: SaveStateOptions = {})
         return;
       }
       await perf.measure('SQLite write', () => writeSqliteState(prepared.payload, prepared.snapshot, prepared.stats));
-      await perf.measure('messages write', () => writeMessagesState(prepared.fullSnapshot?.messages || state.messages || {}));
+      await perf.measure('messages write', () => writeMessagesState(prepared.normalizedState.messages || {}));
       lastSQLiteSaveTime = Date.now();
       if (writeBackup) {
         await perf.measure('backup write', () => writeBackupFile(prepared.fullPayload || prepared.payload, prepared.fullSnapshot || prepared.snapshot, options.reason || (options.important ? 'important save' : 'scheduled snapshot'), prepared.backupStats || prepared.stats));
@@ -295,6 +301,17 @@ async function writeStateNow(state: SNSGodState, options: SaveStateOptions = {})
       persistedWriteSeq = prepared.stats.writeSeq;
       lastSuccessfulSaveTime = Date.now();
       lastSaveError = '';
+      if (prepared.mediaReplacements.length && pendingState) {
+        pendingState = applyStateMediaUriReplacements(pendingState, prepared.mediaReplacements);
+      }
+      if (prepared.mediaReplacements.length && options.onMediaExternalized) {
+        try {
+          options.onMediaExternalized(prepared.mediaReplacements);
+          lastMediaRuntimeSyncWarning = '';
+        } catch (error) {
+          lastMediaRuntimeSyncWarning = error instanceof Error ? error.message : String(error);
+        }
+      }
       const totalMs = Math.round(perfNow() - totalStart);
       recordPersistPerf({
         id: `${lastSuccessfulSaveTime}-${prepared.stats.writeSeq}`,
@@ -376,7 +393,7 @@ async function flushPendingStateNow(): Promise<void> {
 export async function importState(state: SNSGodState, originalJson: string): Promise<SNSGodState> {
   const prepared = await preparePersistedPayload({ ...state, __importedAt: Date.now(), __revision: Math.max(Number(state.__revision || 0), persistedRevision) + 1 }, { includeFullBackupPayload: true });
   await writeSqliteState(prepared.payload, prepared.snapshot);
-  await writeMessagesState(prepared.fullSnapshot?.messages || state.messages || {});
+  await writeMessagesState(prepared.normalizedState.messages || {});
   await writeBackupFile(prepared.fullPayload || prepared.payload, prepared.fullSnapshot || prepared.snapshot, 'import state');
   await writeAsyncStoragePointer(prepared, originalJson).catch(error => {
     lastAsyncStorageWarning = `AsyncStorage import pointer warning: ${error instanceof Error ? error.message : String(error)}`;
@@ -433,11 +450,11 @@ function mergeCriticalBackups(
 async function preparePersistedPayload(state: SNSGodState, options: { includeFullBackupPayload?: boolean; perf?: ReturnType<typeof createPersistPerfCollector> } = {}): Promise<PersistedPayload> {
   const perf = options.perf;
   const externalized = perf
-    ? await perf.measure('externalizeStateMedia', () => externalizeStateMedia(state))
-    : await externalizeStateMedia(state);
+    ? await perf.measure('externalizeStateMedia', () => externalizeStateMediaWithResult(state))
+    : await externalizeStateMediaWithResult(state);
   const normalized = perf
-    ? perf.measureSync('normalizeState', () => normalizeState(externalized))
-    : normalizeState(externalized);
+    ? perf.measureSync('normalizeState', () => normalizeState(externalized.state))
+    : normalizeState(externalized.state);
   const counts = perf
     ? perf.measureSync('storage counts', () => getStorageCounts(normalized))
     : getStorageCounts(normalized);
@@ -454,7 +471,17 @@ async function preparePersistedPayload(state: SNSGodState, options: { includeFul
     : undefined;
   const stats = statsFromSnapshot(snapshot);
   const backupStats = fullSnapshot ? statsFromSnapshot(fullSnapshot) : undefined;
-  return { snapshot, payload, asyncPayload, stats, backupStats, fullSnapshot, fullPayload };
+  return {
+    snapshot,
+    normalizedState: normalized,
+    payload,
+    asyncPayload,
+    stats,
+    backupStats,
+    fullSnapshot,
+    fullPayload,
+    mediaReplacements: externalized.replacements,
+  };
 }
 
 async function cleanupLegacyAsyncStorageState(authoritativeState: SNSGodState): Promise<void> {
@@ -1108,6 +1135,7 @@ export async function getStorageDiagnostics(currentState?: SNSGodState | null) {
       lastSuccessfulSaveTime,
       lastSaveError,
       lastAsyncStorageWarning,
+      lastMediaRuntimeSyncWarning,
       lastSkippedOldRevisionSave,
       lastAtomicBackupWriteResult,
       skippedSaveBeforeHydrationCount,

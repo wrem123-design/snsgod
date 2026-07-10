@@ -65,6 +65,8 @@ Oracle Ubuntu 배포 절차는 [`docs/ORACLE_SERVER_DEPLOYMENT_GUIDE.md`](docs/O
 
 대화 원문 저장, 모델 context window, 채팅 화면 가상화의 경계는 [`docs/MESSAGE_RETENTION_POLICY.md`](docs/MESSAGE_RETENTION_POLICY.md)를 참고하십시오.
 
+프롬프트 block 조립, trace, budget과 최신 사용자 입력 중복 방지 정책은 [`docs/PROMPT_COMPILER.md`](docs/PROMPT_COMPILER.md)를 참고하십시오.
+
 ## 검증 명령
 
 ```powershell

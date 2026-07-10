@@ -1,6 +1,7 @@
 import { PromptSet, SNSGodCharacter, SNSGodRoom, SNSGodState } from '../types';
 import { MAX_CONTEXT_MESSAGES } from './limits';
 import { selectPromptContext } from './messageHistoryPolicy';
+import { compilePromptBlocks, withoutLatestUserInput } from './promptCompiler';
 import { lorePromptBlock, resolveActiveLore } from './loreEngine';
 import { buildTimeRealityInstruction } from './timeReality';
 import { characterWithConversationRhythm, conversationRhythmInstruction } from './conversationRhythm';
@@ -350,8 +351,9 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
   const prompts = resolvedPrompts(state);
   const contextLimit = Number(state.config.apiProfiles[state.config.apiType]?.contextMessageLimit || MAX_CONTEXT_MESSAGES);
   const messages = selectPromptContext(state.messages[room.id], contextLimit);
+  const transcriptMessages = withoutLatestUserInput(messages, latestUserText);
   const latestImageData = options.latestUserImageData || latestUserImage(messages);
-  const transcript = messages.filter(message => message.role === 'user' || message.role === 'character').map(message => {
+  const transcript = transcriptMessages.filter(message => message.role === 'user' || message.role === 'character').map(message => {
     const speaker = message.role === 'user' ? userNameFor(state, character, room) : character.name;
     const body = messageTimelineText(message);
     return body ? `[${formatMessageDateTimeLabel(message.createdAt)}] ${speaker}: ${body}` : '';
@@ -376,7 +378,7 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
       'If you include imagePrompt, include it on exactly one message and make the visible content clearly introduce the photo naturally.',
       'Do not claim you attached a photo unless imagePrompt is included.'
     ].join(' ');
-  const system = [
+  const systemParts = [
     '## 1. Common mandatory rules',
     applyPromptPlaceholders(prompts.systemRules, state, character, room, messages),
     applyPromptPlaceholders(prompts.adultBoundaryRules, state, character, room, messages),
@@ -437,13 +439,24 @@ export function buildChatPrompt(state: SNSGodState, character: SNSGodCharacter, 
     applyPromptPlaceholders(prompts.stickerRules, state, character, room, messages),
     applyPromptPlaceholders(prompts.jsonFormat, state, character, room, messages),
     'Return valid JSON only, with no markdown fences. Visible content must contain only the character new reply. Never echo, rewrite, summarize, or delete the latest user message.'
-  ].filter(Boolean).join('\n\n');
-  const user = [
+  ];
+  const system = compilePromptBlocks(systemParts.map((content, index) => ({
+    id: `direct.system.${index}`,
+    content,
+    required: index === 0 || index >= systemParts.length - 7,
+    priority: systemParts.length - index,
+  }))).content;
+  const userParts = [
     `Recent private DM timeline with ${character.name}:\n${transcript || '(empty)'}`,
     `Latest user message: ${latestUserText}`,
     latestImageData ? 'Attached image: use the image input sent with this message as the latest user photo.' : '',
     `Reply as ${character.name} in JSON.`
-  ].filter(Boolean).join('\n\n');
+  ];
+  const user = compilePromptBlocks(userParts.map((content, index) => ({
+    id: `direct.user.${index}`,
+    content,
+    required: true,
+  }))).content;
   return [
     { role: 'system' as const, content: system },
     { role: 'user' as const, content: user, imageData: latestImageData, imageMimeType: imageMimeType(latestImageData) }

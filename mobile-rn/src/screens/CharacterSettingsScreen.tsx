@@ -682,7 +682,6 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
             />
             <Field label="캐릭터 프롬프트" value={String(draft.prompt || '')} onChangeText={value => set('prompt', value)} multiline />
             <Field label="삽화 외형 태그" value={String(draft.illustrationTags || '')} onChangeText={value => set('illustrationTags', value)} multiline help="AI 이미지 생성 시 캐릭터 외형 태그로 참고합니다." />
-            <Field label="첫 메시지" value={String(draft.firstMessage || '')} onChangeText={value => set('firstMessage', value)} multiline />
             <Field
               label={'\uC7A5\uAE30 \uC0AC\uC2E4 \uAE30\uC5B5'}
               value={memoryText}

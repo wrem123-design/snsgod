@@ -17,6 +17,8 @@ import { MAX_CONTEXT_MESSAGES } from '../logic/limits';
 import { editableForbiddenPromptRules } from '../logic/imagePromptRules';
 import { getRecommendedOptimizationStatus, maybePromptBatteryOptimizationExemption, RecommendedOptimizationStatus } from '../logic/backgroundAutomation';
 import { bootstrapServer, registerServerDevice, syncServerMessages } from '../logic/serverMessaging';
+import { withServerConnectionSettings } from '../logic/serverConnectionPolicy';
+import { mergeServerConnectionResult } from '../logic/staleStateMergePolicy';
 
 const PROVIDERS: ApiProvider[] = ['vertex', 'gemini', 'openai', 'anthropic', 'custom', 'grok'];
 const PROVIDER_PRESETS: Partial<Record<ApiProvider, { endpoint: string; model: string }[]>> = {
@@ -231,9 +233,11 @@ async function requestTermuxRunPermission(): Promise<boolean> {
   return result === PermissionsAndroid.RESULTS.GRANTED;
 }
 
-export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpenPrompts, onOpenCharacterSettings }: {
+export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreState, onBack, onOpenLorebook, onOpenPrompts, onOpenCharacterSettings }: {
   state: SNSGodState;
-  onChange: (next: SNSGodState, options?: { persist?: boolean }) => Promise<void> | void;
+  onChange: (next: SNSGodState, options?: { persist?: boolean; conflict?: 'incoming' | 'latest' }) => Promise<void> | void;
+  onCommitCurrent: (patch: (current: SNSGodState) => SNSGodState) => Promise<SNSGodState | undefined> | SNSGodState | undefined;
+  onRestoreState: (base: SNSGodState, imported: SNSGodState) => Promise<void> | void;
   onBack: () => void;
   onOpenLorebook?: () => void;
   onOpenPrompts?: () => void;
@@ -663,16 +667,19 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
         { role: 'system', content: 'Reply with one short Korean sentence confirming the API works.' },
         { role: 'user', content: 'SNSGod API 연결 테스트' }
       ]);
-      const activeProfile = next.config.apiProfiles[next.config.apiType] || {};
-      await onChange({
-        ...next,
-        config: {
-          ...next.config,
-          apiProfiles: {
-            ...next.config.apiProfiles,
-            [next.config.apiType]: { ...activeProfile, apiKeyIndex: result.keyIndex }
-          }
-        }
+      const requestProvider = next.config.apiType;
+      await onCommitCurrent(current => {
+        const currentProfile = current.config.apiProfiles[requestProvider] || {};
+        return {
+          ...current,
+          config: {
+            ...current.config,
+            apiProfiles: {
+              ...current.config.apiProfiles,
+              [requestProvider]: { ...currentProfile, apiKeyIndex: result.keyIndex },
+            },
+          },
+        };
       });
       setStatus(`API 테스트 성공: ${result.text.trim().slice(0, 180) || 'API 응답을 받았습니다.'}`);
     } catch (error) {
@@ -842,27 +849,27 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     if (saving) return;
     setSaving(true);
     try {
-      let next: SNSGodState = {
-        ...state,
-        config: {
-          ...state.config,
-          serverMessaging: {
-            ...(state.config.serverMessaging || {}),
-            enabled: true,
-            baseUrl: serverBaseUrl.trim().replace(/\/+$/, ''),
-            pairingSecret: serverPairingSecret.trim() || state.config.serverMessaging?.pairingSecret || '',
-            lastError: ''
-          }
-        }
-      };
+      const requestId = makeId('server-connection');
+      const requested = withServerConnectionSettings(state, {
+        baseUrl: serverBaseUrl,
+        pairingSecret: serverPairingSecret,
+        requestId,
+      });
+      await onChange(requested);
       if (connect) {
-        next = await registerServerDevice(next);
-        await onChange(next);
+        let next = await registerServerDevice(requested);
+        const registered = await onCommitCurrent(current => (
+          mergeServerConnectionResult(current, requested, next, requestId)
+        ));
+        if (registered?.config.serverMessaging?.connectionRequestId !== requestId) return;
         next = await bootstrapServer(next);
         next = await syncServerMessages(next);
+        const synchronized = await onCommitCurrent(current => (
+          mergeServerConnectionResult(current, requested, next, requestId, { requireIdentity: true })
+        ));
+        if (synchronized?.config.serverMessaging?.connectionRequestId !== requestId) return;
         setServerPairingSecret('');
       }
-      await onChange(next);
       setStatus(connect ? 'Oracle 메시지 서버 연결 및 초기 동기화 완료' : 'Oracle 메시지 서버 설정 저장 완료');
     } catch (error) {
       setStatus('Oracle 메시지 서버 설정 실패: ' + String(error instanceof Error ? error.message : error));
@@ -1219,7 +1226,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
       }
       const next = normalizeLegacyState(raw);
       setSaving(true);
-      await onChange({ ...next, __importedAt: Date.now() });
+      await onRestoreState(state, next);
       setImportJson('');
       setStatus(`임포트 완료: 캐릭터 ${next.characters.length}명, 방 ${Object.values(next.chatRooms).flat().length + (next.groupRooms?.length || 0)}개`);
     } catch (error) {

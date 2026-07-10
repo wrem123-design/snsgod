@@ -545,7 +545,7 @@ test('persistence publishes media replacements only after a successful current r
 test('the App patches the latest state directly without creating a persistence loop', () => {
   const helperSource = appSource.slice(
     appSource.indexOf('function applyPersistedMediaUris'),
-    appSource.indexOf('async function commit('),
+    appSource.indexOf('async function commitFromRenderedSnapshot'),
   );
 
   assert.match(helperSource, /const current = stateRef\.current/);

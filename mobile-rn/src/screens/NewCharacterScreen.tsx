@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors } from '../theme';
 import { SNSGodCharacter, SNSGodState } from '../types';
@@ -27,8 +27,12 @@ export function NewCharacterScreen({ state, onBack, onCreate }: {
   const [prompt, setPrompt] = useState('');
   const [firstMessage, setFirstMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const generationInFlightRef = useRef(false);
 
   async function aiGenerate() {
+    if (loading || generationInFlightRef.current) return;
+    generationInFlightRef.current = true;
+    const requested = { name, prompt, firstMessage };
     setLoading(true);
     try {
       const { text } = await callLLMText(state, [{
@@ -42,13 +46,14 @@ export function NewCharacterScreen({ state, onBack, onCreate }: {
           'persona, profile, description 같은 정보가 있다면 prompt 필드 안에 합쳐서 넣으세요.'
         ].join('\n')
       }]);
-      const parsed = normalizeGeneratedCharacter(text, name, prompt, firstMessage);
-      setName(parsed.name);
-      setPrompt(parsed.prompt);
-      setFirstMessage(parsed.firstMessage);
+      const parsed = normalizeGeneratedCharacter(text, requested.name, requested.prompt, requested.firstMessage);
+      setName(current => current === requested.name ? parsed.name : current);
+      setPrompt(current => current === requested.prompt ? parsed.prompt : current);
+      setFirstMessage(current => current === requested.firstMessage ? parsed.firstMessage : current);
     } catch (error) {
       Alert.alert('AI 생성 실패', error instanceof Error ? error.message : String(error));
     } finally {
+      generationInFlightRef.current = false;
       setLoading(false);
     }
   }
@@ -103,7 +108,7 @@ export function NewCharacterScreen({ state, onBack, onCreate }: {
         <Field label="이름" value={name} onChangeText={setName} />
         <Field label="캐릭터 프롬프트" value={prompt} onChangeText={setPrompt} multiline />
         <Field label="첫 메시지" value={firstMessage} onChangeText={setFirstMessage} multiline />
-        <Pressable onPress={create} style={styles.primary}><Text style={styles.primaryText}>캐릭터 추가</Text></Pressable>
+        <Pressable onPress={create} disabled={loading} style={[styles.primary, loading && styles.disabled]}><Text style={styles.primaryText}>캐릭터 추가</Text></Pressable>
       </ScrollView>
     </View>
   );
@@ -159,5 +164,6 @@ const styles = StyleSheet.create({
   primary: { minHeight: 48, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
   primaryText: { color: '#241a00', fontSize: 16, fontWeight: '900' },
   secondary: { minHeight: 46, borderRadius: 8, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.panel },
-  secondaryText: { color: colors.text, fontWeight: '900' }
+  secondaryText: { color: colors.text, fontWeight: '900' },
+  disabled: { opacity: 0.55 }
 });

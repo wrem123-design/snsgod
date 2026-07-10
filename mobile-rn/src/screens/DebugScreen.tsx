@@ -15,10 +15,11 @@ const TermuxBridge = NativeModules.TermuxBridge as undefined | {
   copyText: (text: string) => Promise<string>;
 };
 
-export function DebugScreen({ state, onBack, onReloadState, onReloadBundle, onSaveNow }: {
+export function DebugScreen({ state, onBack, onRestoreState, onReloadState, onReloadBundle, onSaveNow }: {
   state: SNSGodState | null;
   onBack: () => void;
-  onReloadState: () => Promise<void> | void;
+  onRestoreState: (base: SNSGodState, state: SNSGodState) => Promise<void> | void;
+  onReloadState: (options?: { discardRuntime?: boolean }) => Promise<void> | void;
   onReloadBundle: () => Promise<void> | void;
   onSaveNow: () => Promise<void> | void;
 }) {
@@ -167,8 +168,9 @@ export function DebugScreen({ state, onBack, onReloadState, onReloadBundle, onSa
       const picked = await DocumentPicker.getDocumentAsync({ type: ['application/zip', 'application/x-zip-compressed', '*/*'], copyToCacheDirectory: true });
       if (picked.canceled || !picked.assets?.[0]) return;
       const imported = await importFullBackupZip(picked.assets[0].uri);
-      await saveState({ ...imported, __importedAt: Date.now(), __revision: Number(imported.__revision || 0) + 1 }, { backup: 'force', verify: 'full', reason: 'full backup import' });
-      setStatus('전체 백업에서 복구했습니다. 저장 데이터 다시 읽기를 눌러 화면 state를 갱신하세요.');
+      if (!state) throw new Error('현재 state가 아직 준비되지 않았습니다.');
+      await onRestoreState(state, imported);
+      setStatus('전체 백업에서 복구하고 화면 데이터도 갱신했습니다.');
       await refresh();
     } catch (error) {
       setStatus(`전체 백업 복구 실패: ${error instanceof Error ? error.message : String(error)}`);

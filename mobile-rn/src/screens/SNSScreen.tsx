@@ -31,7 +31,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
   platform: SNSPost['platform'];
   onOpenSettings: () => void;
   onOpenNotifications: () => void;
-  onChange: (next: SNSGodState) => Promise<void> | void;
+  onChange: (next: SNSGodState, options?: { conflict?: 'incoming' | 'latest' }) => Promise<void> | void;
 }) {
   const availableCharacters = useMemo(() => state.characters.filter(character => character.randomTemporary !== true), [state.characters]);
   const sortedCharacters = useMemo(() => {
@@ -216,7 +216,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
       const draftState = stateWithDraftOptions();
       const draftCharacter = draftState.characters.find(character => character.id === selectedCharacter.id) || selectedCharacter;
       const next = await generateSNSPost(draftState, draftCharacter, platform, { manual: true, image: imageData || undefined });
-      await onChange(next);
+      await onChange(next, { conflict: 'latest' });
       setImageData('');
       setShowGenerator(false);
     } catch (error) {
@@ -448,38 +448,38 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
   function renderGeneratorPanel() {
     if (!showGenerator) return null;
     return (
-      <View style={[styles.generator, platform === 'twitter' && styles.xGenerator]}>
+      <View pointerEvents={loading ? 'none' : 'auto'} style={[styles.generator, platform === 'twitter' && styles.xGenerator, loading && styles.generatorBusy]}>
         <View style={styles.generatorTitleRow}>
           <Text style={[styles.generatorTitle, platform === 'twitter' && styles.xPanelText]}>{selectedCharacter?.name || '캐릭터'} SNS 설정</Text>
           {selectedCharacter ? (
-            <Pressable onPress={() => toggleCharacterPlatform(selectedCharacter)} style={[styles.generatorPower, activeSnsOptions.enabled !== false ? styles.generatorPowerOn : styles.generatorPowerOff]}>
+            <Pressable onPress={() => toggleCharacterPlatform(selectedCharacter)} disabled={loading} style={[styles.generatorPower, activeSnsOptions.enabled !== false ? styles.generatorPowerOn : styles.generatorPowerOff, loading && styles.disabled]}>
               <Text style={[styles.generatorPowerText, activeSnsOptions.enabled === false && styles.generatorPowerTextOff]}>{activeSnsOptions.enabled !== false ? 'ON' : 'OFF'}</Text>
             </Pressable>
           ) : null}
         </View>
         <Text style={[styles.generatorSub, platform === 'twitter' && styles.xSubtitle]}>{platform === 'instagram' ? 'Instagram 전용' : 'X 전용'} · 댓글 {draftCommentQty || '2-4'} · {draftAutoComments ? 'AI 댓글 자동' : 'AI 댓글 끔'} · {draftAnonymous ? '익명계' : '공개계'}{draftNsfw ? ' · NSFW 뒷계' : ''}</Text>
         <View style={styles.settingGrid}>
-          <TogglePill label="이 캐릭터 SNS 자동 생성 허용" value={snsAutoEnabled} onPress={() => setSnsAutoEnabled(value => !value)} />
-          <TogglePill label="익명계" value={draftAnonymous} onPress={() => setDraftAnonymous(value => !value)} />
-          <TogglePill label="NSFW 뒷계" value={draftNsfw} onPress={() => setDraftNsfw(value => !value)} />
-          <TogglePill label="글만" value={draftTextOnly} onPress={() => setDraftTextOnly(value => !value)} />
-          <TogglePill label="DM 끄기" value={draftNoDM} onPress={() => setDraftNoDM(value => !value)} />
-          <TogglePill label="제3자 DM 허용" value={draftThirdPartyDM} onPress={() => setDraftThirdPartyDM(value => !value)} />
-          <TogglePill label="AI 댓글 자동 생성" value={draftAutoComments} onPress={() => setDraftAutoComments(value => !value)} />
-          <TogglePill label="자동 이미지" value={draftAutoImage} onPress={() => setDraftAutoImage(value => !value)} />
+          <TogglePill label="이 캐릭터 SNS 자동 생성 허용" value={snsAutoEnabled} disabled={loading} onPress={() => setSnsAutoEnabled(value => !value)} />
+          <TogglePill label="익명계" value={draftAnonymous} disabled={loading} onPress={() => setDraftAnonymous(value => !value)} />
+          <TogglePill label="NSFW 뒷계" value={draftNsfw} disabled={loading} onPress={() => setDraftNsfw(value => !value)} />
+          <TogglePill label="글만" value={draftTextOnly} disabled={loading} onPress={() => setDraftTextOnly(value => !value)} />
+          <TogglePill label="DM 끄기" value={draftNoDM} disabled={loading} onPress={() => setDraftNoDM(value => !value)} />
+          <TogglePill label="제3자 DM 허용" value={draftThirdPartyDM} disabled={loading} onPress={() => setDraftThirdPartyDM(value => !value)} />
+          <TogglePill label="AI 댓글 자동 생성" value={draftAutoComments} disabled={loading} onPress={() => setDraftAutoComments(value => !value)} />
+          <TogglePill label="자동 이미지" value={draftAutoImage} disabled={loading} onPress={() => setDraftAutoImage(value => !value)} />
         </View>
         <View style={styles.twoCols}>
           <View style={styles.col}>
             <Text style={[styles.fieldLabel, platform === 'twitter' && styles.xSubtitle]}>생성 댓글 수</Text>
-            <TextInput value={draftCommentQty} onChangeText={setDraftCommentQty} onFocus={() => liftGeneratorField(64)} style={[styles.fieldInput, platform === 'twitter' && styles.xInput]} placeholder="2-4" placeholderTextColor="#8c8c8c" />
+            <TextInput value={draftCommentQty} editable={!loading} onChangeText={setDraftCommentQty} onFocus={() => liftGeneratorField(64)} style={[styles.fieldInput, platform === 'twitter' && styles.xInput]} placeholder="2-4" placeholderTextColor="#8c8c8c" />
           </View>
           <View style={styles.col}>
             <Text style={[styles.fieldLabel, platform === 'twitter' && styles.xSubtitle]}>무드</Text>
-            <TextInput value={draftMood} onChangeText={setDraftMood} onFocus={() => liftGeneratorField(64)} style={[styles.fieldInput, platform === 'twitter' && styles.xInput]} placeholder="그날 기분에 따라" placeholderTextColor="#8c8c8c" />
+            <TextInput value={draftMood} editable={!loading} onChangeText={setDraftMood} onFocus={() => liftGeneratorField(64)} style={[styles.fieldInput, platform === 'twitter' && styles.xInput]} placeholder="그날 기분에 따라" placeholderTextColor="#8c8c8c" />
           </View>
         </View>
         <Text style={[styles.fieldLabel, platform === 'twitter' && styles.xSubtitle]}>소재</Text>
-        <TextInput value={draftSubject} onChangeText={setDraftSubject} onFocus={() => liftGeneratorField(136)} style={[styles.fieldInput, styles.subjectInput, platform === 'twitter' && styles.xInput]} placeholder="일상 잡담, 짧은 트윗, 방금 대화 등 원하는 방향" placeholderTextColor="#8c8c8c" multiline />
+        <TextInput value={draftSubject} editable={!loading} onChangeText={setDraftSubject} onFocus={() => liftGeneratorField(136)} style={[styles.fieldInput, styles.subjectInput, platform === 'twitter' && styles.xInput]} placeholder="일상 잡담, 짧은 트윗, 방금 대화 등 원하는 방향" placeholderTextColor="#8c8c8c" multiline />
         <View style={styles.optionBadges}>
           <Text style={[styles.optionBadge, platform === 'twitter' && styles.xOptionBadge]}>{draftTextOnly ? '글만' : draftAutoImage ? '이미지 가능' : '이미지 끔'}</Text>
           <Text style={[styles.optionBadge, platform === 'twitter' && styles.xOptionBadge]}>{draftNoDM ? 'DM 끔' : draftThirdPartyDM ? '제3자 DM 허용' : 'DM 가능'}</Text>
@@ -487,10 +487,10 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
         </View>
         {imageData ? <Image source={{ uri: imageData }} style={styles.pendingImage} /> : null}
         <View style={styles.generatorActions}>
-          <Pressable onPress={choosePostImage} style={styles.secondary}><Text style={styles.secondaryText}>{imageData ? '사진 변경' : '사진 첨부'}</Text></Pressable>
-          {imageData ? <Pressable onPress={clearPostImage} style={styles.secondary}><Text style={styles.secondaryText}>첨부 해제</Text></Pressable> : null}
+          <Pressable onPress={choosePostImage} disabled={loading} style={[styles.secondary, loading && styles.disabled]}><Text style={styles.secondaryText}>{imageData ? '사진 변경' : '사진 첨부'}</Text></Pressable>
+          {imageData ? <Pressable onPress={clearPostImage} disabled={loading} style={[styles.secondary, loading && styles.disabled]}><Text style={styles.secondaryText}>첨부 해제</Text></Pressable> : null}
         </View>
-        <Pressable onPress={saveSnsOptions} style={styles.secondary}><Text style={styles.secondaryText}>옵션 저장</Text></Pressable>
+        <Pressable onPress={saveSnsOptions} disabled={loading} style={[styles.secondary, loading && styles.disabled]}><Text style={styles.secondaryText}>옵션 저장</Text></Pressable>
         <Pressable onPress={generate} style={styles.primary} disabled={loading || !selectedCharacter}>
           {loading ? <ActivityIndicator color="#241a00" /> : <Text style={styles.primaryText}>SNS 생성</Text>}
         </Pressable>
@@ -564,7 +564,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
           <Text style={[styles.subtitle, platform === 'twitter' && styles.xSubtitle]}>{selectedCharacter?.name || '전체'} · {posts.length} posts{activeSnsOptions.nsfw ? ' · NSFW 뒷계' : ''}</Text>
         </View>
         <View style={styles.headerActions}>
-          <Pressable accessibilityLabel="SNS" onPress={() => setShowGenerator(value => !value)} style={[styles.actionPill, platform === 'twitter' && styles.xActionPill, showGenerator && styles.actionPillActive, platform === 'twitter' && showGenerator && styles.xActionPillActive]}>
+          <Pressable accessibilityLabel="SNS" onPress={() => setShowGenerator(value => !value)} disabled={loading} style={[styles.actionPill, platform === 'twitter' && styles.xActionPill, showGenerator && styles.actionPillActive, platform === 'twitter' && showGenerator && styles.xActionPillActive, loading && styles.disabled]}>
             <Text style={[styles.actionPillText, platform === 'twitter' && styles.xActionPillText, showGenerator && styles.actionPillTextActive, platform === 'twitter' && showGenerator && styles.xActionPillTextActive]}>SNS</Text>
           </Pressable>
           <Pressable accessibilityLabel="SNS DM" onPress={() => setShowDmList(value => !value)} style={[styles.roundIcon, platform === 'twitter' && styles.xRoundIcon, showDmList && styles.roundIconActive]}>
@@ -583,10 +583,10 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
           data={sortedCharacters}
           keyExtractor={item => item.id}
           contentContainerStyle={styles.characterRailContent}
-          ListHeaderComponent={<AllCharacterChip active={!selectedCharacterId} platform={platform} onPress={() => setSelectedCharacterId('')} />}
+          ListHeaderComponent={<AllCharacterChip active={!selectedCharacterId} platform={platform} disabled={loading} onPress={() => setSelectedCharacterId('')} />}
           renderItem={({ item }) => {
             const enabled = snsOptionsFor(state, platform, item).enabled !== false;
-            return <CharacterChip character={item} active={item.id === selectedCharacterId} enabled={enabled} platform={platform} onPress={() => setSelectedCharacterId(item.id === selectedCharacterId ? '' : item.id)} />;
+            return <CharacterChip character={item} active={item.id === selectedCharacterId} enabled={enabled} platform={platform} disabled={loading} onPress={() => setSelectedCharacterId(item.id === selectedCharacterId ? '' : item.id)} />;
           }}
         />
       </View>
@@ -627,9 +627,9 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
   );
 }
 
-function TogglePill({ label, value, onPress }: { label: string; value: boolean; onPress: () => void }) {
+function TogglePill({ label, value, disabled, onPress }: { label: string; value: boolean; disabled?: boolean; onPress: () => void }) {
   return (
-    <Pressable onPress={onPress} style={[styles.togglePill, value && styles.togglePillOn]}>
+    <Pressable onPress={onPress} disabled={disabled} style={[styles.togglePill, value && styles.togglePillOn, disabled && styles.disabled]}>
       <Text style={[styles.toggleText, value && styles.toggleTextOn]}>{label}</Text>
     </Pressable>
   );
@@ -699,9 +699,9 @@ function SnsImageViewer({ image, onClose }: { image: { uri: string; title?: stri
   );
 }
 
-function AllCharacterChip({ active, platform, onPress }: { active: boolean; platform: SNSPost['platform']; onPress: () => void }) {
+function AllCharacterChip({ active, platform, disabled, onPress }: { active: boolean; platform: SNSPost['platform']; disabled?: boolean; onPress: () => void }) {
   return (
-    <Pressable onPress={onPress} style={[styles.characterChip, active && styles.characterChipActive, platform === 'twitter' && styles.xCharacterChip, platform === 'twitter' && active && styles.xCharacterChipActive]}>
+    <Pressable onPress={onPress} disabled={disabled} style={[styles.characterChip, active && styles.characterChipActive, platform === 'twitter' && styles.xCharacterChip, platform === 'twitter' && active && styles.xCharacterChipActive, disabled && styles.disabled]}>
       <View style={[styles.allCharacterAvatar, platform === 'twitter' && styles.xAllCharacterAvatar]}>
         <Text style={[styles.allCharacterAvatarText, platform === 'twitter' && styles.xPanelText]}>ALL</Text>
       </View>
@@ -710,9 +710,9 @@ function AllCharacterChip({ active, platform, onPress }: { active: boolean; plat
   );
 }
 
-function CharacterChip({ character, active, enabled, platform, onPress }: { character: SNSGodCharacter; active: boolean; enabled: boolean; platform: SNSPost['platform']; onPress: () => void }) {
+function CharacterChip({ character, active, enabled, platform, disabled, onPress }: { character: SNSGodCharacter; active: boolean; enabled: boolean; platform: SNSPost['platform']; disabled?: boolean; onPress: () => void }) {
   return (
-    <Pressable onPress={onPress} style={[styles.characterChip, !enabled && styles.characterChipOff, active && styles.characterChipActive, platform === 'twitter' && styles.xCharacterChip, platform === 'twitter' && active && styles.xCharacterChipActive]}>
+    <Pressable onPress={onPress} disabled={disabled} style={[styles.characterChip, !enabled && styles.characterChipOff, active && styles.characterChipActive, platform === 'twitter' && styles.xCharacterChip, platform === 'twitter' && active && styles.xCharacterChipActive, disabled && styles.disabled]}>
       <View style={!enabled && styles.characterAvatarOff}>
         <Avatar character={character} size={52} />
       </View>
@@ -1372,6 +1372,7 @@ const styles = StyleSheet.create({
   characterName: { fontSize: 12, color: colors.text, fontWeight: '900' },
   characterNameOff: { color: colors.sub },
   generator: { margin: 8, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fff' },
+  generatorBusy: { opacity: 0.65 },
   xGenerator: { backgroundColor: '#080808', borderColor: '#2f3336' },
   generatorTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
   generatorTitle: { fontSize: 15, fontWeight: '900', color: colors.text },

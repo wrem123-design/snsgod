@@ -1,20 +1,23 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors } from '../theme';
 import { SNSGodRoom, SNSGodState } from '../types';
 import { deleteRoom, findCharacter, findRoom, updateRoom } from '../logic/stateHelpers';
 import { isRandomRoom, removeRandomChatRoom } from '../logic/randomChat';
 import { normalizeRoomPromptForSave, summarizePrivateRoomWithLlm } from '../logic/roomConversationSummary';
+import { applyPrivateRoomLlmSummary, replaceAutoSummaryBlock } from '../logic/memoryBridge';
 
-export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
+export function RoomSettingsScreen({ state, roomId, onBack, onChange, onCommitCurrent }: {
   state: SNSGodState;
   roomId: string;
   onBack: () => void;
   onChange: (next: SNSGodState) => Promise<void> | void;
+  onCommitCurrent: (patch: (current: SNSGodState) => SNSGodState) => Promise<SNSGodState | undefined> | SNSGodState | undefined;
 }) {
   const room = findRoom(state, roomId);
   const character = findCharacter(state, room?.characterId);
   const [draft, setDraft] = useState<SNSGodRoom | null>(room ? { ...room } : null);
+  const draftRef = useRef<SNSGodRoom | null>(draft);
   const [summarizing, setSummarizing] = useState(false);
   const [status, setStatus] = useState('');
 
@@ -48,7 +51,23 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
   }
 
   function set<K extends keyof SNSGodRoom>(key: K, value: SNSGodRoom[K]) {
-    setDraft(prev => prev ? { ...prev, [key]: value } : prev);
+    setDraft(prev => {
+      const next = prev ? { ...prev, [key]: value } : prev;
+      draftRef.current = next;
+      return next;
+    });
+  }
+
+  function toggleDisabled() {
+    setDraft(prev => {
+      const next = prev ? {
+        ...prev,
+        disabled: prev.disabled !== true,
+        disabledAt: prev.disabled === true ? undefined : Date.now(),
+      } : prev;
+      draftRef.current = next;
+      return next;
+    });
   }
 
   function confirmDelete() {
@@ -86,6 +105,7 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
     setSummarizing(true);
     setStatus('현재 방 대화를 요약하는 중...');
     try {
+      const requestProvider = state.config.apiType;
       const result = await summarizePrivateRoomWithLlm(state, roomId, {
         force: true,
         draft
@@ -95,11 +115,32 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
         setStatus('');
         return;
       }
-      const nextRoom = findRoom(result.state, roomId);
-      if (nextRoom) {
-        setDraft({ ...draft, ...nextRoom, roomPrompt: String(nextRoom.roomPrompt || '') });
-      }
-      await onChange(result.state);
+      const liveDraft = draftRef.current;
+      if (!liveDraft) return;
+      const resultKeyIndex = result.state.config.apiProfiles[requestProvider]?.apiKeyIndex;
+      const committed = await onCommitCurrent(current => {
+        let next = applyPrivateRoomLlmSummary(current, roomId, result.summary, { draft: liveDraft });
+        if (next === current || !Number.isFinite(Number(resultKeyIndex))) return next;
+        const currentProfile = next.config.apiProfiles[requestProvider] || {};
+        next = {
+          ...next,
+          config: {
+            ...next.config,
+            apiProfiles: {
+              ...next.config.apiProfiles,
+              [requestProvider]: { ...currentProfile, apiKeyIndex: Number(resultKeyIndex) },
+            },
+          },
+        };
+        return next;
+      });
+      if (!committed || !findRoom(committed, roomId)) return;
+      const nextDraft = {
+        ...liveDraft,
+        roomPrompt: replaceAutoSummaryBlock(String(liveDraft.roomPrompt || ''), result.summary),
+      };
+      draftRef.current = nextDraft;
+      setDraft(nextDraft);
       setStatus('대화 요약을 추가 방 프롬프트에 저장했습니다.');
     } catch (error) {
       setStatus(`대화 요약 실패: ${error instanceof Error ? error.message : String(error)}`);
@@ -138,7 +179,7 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange }: {
         <Pressable onPress={save} style={styles.primary}><Text style={styles.primaryText}>방 설정 저장</Text></Pressable>
         <View style={styles.dangerRow}>
           <Pressable onPress={confirmCleanRoom} style={styles.cleanButton}><Text style={styles.cleanText}>방 청소</Text></Pressable>
-          <Pressable onPress={() => setDraft(prev => prev ? { ...prev, disabled: prev.disabled !== true, disabledAt: prev.disabled === true ? undefined : Date.now() } : prev)} style={[styles.cleanButton, draft.disabled === true && styles.disabledRoomButton]}><Text style={styles.cleanText}>{draft.disabled === true ? '방 활성화' : '방 비활성화'}</Text></Pressable>
+          <Pressable onPress={toggleDisabled} style={[styles.cleanButton, draft.disabled === true && styles.disabledRoomButton]}><Text style={styles.cleanText}>{draft.disabled === true ? '방 활성화' : '방 비활성화'}</Text></Pressable>
           <Pressable onPress={confirmDelete} style={styles.danger}><Text style={styles.dangerText}>채팅방 삭제</Text></Pressable>
         </View>
       </ScrollView>

@@ -51,6 +51,13 @@ export function cancelChatJob(roomId: string): void {
   if (jobId) clearJobTimeout(roomId, jobId);
 }
 
+export function cancelAllChatJobs(): void {
+  for (const timer of jobTimers.values()) clearTimeout(timer);
+  jobTimers.clear();
+  activeJobs.clear();
+  generatingRooms.clear();
+}
+
 export function tryLockGeneratingRoom(roomId: string, jobId: string): boolean {
   if (generatingRooms.has(roomId)) return false;
   generatingRooms.set(roomId, jobId);

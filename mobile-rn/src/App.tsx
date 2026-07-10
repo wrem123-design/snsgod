@@ -30,10 +30,11 @@ import { DebugScreen } from './screens/DebugScreen';
 import { BottomNav, BottomTab } from './components/BottomNav';
 import { Avatar } from './components/Avatar';
 import { MenuHubScreen } from './screens/MenuHubScreen';
-import { flushSaveState, getStoragePaths, loadState, recordSkippedSaveBeforeHydration, saveStateDebounced, SaveStateOptions } from './storage/persist';
+import { flushSaveState, getStoragePaths, importState, loadState, recordSkippedSaveBeforeHydration, saveStateDebounced, SaveStateOptions } from './storage/persist';
 import { colors } from './theme';
 import { SNSGodCharacter, SNSGodState, SNSPost } from './types';
 import { isAutomationQueueBusy, runAutomationQueueTick } from './logic/automationQueue';
+import { cancelAllChatJobs } from './logic/chatJobs';
 import { maybePromptBatteryOptimizationExemption, setAutomationKeepAliveRunning } from './logic/backgroundAutomation';
 import { appendDebugLog } from './logic/debugLog';
 import { findRandomChat, promoteRandomChatRoom, removeRandomChatRoom } from './logic/randomChat';
@@ -41,7 +42,7 @@ import { allRooms, deleteCharacter, findCharacter, isRoomDisabled } from './logi
 import { roomRouteKind } from './logic/roomStore';
 import { IncomingPhoneCall, markPhoneCardStatus, missIncomingPhoneCall, newestPendingPhoneCandidate, rejectIncomingPhoneCall } from './logic/phone';
 import { markRoomRead, pushNotification } from './logic/notifications';
-import { startReplyJob } from './logic/replyEngine';
+import { resetReplyLlmQueue, startReplyJob } from './logic/replyEngine';
 import { createGroupMeetingEventSession, createManualGroupMeetingEventPrompt, createManualMeetingEventPrompt, createMeetingEventSession, shouldStartGroupMeetingEvent, shouldStartMeetingEvent } from './logic/meetingEvent';
 import { forceUpdateRoomMemory } from './logic/memoryBridge';
 import { maybeCreateBackgroundAutoSNSPost } from './logic/sns';
@@ -52,6 +53,10 @@ import {
   createStateMediaReplacementCache,
   type StateMediaUriReplacement,
 } from './logic/stateMediaPolicy';
+import { hasSameServerIdentity, mergeStaleState } from './logic/staleStateMergePolicy';
+import { canCommitRuntimeEpoch } from './logic/runtimeEpochPolicy';
+import { getSumGodProgress, invalidateSumGodBackupWrites, replaceSumGodBackup } from './logic/sumgod';
+import { resetDatingImageQueue } from './logic/datingApp';
 
 const INTERRUPTED_REPLY_RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MEDIA_REPLACEMENT_CACHE_TTL_MS = 30_000;
@@ -91,6 +96,7 @@ type Route =
   | { name: 'notifications' };
 
 type CommitOptions = {
+  conflict?: 'incoming' | 'latest';
   persist?: boolean;
   save?: SaveStateOptions;
 };
@@ -103,17 +109,23 @@ export default function App() {
   const [runtimeReloadNonce, setRuntimeReloadNonce] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const stateRef = useRef<SNSGodState | null>(null);
+  const restoringRef = useRef(false);
+  const runtimeEpochRef = useRef(0);
   const persistedMediaUrisRef = useRef(createStateMediaReplacementCache({
     ttlMs: MEDIA_REPLACEMENT_CACHE_TTL_MS,
     maxEntries: MEDIA_REPLACEMENT_CACHE_MAX_ENTRIES,
     maxDataUriCharacters: MEDIA_REPLACEMENT_CACHE_MAX_DATA_URI_CHARACTERS,
   }));
   const routeRef = useRef<Route>(route);
+  const routeEpochRef = useRef(0);
   const routeHistoryRef = useRef<Route[]>([]);
   const incomingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hydratedRef = useRef(false);
   const serverPolicySyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const serverPolicyFingerprintRef = useRef('');
+  const oracleSyncInFlightRef = useRef(false);
+  const oracleSyncPendingReasonRef = useRef<{ reason: string; epoch: number } | null>(null);
+  const meetingEventWorkRef = useRef(new Map<string, Promise<boolean>>());
 
   function clearRuntimeOnlyState(next: SNSGodState): SNSGodState {
     return { ...next, pendingReplies: {} };
@@ -129,6 +141,8 @@ export default function App() {
   }
 
   function navigate(next: Route, options?: { replace?: boolean }) {
+    if (routeRef.current.name === 'datingApp' && next.name !== 'datingApp') resetDatingImageQueue();
+    routeEpochRef.current += 1;
     setRoute(current => {
       if (!options?.replace && !sameRoute(current, next)) {
         routeHistoryRef.current = [...routeHistoryRef.current, current].slice(-60);
@@ -138,6 +152,8 @@ export default function App() {
   }
 
   function goBack(fallback: Route = { name: 'chatList' }) {
+    if (routeRef.current.name === 'datingApp') resetDatingImageQueue();
+    routeEpochRef.current += 1;
     setRoute(() => routeHistoryRef.current.pop() || fallback);
   }
 
@@ -252,6 +268,7 @@ export default function App() {
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', nextState => {
+      if (restoringRef.current) return;
       if (nextState === 'active') {
         // Server mode receives messages that were generated while the app was closed.
         if (stateRef.current && isServerMessagingEnabled(stateRef.current)) {
@@ -359,8 +376,9 @@ export default function App() {
   }, [hydrated]);
 
   async function runAutomationTickOnce(reason: string) {
+    const operationEpoch = runtimeEpochRef.current;
     const current = stateRef.current;
-    if (!current || isServerMessagingEnabled(current) || isAutomationQueueBusy()) return;
+    if (!isRuntimeEpochCurrent(operationEpoch) || !current || isServerMessagingEnabled(current) || isAutomationQueueBusy()) return;
     const profile = current.config.apiProfiles[current.config.apiType] || {};
     const hasKey = current.config.apiType === 'vertex'
       ? Boolean(String(profile.serviceAccountJson || '').trim())
@@ -371,6 +389,7 @@ export default function App() {
       if (current.config.autoEnabled === false) {
         if (current.config.snsAutoPostEnabled === false) return;
         const snsOnly = await maybeCreateBackgroundAutoSNSPost(current);
+        if (!isRuntimeEpochCurrent(operationEpoch)) return;
         if (snsOnly && snsOnly !== current) {
           const latest = stateRef.current;
           await commit(latest && latest !== current ? mergeAutomationResult(latest, current, snsOnly) : snsOnly);
@@ -379,6 +398,7 @@ export default function App() {
         return;
       }
       const next = await runAutomationQueueTick(current);
+      if (!isRuntimeEpochCurrent(operationEpoch)) return;
       if (next !== current) {
         const latest = stateRef.current;
         await commit(latest && latest !== current ? mergeAutomationResult(latest, current, next) : next);
@@ -399,74 +419,30 @@ export default function App() {
     return Object.keys(current.messages || {}).reduce((next, roomId) => forceUpdateRoomMemory(next, roomId), current);
   }
 
-  type Identified = { id?: unknown };
-
-  function sameSnapshot(a: unknown, b: unknown): boolean {
-    return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
-  }
-
-  function mergeIdentifiedArray<T extends Identified>(latest: T[] = [], base: T[] = [], next: T[] = []): T[] {
-    const latestIds = new Set(latest.map(item => String(item.id || '')));
-    const baseIds = new Set(base.map(item => String(item.id || '')));
-    const additions = next.filter(item => {
-      const id = String(item.id || '');
-      return id && !baseIds.has(id) && !latestIds.has(id);
-    });
-    return additions.length ? [...latest, ...additions] : latest;
-  }
-
-  function mergeChangedById<T extends Identified>(latest: T[] = [], base: T[] = [], next: T[] = []): T[] {
-    let changed = false;
-    const baseById = new Map(base.map(item => [String(item.id || ''), item]));
-    const nextById = new Map(next.map(item => [String(item.id || ''), item]));
-    const merged = latest.map(item => {
-      const id = String(item.id || '');
-      const nextItem = nextById.get(id);
-      if (!nextItem || sameSnapshot(nextItem, baseById.get(id))) return item;
-      if (!sameSnapshot(item, baseById.get(id))) return item;
-      changed = true;
-      return nextItem;
-    });
-    for (const item of next) {
-      const id = String(item.id || '');
-      if (id && !merged.some(existing => String(existing.id || '') === id)) {
-        merged.push(item);
-        changed = true;
-      }
-    }
-    return changed ? merged : latest;
-  }
-
   function mergeAutomationResult(latest: SNSGodState, base: SNSGodState, next: SNSGodState): SNSGodState {
-    const messages = { ...latest.messages };
-    for (const [roomId, nextMessages] of Object.entries(next.messages || {})) {
-      const merged = mergeIdentifiedArray(messages[roomId] || [], base.messages?.[roomId] || [], nextMessages || []);
-      if (merged !== messages[roomId]) messages[roomId] = merged;
-    }
-    const unreadCounts = { ...(latest.unreadCounts || {}) };
+    if (!Object.is(latest.__importedAt, base.__importedAt)) return latest;
+    const candidate = mergeStaleState(latest, base, next, { conflict: 'latest' });
+    const candidateRoomIds = new Set([
+      ...Object.values(candidate.chatRooms || {}).flat().map(room => room.id),
+      ...(candidate.groupRooms || []).map(room => room.id),
+      ...(candidate.randomChats || []).map(room => room.id),
+    ]);
+    const unreadCounts = { ...(candidate.unreadCounts || {}) };
     for (const [roomId, count] of Object.entries(next.unreadCounts || {})) {
+      if (!candidateRoomIds.has(roomId)) continue;
       unreadCounts[roomId] = Math.max(Number(unreadCounts[roomId] || 0), Number(count || 0));
     }
     return {
-      ...latest,
-      messages,
+      ...candidate,
       unreadCounts,
-      characters: mergeChangedById(latest.characters, base.characters, next.characters),
-      groupRooms: mergeChangedById(latest.groupRooms || [], base.groupRooms || [], next.groupRooms || []),
-      randomChats: mergeChangedById(latest.randomChats || [], base.randomChats || [], next.randomChats || []),
-      snsPosts: mergeIdentifiedArray(latest.snsPosts || [], base.snsPosts || [], next.snsPosts || []),
-      snsDmThreads: mergeIdentifiedArray(latest.snsDmThreads || [], base.snsDmThreads || [], next.snsDmThreads || []),
-      notifications: mergeIdentifiedArray(latest.notifications || [], base.notifications || [], next.notifications || []).slice(0, 100),
-      callLogs: mergeIdentifiedArray(
-        (Array.isArray(latest.callLogs) ? latest.callLogs : []) as Identified[],
-        (Array.isArray(base.callLogs) ? base.callLogs : []) as Identified[],
-        (Array.isArray(next.callLogs) ? next.callLogs : []) as Identified[]
-      ).slice(0, 100),
-      __randomFirstSent: { ...((latest.__randomFirstSent || {}) as Record<string, unknown>), ...((next.__randomFirstSent || {}) as Record<string, unknown>) },
-      __calendarSent: { ...((latest.__calendarSent || {}) as Record<string, unknown>), ...((next.__calendarSent || {}) as Record<string, unknown>) },
-      __phoneInviteAt: { ...((latest.__phoneInviteAt || {}) as Record<string, unknown>), ...((next.__phoneInviteAt || {}) as Record<string, unknown>) },
-      __phoneGlobalInviteAt: next.__phoneGlobalInviteAt || latest.__phoneGlobalInviteAt
+      notifications: (candidate.notifications || []).slice(0, 100),
+      callLogs: (Array.isArray(candidate.callLogs) ? candidate.callLogs : []).slice(0, 100),
     };
+  }
+
+  function mergeServerSyncResult(latest: SNSGodState, base: SNSGodState, next: SNSGodState): SNSGodState {
+    if (!hasSameServerIdentity(latest, base)) return latest;
+    return mergeStaleState(latest, base, next, { conflict: 'latest' });
   }
 
   function withUnreadForNewMessages(previous: SNSGodState | null, next: SNSGodState, visibleRoomId?: string): SNSGodState {
@@ -534,7 +510,35 @@ export default function App() {
     setState(patched);
   }
 
+  async function commitFromRenderedSnapshot(
+    base: SNSGodState,
+    next: SNSGodState,
+    options: CommitOptions = {},
+  ): Promise<void> {
+    if (restoringRef.current) return;
+    const current = stateRef.current;
+    const intent = next.__importedAt !== base.__importedAt ? 'import' : 'screen';
+    const candidate = current && current !== base
+      ? mergeStaleState(current, base, next, { conflict: options.conflict, intent })
+      : next;
+    const baseReferenceIds = new Set((base.referenceFaceSlots || []).map(slot => slot.id));
+    const candidateReferenceIds = new Set((candidate.referenceFaceSlots || []).map(slot => slot.id));
+    const rejectedReferenceSlotCount = intent === 'screen'
+      ? (next.referenceFaceSlots || []).filter(slot => (
+        !baseReferenceIds.has(slot.id) && !candidateReferenceIds.has(slot.id)
+      )).length
+      : 0;
+    await commit(candidate, options);
+    if (rejectedReferenceSlotCount > 0) {
+      Alert.alert(
+        '레퍼런스 슬롯 가득 참',
+        `다른 추가 작업으로 50개 슬롯이 먼저 찼습니다. 일부 사진을 추가하지 못했어요. (${rejectedReferenceSlotCount}장)`,
+      );
+    }
+  }
+
   async function commit(next: SNSGodState, options: CommitOptions = {}) {
+    if (restoringRef.current) return;
     const now = Date.now();
     const knownMediaReplacements = persistedMediaUrisRef.current.active(now);
     const mediaAwareNext = applyStateMediaUriReplacements(next, knownMediaReplacements);
@@ -563,16 +567,27 @@ export default function App() {
     const current = stateRef.current;
     if (!current) return;
     const next = patch(current);
+    if (next === current) return;
     await commit(next, options);
   }
 
-  async function commitCurrentForScreen(patch: (current: SNSGodState) => SNSGodState) {
-    await commitCurrent(patch);
-    return stateRef.current || undefined;
+  async function commitCurrentAtEpoch(
+    epoch: number,
+    patch: (current: SNSGodState) => SNSGodState,
+    options?: CommitOptions,
+  ): Promise<void> {
+    if (!isRuntimeEpochCurrent(epoch)) return;
+    await commitCurrent(patch, options);
   }
 
-  async function commitAndFlush(next: SNSGodState) {
-    await commit(next, { save: { important: true, reason: 'important screen change' } });
+  function isRuntimeEpochCurrent(epoch: number): boolean {
+    return canCommitRuntimeEpoch(runtimeEpochRef.current, epoch, restoringRef.current);
+  }
+
+  async function commitAndFlush(base: SNSGodState, next: SNSGodState) {
+    await commitFromRenderedSnapshot(base, next, {
+      save: { important: true, reason: 'important screen change' },
+    });
     await flushSaveState(stateRef.current || next, {
       backup: 'force',
       verify: 'full',
@@ -583,8 +598,15 @@ export default function App() {
   }
 
   async function syncOracleMessages(reason: string) {
+    const operationEpoch = runtimeEpochRef.current;
     const current = stateRef.current;
-    if (!current || !isServerMessagingEnabled(current)) return;
+    if (!isRuntimeEpochCurrent(operationEpoch) || !current || !isServerMessagingEnabled(current)) return;
+    if (oracleSyncInFlightRef.current) {
+      oracleSyncPendingReasonRef.current = { reason, epoch: operationEpoch };
+      void appendDebugLog('server.sync', 'sync skipped while another sync is running reason=' + reason);
+      return;
+    }
+    oracleSyncInFlightRef.current = true;
     try {
       let next = current;
       if (!next.config.serverMessaging?.deviceToken) {
@@ -593,36 +615,60 @@ export default function App() {
       }
       next = (next.config.serverMessaging?.outbox || []).length ? await flushServerOutbox(next) : await bootstrapServer(next);
       next = await syncServerMessages(next);
-      await commit(next);
+      if (!isRuntimeEpochCurrent(operationEpoch)) return;
+      const latest = stateRef.current || current;
+      await commit(latest === current ? next : mergeServerSyncResult(latest, current, next));
       void appendDebugLog('server.sync', 'sync completed reason=' + reason);
     } catch (error) {
-      const failed = withServerError(current, error);
+      if (!isRuntimeEpochCurrent(operationEpoch)) return;
+      const latest = stateRef.current || current;
+      if (!hasSameServerIdentity(latest, current)) {
+        void appendDebugLog('server.sync', reason + ': stale server error discarded after connection change', 'warn');
+        return;
+      }
+      const failed = withServerError(latest, error);
       await commit(failed);
       void appendDebugLog('server.sync', reason + ': ' + String(error instanceof Error ? error.message : error), 'warn');
+    } finally {
+      oracleSyncInFlightRef.current = false;
+      const pendingRequest = oracleSyncPendingReasonRef.current;
+      oracleSyncPendingReasonRef.current = null;
+      if (pendingRequest && isRuntimeEpochCurrent(pendingRequest.epoch)) {
+        setTimeout(() => void syncOracleMessages(pendingRequest.reason), 0);
+      }
     }
   }
 
   async function requestServerReply(roomId: string) {
+    const operationEpoch = runtimeEpochRef.current;
     const current = stateRef.current;
-    if (!current || !isServerMessagingEnabled(current) || isRoomDisabled(current, roomId)) return false;
+    if (!isRuntimeEpochCurrent(operationEpoch) || !current || !isServerMessagingEnabled(current) || isRoomDisabled(current, roomId)) return false;
     const userMessage = [...(current.messages[roomId] || [])].reverse().find(message => message.role === 'user');
     if (!userMessage) return false;
     const queued = enqueueServerMessage(current, userMessage, roomId);
     await commit(queued);
+    if (!isRuntimeEpochCurrent(operationEpoch)) return true;
+    const base = stateRef.current || queued;
     try {
-      const next = await flushServerOutbox(queued);
-      await commit(next);
+      const next = await flushServerOutbox(base);
+      if (!isRuntimeEpochCurrent(operationEpoch)) return true;
+      if (!hasSameServerIdentity(stateRef.current || base, base)) return true;
+      await commitFromRenderedSnapshot(base, next, { conflict: 'latest' });
       void appendDebugLog('server.reply', 'queued room=' + roomId + ' message=' + userMessage.id);
       return true;
     } catch (error) {
-      await commit(withServerError(queued, error));
+      if (!isRuntimeEpochCurrent(operationEpoch)) return true;
+      if (!hasSameServerIdentity(stateRef.current || base, base)) return true;
+      const failed = withServerError(base, error);
+      await commitFromRenderedSnapshot(base, failed, { conflict: 'latest' });
       void appendDebugLog('server.reply', 'queue failed room=' + roomId + ': ' + String(error instanceof Error ? error.message : error), 'warn');
       return true;
     }
   }
   function requestReply(roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean; userMessageCreatedAt?: number; latestUserImageData?: string }) {
+    const operationEpoch = runtimeEpochRef.current;
     const current = stateRef.current || state;
-    if (!current || isRoomDisabled(current, roomId)) return;
+    if (!isRuntimeEpochCurrent(operationEpoch) || !current || isRoomDisabled(current, roomId)) return;
     if (!options?.randomMode && isServerMessagingEnabled(current)) {
       void requestServerReply(roomId);
       return;
@@ -634,53 +680,119 @@ export default function App() {
       latestUserImageData: options?.latestUserImageData,
       userMessageCreatedAt: options?.userMessageCreatedAt,
       randomMode: options?.randomMode,
-      getState: () => stateRef.current,
-      commitCurrent
+      getState: () => isRuntimeEpochCurrent(operationEpoch) ? stateRef.current : null,
+      commitCurrent: (patch, commitOptions) => commitCurrentAtEpoch(operationEpoch, patch, commitOptions),
     });
   }
 
-  async function maybeStartMeetingEvent(roomId: string, latestUserInput: string): Promise<boolean> {
-    const current = stateRef.current;
-    if (!current) return false;
-    const groupRoom = (current.groupRooms || []).find(item => item.id === roomId);
-    if (groupRoom) {
-      if ((current.meetingEventSessions || []).some(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active'))) return false;
-      const result = await shouldStartGroupMeetingEvent(current, roomId, latestUserInput);
-      if (!result.shouldStartNow) return false;
-      const latest = stateRef.current || current;
-      const next = await createGroupMeetingEventSession(latest, roomId, result);
-      await commit(next);
-      return true;
+  function meetingRoomExists(snapshot: SNSGodState, roomId: string): boolean {
+    if (isRoomDisabled(snapshot, roomId)) return false;
+    return (snapshot.groupRooms || []).some(room => room.id === roomId)
+      || allRooms(snapshot).some(room => room.id === roomId && room.type !== 'random');
+  }
+
+  function hasOpenMeeting(snapshot: SNSGodState, roomId: string): boolean {
+    return (snapshot.meetingEventSessions || []).some(session => (
+      session.roomId === roomId && (session.status === 'pending' || session.status === 'active')
+    ));
+  }
+
+  async function runMeetingEventWork(
+    roomId: string,
+    waitForBusy: boolean,
+    work: () => Promise<boolean>,
+  ): Promise<boolean> {
+    let running = meetingEventWorkRef.current.get(roomId);
+    if (running && !waitForBusy) return false;
+    while (running) {
+      await running.catch(() => false);
+      running = meetingEventWorkRef.current.get(roomId);
     }
-    const room = allRooms(current).find(item => item.id === roomId);
-    if (!room || room.type === 'random') return false;
-    if ((current.meetingEventSessions || []).some(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active'))) return false;
-    const result = await shouldStartMeetingEvent(current, roomId, latestUserInput);
-    if (!result.shouldStart) return false;
-    const latest = stateRef.current || current;
-    const next = await createMeetingEventSession(latest, roomId, result);
-    await commit(next);
-    return true;
+    const task = work();
+    meetingEventWorkRef.current.set(roomId, task);
+    try {
+      return await task;
+    } finally {
+      if (meetingEventWorkRef.current.get(roomId) === task) {
+        meetingEventWorkRef.current.delete(roomId);
+      }
+    }
+  }
+
+  async function maybeStartMeetingEvent(roomId: string, latestUserInput: string): Promise<boolean> {
+    const operationEpoch = runtimeEpochRef.current;
+    if (!isRuntimeEpochCurrent(operationEpoch)) return false;
+    return runMeetingEventWork(roomId, false, async () => {
+      if (!isRuntimeEpochCurrent(operationEpoch)) return false;
+      const current = stateRef.current;
+      if (!current) return false;
+      const groupRoom = (current.groupRooms || []).find(item => item.id === roomId);
+      if (groupRoom) {
+        if (hasOpenMeeting(current, roomId)) return false;
+        const result = await shouldStartGroupMeetingEvent(current, roomId, latestUserInput);
+        if (!isRuntimeEpochCurrent(operationEpoch)) return false;
+        if (!result.shouldStartNow) return false;
+        const latest = stateRef.current || current;
+        if (!meetingRoomExists(latest, roomId)) return false;
+        if (hasOpenMeeting(latest, roomId)) return true;
+        const next = await createGroupMeetingEventSession(latest, roomId, result);
+        if (!isRuntimeEpochCurrent(operationEpoch)) return false;
+        const beforeCommit = stateRef.current || latest;
+        if (!meetingRoomExists(beforeCommit, roomId)) return false;
+        if (hasOpenMeeting(beforeCommit, roomId)) return true;
+        await commitFromRenderedSnapshot(latest, next, { conflict: 'latest' });
+        return true;
+      }
+      const room = allRooms(current).find(item => item.id === roomId);
+      if (!room || room.type === 'random') return false;
+      if (hasOpenMeeting(current, roomId)) return false;
+      const result = await shouldStartMeetingEvent(current, roomId, latestUserInput);
+      if (!isRuntimeEpochCurrent(operationEpoch)) return false;
+      if (!result.shouldStart) return false;
+      const latest = stateRef.current || current;
+      if (!meetingRoomExists(latest, roomId)) return false;
+      if (hasOpenMeeting(latest, roomId)) return true;
+      const next = await createMeetingEventSession(latest, roomId, result);
+      if (!isRuntimeEpochCurrent(operationEpoch)) return false;
+      const beforeCommit = stateRef.current || latest;
+      if (!meetingRoomExists(beforeCommit, roomId)) return false;
+      if (hasOpenMeeting(beforeCommit, roomId)) return true;
+      await commitFromRenderedSnapshot(latest, next, { conflict: 'latest' });
+      return true;
+    });
   }
 
   async function requestManualMeetingEvent(roomId: string): Promise<boolean> {
-    const current = stateRef.current;
-    if (!current) return false;
-    const groupRoom = (current.groupRooms || []).find(item => item.id === roomId);
-    if (groupRoom) {
-      if ((current.meetingEventSessions || []).some(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active'))) return true;
-      const next = await createManualGroupMeetingEventPrompt(current, roomId);
+    const operationEpoch = runtimeEpochRef.current;
+    if (!isRuntimeEpochCurrent(operationEpoch)) return false;
+    return runMeetingEventWork(roomId, true, async () => {
+      if (!isRuntimeEpochCurrent(operationEpoch)) return false;
+      const current = stateRef.current;
+      if (!current) return false;
+      const groupRoom = (current.groupRooms || []).find(item => item.id === roomId);
+      if (groupRoom) {
+        if (hasOpenMeeting(current, roomId)) return true;
+        const next = await createManualGroupMeetingEventPrompt(current, roomId);
+        if (!isRuntimeEpochCurrent(operationEpoch)) return false;
+        if (next === current) return false;
+        const beforeCommit = stateRef.current || current;
+        if (!meetingRoomExists(beforeCommit, roomId)) return false;
+        if (hasOpenMeeting(beforeCommit, roomId)) return true;
+        await commitFromRenderedSnapshot(current, next, { conflict: 'latest' });
+        return true;
+      }
+      const room = allRooms(current).find(item => item.id === roomId);
+      if (!room || room.type === 'random') return false;
+      if (hasOpenMeeting(current, roomId)) return true;
+      const next = await createManualMeetingEventPrompt(current, roomId);
+      if (!isRuntimeEpochCurrent(operationEpoch)) return false;
       if (next === current) return false;
-      await commit(next);
+      const beforeCommit = stateRef.current || current;
+      if (!meetingRoomExists(beforeCommit, roomId)) return false;
+      if (hasOpenMeeting(beforeCommit, roomId)) return true;
+      await commitFromRenderedSnapshot(current, next, { conflict: 'latest' });
       return true;
-    }
-    const room = allRooms(current).find(item => item.id === roomId);
-    if (!room || room.type === 'random') return false;
-    if ((current.meetingEventSessions || []).some(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active'))) return true;
-    const next = await createManualMeetingEventPrompt(current, roomId);
-    if (next === current) return false;
-    await commit(next);
-    return true;
+    });
   }
 
   function resumeInterruptedReplies(snapshot: SNSGodState) {
@@ -713,9 +825,66 @@ export default function App() {
     }
   }
 
-  async function reloadSavedState() {
+  async function restoreImportedState(base: SNSGodState, imported: SNSGodState): Promise<void> {
+    if (restoringRef.current) return;
+    const currentBeforeRestore = stateRef.current;
+    if (currentBeforeRestore && !Object.is(currentBeforeRestore.__importedAt, base.__importedAt)) {
+      throw new Error('이 파일을 읽는 동안 다른 복구가 완료되어 이전 복구 요청을 취소했습니다.');
+    }
+    const candidate = currentBeforeRestore && currentBeforeRestore !== base
+      ? mergeStaleState(currentBeforeRestore, base, imported, { intent: 'import' })
+      : imported;
+    restoringRef.current = true;
+    runtimeEpochRef.current += 1;
+    cancelAllChatJobs();
+    resetReplyLlmQueue();
+    resetDatingImageQueue();
+    const sumGodBackupGeneration = invalidateSumGodBackupWrites();
+    meetingEventWorkRef.current.clear();
+    oracleSyncPendingReasonRef.current = null;
+    persistedMediaUrisRef.current.clear();
+    if (incomingTimerRef.current) {
+      clearTimeout(incomingTimerRef.current);
+      incomingTimerRef.current = null;
+    }
+    try {
+      await flushSaveState(undefined, { reason: 'before full backup import' });
+      await importState(candidate, JSON.stringify(candidate));
+      const next = clearRuntimeOnlyState(await loadState());
+      await replaceSumGodBackup(
+        getSumGodProgress(next),
+        next.__importedAt,
+        sumGodBackupGeneration,
+      ).catch(error => {
+        void appendDebugLog('sumgod.backup', `restore sidecar replacement failed: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+      });
+      routeHistoryRef.current = [];
+      routeEpochRef.current += 1;
+      routeRef.current = { name: 'chatList' };
+      setIncomingCall(null);
+      setRoute({ name: 'chatList' });
+      setState(next);
+      stateRef.current = next;
+      serverPolicyFingerprintRef.current = '';
+      setRuntimeReloadNonce(value => value + 1);
+      void appendDebugLog('debug', `full backup restored: characters=${next.characters.length}`);
+    } catch (error) {
+      const current = stateRef.current;
+      if (current) {
+        const recovered = clearRuntimeOnlyState(current);
+        stateRef.current = recovered;
+        setState(recovered);
+      }
+      setRuntimeReloadNonce(value => value + 1);
+      throw error;
+    } finally {
+      restoringRef.current = false;
+    }
+  }
+
+  async function reloadSavedState(options: { discardRuntime?: boolean } = {}) {
     const current = stateRef.current;
-    if (current) await flushSaveState(current, {
+    if (current && options.discardRuntime !== true) await flushSaveState(current, {
       backup: 'force',
       verify: 'full',
       reason: 'reload saved state',
@@ -743,6 +912,7 @@ export default function App() {
     }
     const next = clearRuntimeOnlyState(await loadState());
     routeHistoryRef.current = [];
+    routeEpochRef.current += 1;
     setIncomingCall(null);
     setRoute({ name: 'chatList' });
     setState(next);
@@ -775,30 +945,36 @@ export default function App() {
   const showBottomNav = route.name === 'chatList' || route.name === 'sns' || route.name === 'random' || route.name === 'etc' || route.name === 'streetEncounter' || route.name === 'datingApp' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'references';
 
   async function leaveRandomRoom(roomId: string) {
+    const operationEpoch = runtimeEpochRef.current;
     const current = stateRef.current;
-    if (!current) return;
+    if (!isRuntimeEpochCurrent(operationEpoch) || !current) return;
     const next = removeRandomChatRoom(current, roomId);
     await commit(next);
+    if (!isRuntimeEpochCurrent(operationEpoch)) return;
     navigate({ name: 'random' }, { replace: true });
   }
 
   async function promoteRandomRoom(roomId: string) {
+    const operationEpoch = runtimeEpochRef.current;
     const current = stateRef.current;
-    if (!current) return;
+    if (!isRuntimeEpochCurrent(operationEpoch) || !current) return;
     const { next, newRoomId } = promoteRandomChatRoom(current, roomId);
     if (!newRoomId) {
       Alert.alert('승격 실패', '랜덤채팅 방을 찾지 못했습니다.');
       return;
     }
     await commit(next);
+    if (!isRuntimeEpochCurrent(operationEpoch)) return;
     navigate({ name: 'chatRoom', roomId: newRoomId }, { replace: true });
   }
 
   async function handleDeleteCharacter(characterId: string) {
+    const operationEpoch = runtimeEpochRef.current;
     const current = stateRef.current;
-    if (!current) return;
+    if (!isRuntimeEpochCurrent(operationEpoch) || !current) return;
     const next = deleteCharacter(current, characterId);
     await commit(next);
+    if (!isRuntimeEpochCurrent(operationEpoch)) return;
     routeHistoryRef.current = [];
     navigate({ name: 'chatList' }, { replace: true });
   }
@@ -836,76 +1012,142 @@ export default function App() {
     );
   }
 
+  const renderedEpoch = runtimeEpochRef.current;
+  const renderedRouteEpoch = routeEpochRef.current;
+  const isRenderedScreenCurrent = (): boolean => (
+    isRuntimeEpochCurrent(renderedEpoch) && routeEpochRef.current === renderedRouteEpoch
+  );
+  const commitRenderedState = (next: SNSGodState, options: CommitOptions = {}): Promise<void> => (
+    isRuntimeEpochCurrent(renderedEpoch)
+      ? commitFromRenderedSnapshot(state, next, options)
+      : Promise.resolve()
+  );
+  const commitRenderedRouteState = (next: SNSGodState, options: CommitOptions = {}): Promise<void> => (
+    isRenderedScreenCurrent()
+      ? commitFromRenderedSnapshot(state, next, options)
+      : Promise.resolve()
+  );
+  const commitRenderedStateAndFlush = (next: SNSGodState): Promise<void> => (
+    isRuntimeEpochCurrent(renderedEpoch)
+      ? commitAndFlush(state, next)
+      : Promise.resolve()
+  );
+  const commitRenderedCurrent = (
+    patch: (current: SNSGodState) => SNSGodState,
+    options?: CommitOptions,
+  ): Promise<void> => commitCurrentAtEpoch(renderedEpoch, patch, options);
+  const commitRenderedCurrentForScreen = async (
+    patch: (current: SNSGodState) => SNSGodState,
+  ): Promise<SNSGodState | undefined> => {
+    await commitCurrentAtEpoch(renderedEpoch, patch);
+    return isRuntimeEpochCurrent(renderedEpoch) ? stateRef.current || undefined : undefined;
+  };
+  const requestRenderedReply = (...args: Parameters<typeof requestReply>): void => {
+    if (isRuntimeEpochCurrent(renderedEpoch)) requestReply(...args);
+  };
+  const maybeStartRenderedMeeting = (...args: Parameters<typeof maybeStartMeetingEvent>): Promise<boolean> => (
+    isRenderedScreenCurrent() ? maybeStartMeetingEvent(...args) : Promise.resolve(false)
+  );
+  const requestRenderedMeeting = (...args: Parameters<typeof requestManualMeetingEvent>): Promise<boolean> => (
+    isRenderedScreenCurrent() ? requestManualMeetingEvent(...args) : Promise.resolve(false)
+  );
+  const requestRenderedServerReply = (...args: Parameters<typeof requestServerReply>): Promise<boolean> => (
+    isRuntimeEpochCurrent(renderedEpoch) ? requestServerReply(...args) : Promise.resolve(false)
+  );
+  const deleteRenderedCharacter = (...args: Parameters<typeof handleDeleteCharacter>): Promise<void> => (
+    isRenderedScreenCurrent() ? handleDeleteCharacter(...args) : Promise.resolve()
+  );
+  const leaveRenderedRandomRoom = (...args: Parameters<typeof leaveRandomRoom>): Promise<void> => (
+    isRenderedScreenCurrent() ? leaveRandomRoom(...args) : Promise.resolve()
+  );
+  const promoteRenderedRandomRoom = (...args: Parameters<typeof promoteRandomRoom>): Promise<void> => (
+    isRenderedScreenCurrent() ? promoteRandomRoom(...args) : Promise.resolve()
+  );
+  const navigateRendered = (...args: Parameters<typeof navigate>): void => {
+    if (isRenderedScreenCurrent()) navigate(...args);
+  };
+  const goBackRendered = (): void => {
+    if (isRenderedScreenCurrent()) goBack();
+  };
+  const openRenderedCharacterChat = (character: SNSGodCharacter): void => {
+    if (isRenderedScreenCurrent()) openCharacterChat(character);
+  };
+  const openRenderedBottomTab = (tab: BottomTab): void => {
+    if (isRenderedScreenCurrent()) openBottomTab(tab);
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <View key={runtimeReloadNonce} style={styles.content}>
       {route.name === 'settings' ? (
         <SettingsScreen
           state={state}
-          onChange={commit}
-          onBack={goBack}
-          onOpenLorebook={() => navigate({ name: 'lorebook' })}
-          onOpenPrompts={() => navigate({ name: 'prompts' })}
-          onOpenCharacterSettings={characterId => navigate({ name: 'characterSettings', characterId })}
+          onChange={commitRenderedState}
+          onCommitCurrent={commitRenderedCurrentForScreen}
+          onRestoreState={restoreImportedState}
+          onBack={goBackRendered}
+          onOpenLorebook={() => navigateRendered({ name: 'lorebook' })}
+          onOpenPrompts={() => navigateRendered({ name: 'prompts' })}
+          onOpenCharacterSettings={characterId => navigateRendered({ name: 'characterSettings', characterId })}
         />
       ) : route.name === 'lorebook' ? (
-        <LorebookScreen state={state} onChange={commit} onBack={goBack} />
+        <LorebookScreen state={state} onChange={commitRenderedState} onBack={goBackRendered} />
       ) : route.name === 'prompts' ? (
-        <PromptSettingsScreen state={state} onChange={commit} onBack={goBack} />
+        <PromptSettingsScreen state={state} onChange={commitRenderedState} onBack={goBackRendered} />
       ) : route.name === 'sns' ? (
         <SNSScreen
           state={state}
           platform={route.platform}
-          onChange={commit}
-          onOpenSettings={() => navigate({ name: 'settings' })}
-          onOpenNotifications={() => navigate({ name: 'notifications' })}
+          onChange={commitRenderedState}
+          onOpenSettings={() => navigateRendered({ name: 'settings' })}
+          onOpenNotifications={() => navigateRendered({ name: 'notifications' })}
         />
       ) : route.name === 'randomHub' || route.name === 'etc' ? (
         <MenuHubScreen
           mode="etc"
-          onOpenEncounter={() => navigate({ name: 'streetEncounter' })}
-          onOpenBlindDate={() => navigate({ name: 'blindDate' })}
-          onOpenDatingApp={() => navigate({ name: 'datingApp' })}
-          onOpenIdealWorldcup={() => navigate({ name: 'idealWorldcup' })}
-          onOpenReferences={() => navigate({ name: 'references' })}
-          onOpenSumGod={() => navigate({ name: 'sumgod' })}
-          onOpenGallery={() => navigate({ name: 'gallery' })}
-          onOpenNotifications={() => navigate({ name: 'notifications' })}
-          onOpenSettings={() => navigate({ name: 'settings' })}
-          onOpenDebug={() => navigate({ name: 'debug' })}
+          onOpenEncounter={() => navigateRendered({ name: 'streetEncounter' })}
+          onOpenBlindDate={() => navigateRendered({ name: 'blindDate' })}
+          onOpenDatingApp={() => navigateRendered({ name: 'datingApp' })}
+          onOpenIdealWorldcup={() => navigateRendered({ name: 'idealWorldcup' })}
+          onOpenReferences={() => navigateRendered({ name: 'references' })}
+          onOpenSumGod={() => navigateRendered({ name: 'sumgod' })}
+          onOpenGallery={() => navigateRendered({ name: 'gallery' })}
+          onOpenNotifications={() => navigateRendered({ name: 'notifications' })}
+          onOpenSettings={() => navigateRendered({ name: 'settings' })}
+          onOpenDebug={() => navigateRendered({ name: 'debug' })}
         />
       ) : route.name === 'gallery' ? (
-        <GalleryScreen state={state} onChange={commit} onBack={goBack} />
+        <GalleryScreen state={state} onChange={commitRenderedState} onBack={goBackRendered} />
       ) : route.name === 'debug' ? (
-        <DebugScreen state={state} onBack={goBack} onReloadState={reloadSavedState} onReloadBundle={reloadBundle} onSaveNow={() => flushSaveState(stateRef.current || undefined, {
+        <DebugScreen state={state} onBack={goBackRendered} onRestoreState={restoreImportedState} onReloadState={reloadSavedState} onReloadBundle={reloadBundle} onSaveNow={() => flushSaveState(stateRef.current || undefined, {
           backup: 'force',
           verify: 'full',
           reason: 'debug manual save',
           onMediaExternalized: applyPersistedMediaUris,
         })} />
       ) : route.name === 'random' ? (
-        <RandomChatScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'randomChatRoom', roomId })} />
+        <RandomChatScreen state={state} onChange={commitRenderedState} onBack={goBackRendered} onOpenRoom={roomId => navigateRendered({ name: 'randomChatRoom', roomId })} />
       ) : route.name === 'sumgod' ? (
-        <SumGodScreen state={state} onChange={commit} onCommitCurrent={commitCurrentForScreen} onBack={goBack} />
+        <SumGodScreen state={state} onChange={commitRenderedState} onCommitCurrent={commitRenderedCurrentForScreen} onBack={goBackRendered} />
       ) : route.name === 'streetEncounter' ? (
-        <BlindDateScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'chatRoom', roomId }, { replace: true })} entryMode="encounter" />
+        <BlindDateScreen state={state} onChange={commitRenderedRouteState} onBack={goBackRendered} onOpenRoom={roomId => navigateRendered({ name: 'chatRoom', roomId }, { replace: true })} entryMode="encounter" />
       ) : route.name === 'blindDate' ? (
-        <BlindDateScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'chatRoom', roomId }, { replace: true })} />
+        <BlindDateScreen state={state} onChange={commitRenderedRouteState} onBack={goBackRendered} onOpenRoom={roomId => navigateRendered({ name: 'chatRoom', roomId }, { replace: true })} />
       ) : route.name === 'datingApp' ? (
-        <DatingAppScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'chatRoom', roomId }, { replace: true })} />
+        <DatingAppScreen state={state} onChange={commitRenderedRouteState} onBack={goBackRendered} onOpenRoom={roomId => navigateRendered({ name: 'chatRoom', roomId }, { replace: true })} />
       ) : route.name === 'idealWorldcup' ? (
-        <IdealWorldcupScreen state={state} onChange={commit} onBack={goBack} onOpenRoom={roomId => navigate({ name: 'chatRoom', roomId }, { replace: true })} />
+        <IdealWorldcupScreen state={state} onChange={commitRenderedRouteState} onBack={goBackRendered} onOpenRoom={roomId => navigateRendered({ name: 'chatRoom', roomId }, { replace: true })} />
       ) : route.name === 'references' ? (
-        <ReferenceFaceScreen state={state} onChange={commitAndFlush} onBack={goBack} />
+        <ReferenceFaceScreen state={state} onChange={commitRenderedStateAndFlush} onBack={goBackRendered} />
       ) : route.name === 'notifications' ? (
         <NotificationsScreen
           state={state}
-          onChange={commit}
-          onBack={goBack}
+          onChange={commitRenderedState}
+          onBack={goBackRendered}
           onOpenRoom={roomId => {
             const current = stateRef.current;
             const kind = current ? roomRouteKind(current, roomId) : 'chatRoom';
-            navigate({ name: kind, roomId } as Route);
+            navigateRendered({ name: kind, roomId } as Route);
           }}
         />
       ) : route.name === 'profile' ? (
@@ -913,94 +1155,94 @@ export default function App() {
           state={state}
           characterId={route.characterId}
           roomId={route.returnRoomId}
-          onBack={goBack}
-          onOpenChat={openCharacterChat}
-          onOpenCall={character => navigate({ name: 'call', characterId: character.id, roomId: route.returnRoomId, returnRoute: route })}
-          onOpenSettings={character => navigate({ name: 'characterSettings', characterId: character.id, returnRoomId: route.returnRoomId })}
+          onBack={goBackRendered}
+          onOpenChat={openRenderedCharacterChat}
+          onOpenCall={character => navigateRendered({ name: 'call', characterId: character.id, roomId: route.returnRoomId, returnRoute: route })}
+          onOpenSettings={character => navigateRendered({ name: 'characterSettings', characterId: character.id, returnRoomId: route.returnRoomId })}
         />
       ) : route.name === 'call' ? (
-        <CallScreen state={state} characterId={route.characterId} roomId={route.roomId} sourceMessageId={route.sourceMessageId} onBack={goBack} onChange={commit} onRequestReply={requestReply} />
+        <CallScreen state={state} characterId={route.characterId} roomId={route.roomId} sourceMessageId={route.sourceMessageId} onBack={goBackRendered} onChange={commitRenderedState} onRequestReply={requestRenderedReply} />
       ) : route.name === 'meeting' ? (
-        <MeetingEventScreen state={state} sessionId={route.sessionId} onBack={goBack} onChange={commit} />
+        <MeetingEventScreen state={state} sessionId={route.sessionId} onBack={goBackRendered} onChange={commitRenderedState} />
       ) : route.name === 'roomSettings' ? (
-        <RoomSettingsScreen state={state} roomId={route.roomId} onChange={commit} onBack={goBack} />
+        <RoomSettingsScreen state={state} roomId={route.roomId} onChange={commitRenderedState} onCommitCurrent={commitRenderedCurrentForScreen} onBack={goBackRendered} />
       ) : route.name === 'groupRoomSettings' ? (
-        <GroupRoomSettingsScreen state={state} roomId={route.roomId} onChange={commit} onBack={goBack} />
+        <GroupRoomSettingsScreen state={state} roomId={route.roomId} onChange={commitRenderedState} onBack={goBackRendered} />
       ) : route.name === 'characterSettings' ? (
-        <CharacterSettingsScreen state={state} characterId={route.characterId} onChange={commit} onBack={goBack} onDelete={handleDeleteCharacter} />
+        <CharacterSettingsScreen state={state} characterId={route.characterId} onChange={commitRenderedState} onBack={goBackRendered} onDelete={deleteRenderedCharacter} />
       ) : route.name === 'newRoom' ? (
-        <NewRoomScreen state={state} onBack={goBack} onCreate={async (next, roomId) => { await commit(next); navigate({ name: 'chatRoom', roomId }, { replace: true }); }} />
+        <NewRoomScreen state={state} onBack={goBackRendered} onCreate={async (next, roomId) => { await commitRenderedState(next); navigateRendered({ name: 'chatRoom', roomId }, { replace: true }); }} />
       ) : route.name === 'newGroupRoom' ? (
-        <NewGroupRoomScreen state={state} onBack={goBack} onCreate={async (next, roomId) => { await commit(next); navigate({ name: 'groupChatRoom', roomId }, { replace: true }); }} />
+        <NewGroupRoomScreen state={state} onBack={goBackRendered} onCreate={async (next, roomId) => { await commitRenderedState(next); navigateRendered({ name: 'groupChatRoom', roomId }, { replace: true }); }} />
       ) : route.name === 'newCharacter' ? (
-        <NewCharacterScreen state={state} onBack={goBack} onCreate={async (next, roomId) => { await commit(next); navigate({ name: 'chatRoom', roomId }, { replace: true }); }} />
+        <NewCharacterScreen state={state} onBack={goBackRendered} onCreate={async (next, roomId) => { await commitRenderedState(next); navigateRendered({ name: 'chatRoom', roomId }, { replace: true }); }} />
       ) : route.name === 'groupChatRoom' ? (
         <GroupChatRoomScreen
           state={state}
           roomId={route.roomId}
-          onChange={commit}
-          onCommitCurrent={commitCurrentForScreen}
-          onBack={goBack}
-          onOpenSettings={roomId => navigate({ name: 'groupRoomSettings', roomId, returnRoomId: route.roomId })}
-          onOpenMeeting={sessionId => navigate({ name: 'meeting', sessionId, returnRoute: route })}
-          onMaybeStartMeeting={maybeStartMeetingEvent}
-          onRequestMeetingPrompt={requestManualMeetingEvent}
-          onRequestServerReply={requestServerReply}
+          onChange={commitRenderedState}
+          onCommitCurrent={commitRenderedCurrentForScreen}
+          onBack={goBackRendered}
+          onOpenSettings={roomId => navigateRendered({ name: 'groupRoomSettings', roomId, returnRoomId: route.roomId })}
+          onOpenMeeting={sessionId => navigateRendered({ name: 'meeting', sessionId, returnRoute: route })}
+          onMaybeStartMeeting={maybeStartRenderedMeeting}
+          onRequestMeetingPrompt={requestRenderedMeeting}
+          onRequestServerReply={requestRenderedServerReply}
         />
       ) : route.name === 'chatRoom' ? (
         <ChatRoomScreen
           state={state}
           roomId={route.roomId}
-          onChange={commit}
-          onCommitCurrent={commitCurrent}
-          onBack={goBack}
-          onOpenRoomSettings={roomId => navigate({ name: 'roomSettings', roomId, returnRoomId: route.roomId })}
-          onOpenCharacterSettings={characterId => navigate({ name: 'characterSettings', characterId, returnRoomId: route.roomId })}
-          onOpenProfile={characterId => navigate({ name: 'profile', characterId, returnRoomId: route.roomId })}
-          onOpenCall={(characterId, callRoomId, sourceMessageId) => navigate({ name: 'call', characterId, roomId: callRoomId, sourceMessageId, returnRoute: route })}
-          onOpenMeeting={sessionId => navigate({ name: 'meeting', sessionId, returnRoute: route })}
-          onMaybeStartMeeting={maybeStartMeetingEvent}
-          onRequestMeetingPrompt={requestManualMeetingEvent}
-          onRequestReply={requestReply}
+          onChange={commitRenderedState}
+          onCommitCurrent={commitRenderedCurrent}
+          onBack={goBackRendered}
+          onOpenRoomSettings={roomId => navigateRendered({ name: 'roomSettings', roomId, returnRoomId: route.roomId })}
+          onOpenCharacterSettings={characterId => navigateRendered({ name: 'characterSettings', characterId, returnRoomId: route.roomId })}
+          onOpenProfile={characterId => navigateRendered({ name: 'profile', characterId, returnRoomId: route.roomId })}
+          onOpenCall={(characterId, callRoomId, sourceMessageId) => navigateRendered({ name: 'call', characterId, roomId: callRoomId, sourceMessageId, returnRoute: route })}
+          onOpenMeeting={sessionId => navigateRendered({ name: 'meeting', sessionId, returnRoute: route })}
+          onMaybeStartMeeting={maybeStartRenderedMeeting}
+          onRequestMeetingPrompt={requestRenderedMeeting}
+          onRequestReply={requestRenderedReply}
         />
       ) : route.name === 'randomChatRoom' ? (
         <ChatRoomScreen
           state={state}
           roomId={route.roomId}
-          onChange={commit}
-          onCommitCurrent={commitCurrent}
-          onBack={() => navigate({ name: 'random' })}
-          onOpenRoomSettings={roomId => navigate({ name: 'roomSettings', roomId, returnRoomId: route.roomId })}
-          onOpenCharacterSettings={characterId => navigate({ name: 'characterSettings', characterId, returnRoomId: route.roomId })}
-          onOpenProfile={characterId => navigate({ name: 'profile', characterId, returnRoomId: route.roomId })}
+          onChange={commitRenderedState}
+          onCommitCurrent={commitRenderedCurrent}
+          onBack={() => navigateRendered({ name: 'random' })}
+          onOpenRoomSettings={roomId => navigateRendered({ name: 'roomSettings', roomId, returnRoomId: route.roomId })}
+          onOpenCharacterSettings={characterId => navigateRendered({ name: 'characterSettings', characterId, returnRoomId: route.roomId })}
+          onOpenProfile={characterId => navigateRendered({ name: 'profile', characterId, returnRoomId: route.roomId })}
           randomMode
-          onLeaveRandomRoom={leaveRandomRoom}
-          onPromoteRandomRoom={promoteRandomRoom}
-          onOpenCall={(characterId, callRoomId, sourceMessageId) => navigate({ name: 'call', characterId, roomId: callRoomId, sourceMessageId, returnRoute: route })}
-          onOpenMeeting={sessionId => navigate({ name: 'meeting', sessionId, returnRoute: route })}
-          onMaybeStartMeeting={maybeStartMeetingEvent}
-          onRequestMeetingPrompt={requestManualMeetingEvent}
-          onRequestReply={requestReply}
+          onLeaveRandomRoom={leaveRenderedRandomRoom}
+          onPromoteRandomRoom={promoteRenderedRandomRoom}
+          onOpenCall={(characterId, callRoomId, sourceMessageId) => navigateRendered({ name: 'call', characterId, roomId: callRoomId, sourceMessageId, returnRoute: route })}
+          onOpenMeeting={sessionId => navigateRendered({ name: 'meeting', sessionId, returnRoute: route })}
+          onMaybeStartMeeting={maybeStartRenderedMeeting}
+          onRequestMeetingPrompt={requestRenderedMeeting}
+          onRequestReply={requestRenderedReply}
         />
       ) : (
         <ChatListScreen
           state={state}
-          onOpenSettings={() => navigate({ name: 'settings' })}
-          onOpenRoom={roomId => navigate({ name: 'chatRoom', roomId })}
-          onNewRoom={() => navigate({ name: 'newRoom' })}
-          onNewGroupRoom={() => navigate({ name: 'newGroupRoom' })}
-          onNewCharacter={() => navigate({ name: 'newCharacter' })}
-          onOpenProfile={characterId => navigate({ name: 'profile', characterId })}
-          onOpenNotifications={() => navigate({ name: 'notifications' })}
-          onOpenGroupRoom={roomId => navigate({ name: 'groupChatRoom', roomId })}
-          onOpenGroupSettings={roomId => navigate({ name: 'groupRoomSettings', roomId, returnRoomId: roomId })}
-          onOpenCall={(characterId, roomId) => navigate({ name: 'call', characterId, roomId, returnRoute: { name: 'chatRoom', roomId } })}
-          onOpenCharacterSettings={characterId => navigate({ name: 'characterSettings', characterId })}
-          onChange={commit}
+          onOpenSettings={() => navigateRendered({ name: 'settings' })}
+          onOpenRoom={roomId => navigateRendered({ name: 'chatRoom', roomId })}
+          onNewRoom={() => navigateRendered({ name: 'newRoom' })}
+          onNewGroupRoom={() => navigateRendered({ name: 'newGroupRoom' })}
+          onNewCharacter={() => navigateRendered({ name: 'newCharacter' })}
+          onOpenProfile={characterId => navigateRendered({ name: 'profile', characterId })}
+          onOpenNotifications={() => navigateRendered({ name: 'notifications' })}
+          onOpenGroupRoom={roomId => navigateRendered({ name: 'groupChatRoom', roomId })}
+          onOpenGroupSettings={roomId => navigateRendered({ name: 'groupRoomSettings', roomId, returnRoomId: roomId })}
+          onOpenCall={(characterId, roomId) => navigateRendered({ name: 'call', characterId, roomId, returnRoute: { name: 'chatRoom', roomId } })}
+          onOpenCharacterSettings={characterId => navigateRendered({ name: 'characterSettings', characterId })}
+          onChange={commitRenderedState}
         />
       )}
       </View>
-      {showBottomNav && !keyboardVisible ? <BottomNav active={activeBottomTab()} onSelect={openBottomTab} /> : null}
+      {showBottomNav && !keyboardVisible ? <BottomNav active={activeBottomTab()} onSelect={openRenderedBottomTab} /> : null}
       {incomingCall ? (
         <IncomingCallOverlay
           state={state}

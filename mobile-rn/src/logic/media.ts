@@ -21,6 +21,11 @@ import {
   type StateMediaReference,
   type StateMediaUriReplacement,
 } from './stateMediaPolicy';
+import {
+  createFullBackupRestoreCoordinator,
+  type ArchivedMediaRecord,
+  type PreparedFullBackupMedia,
+} from './fullBackupPolicy';
 
 export type { MediaGarbageCollectionResult, MediaManifestEntry } from './mediaStoragePolicy';
 
@@ -273,6 +278,81 @@ const mediaGarbageCollector = createMediaGarbageCollector({
 
 export async function readMediaManifest(): Promise<MediaManifestEntry[]> {
   return mediaManifestStore.read();
+}
+
+/** Removes only manifest assets created by a failed full-backup restore. */
+export async function rollbackImportedMediaAssets(
+  mediaIds: readonly string[],
+): Promise<void> {
+  const ids = new Set(mediaIds);
+  if (!ids.size) return;
+  await mediaManifestStore.mutate(async manifest => {
+    const removable = manifest.filter(entry => (
+      ids.has(entry.mediaId) && isUriWithinRoot(entry.fileUri, MEDIA_ROOT_DIR)
+    ));
+    const failures: Error[] = [];
+    for (const entry of removable) {
+      try {
+        await FileSystem.deleteAsync(entry.fileUri, { idempotent: true });
+      } catch (error) {
+        failures.push(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+    if (failures.length) {
+      throw new AggregateError(failures, '복원 실패 미디어 파일 일부를 정리하지 못했습니다.');
+    }
+    const removableIds = new Set(removable.map(entry => entry.mediaId));
+    return {
+      entries: manifest.filter(entry => !removableIds.has(entry.mediaId)),
+      result: undefined,
+    };
+  });
+}
+
+/** Restores archived bytes through canonical storage and registers every result. */
+export async function prepareArchivedMediaAssets(
+  records: readonly ArchivedMediaRecord[],
+): Promise<PreparedFullBackupMedia> {
+  const beforeManifest = await readMediaManifest();
+  const beforeIds = new Set(beforeManifest.map(entry => entry.mediaId));
+  const coordinator = createFullBackupRestoreCoordinator({
+    async restore(record) {
+      const dataUri = `data:${record.type};base64,${record.base64}`;
+      const targetFileUri = await externalizeDataUri(dataUri, 'full_backup_import', true);
+      if (targetFileUri === dataUri || !targetFileUri.startsWith('file:')) {
+        throw new Error(`백업 미디어를 영구 저장하지 못했습니다: ${record.mediaId}`);
+      }
+      const manifest = await readMediaManifest();
+      const restored = manifest.find(entry => entry.fileUri === targetFileUri);
+      if (!restored) {
+        throw new Error(`복원한 미디어가 manifest에 등록되지 않았습니다: ${record.mediaId}`);
+      }
+      if (record.contentHash && restored.contentHash !== record.contentHash) {
+        if (!beforeIds.has(restored.mediaId)) {
+          try {
+            await rollbackImportedMediaAssets([restored.mediaId]);
+          } catch (rollbackError) {
+            throw new AggregateError(
+              [
+                new Error(`백업 미디어 내용 hash가 manifest와 다릅니다: ${record.mediaId}`),
+                rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError)),
+              ],
+              '손상된 백업 미디어와 해당 파일 정리를 모두 처리하지 못했습니다.',
+            );
+          }
+        }
+        throw new Error(`백업 미디어 내용 hash가 manifest와 다릅니다: ${record.mediaId}`);
+      }
+      return {
+        sourceFileUri: record.sourceFileUri,
+        targetFileUri,
+        mediaId: restored.mediaId,
+        added: !beforeIds.has(restored.mediaId),
+      };
+    },
+    rollback: rollbackImportedMediaAssets,
+  });
+  return coordinator.prepare(records);
 }
 
 async function upsertMediaManifest(entry: MediaManifestEntry): Promise<void> {

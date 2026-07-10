@@ -11,7 +11,7 @@ import { makeId } from '../logic/ids';
 import { isRenderableMediaUri, pickStickerDataUri } from '../logic/media';
 import { Avatar } from '../components/Avatar';
 import { fetchGrokAccounts, fetchGrokBilling, fetchGrokStatus, GrokBilling, GrokLocalAccount, GrokLocalStatus, grokBaseUrl, grokCloudBaseUrl, logoutGrokOAuth, selectGrokOAuth, startGrokLogin, submitGrokOAuthCallback } from '../logic/grokLocal';
-import { createBackupPayload } from '../logic/backup';
+import { createBackupPayload, exportFullBackupZip } from '../logic/backup';
 import { DEFAULT_USER_APPEARANCE_PROMPT } from '../logic/prompts';
 import { MAX_CONTEXT_MESSAGES } from '../logic/limits';
 import { editableForbiddenPromptRules } from '../logic/imagePromptRules';
@@ -233,11 +233,12 @@ async function requestTermuxRunPermission(): Promise<boolean> {
   return result === PermissionsAndroid.RESULTS.GRANTED;
 }
 
-export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreState, onBack, onOpenLorebook, onOpenPrompts, onOpenCharacterSettings }: {
+export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreState, onRestoreFullBackup, onBack, onOpenLorebook, onOpenPrompts, onOpenCharacterSettings }: {
   state: SNSGodState;
   onChange: (next: SNSGodState, options?: { persist?: boolean; conflict?: 'incoming' | 'latest' }) => Promise<void> | void;
   onCommitCurrent: (patch: (current: SNSGodState) => SNSGodState) => Promise<SNSGodState | undefined> | SNSGodState | undefined;
   onRestoreState: (base: SNSGodState, imported: SNSGodState) => Promise<void> | void;
+  onRestoreFullBackup: (base: SNSGodState, uri: string) => Promise<void> | void;
   onBack: () => void;
   onOpenLorebook?: () => void;
   onOpenPrompts?: () => void;
@@ -1216,6 +1217,60 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
     }
   }
 
+  async function exportFullBackup() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const uri = await exportFullBackupZip(state);
+      setStatus(`사진 포함 전체 ZIP 생성 완료: ${uri.split('/').pop() || uri}`);
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { mimeType: 'application/zip', dialogTitle: 'SNSGod 사진 포함 전체 백업' });
+      }
+    } catch (error) {
+      setStatus(`전체 ZIP 백업 실패: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function importFullBackupFile() {
+    if (saving) return;
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/zip', 'application/x-zip-compressed', '*/*'],
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled || !result.assets?.length) return;
+      const uri = result.assets[0].uri;
+      Alert.alert(
+        '사진 포함 전체 ZIP 복원',
+        '선택한 백업의 상태와 사진을 복원합니다. 실패하면 현재 상태와 이번에 추가한 사진을 원래대로 되돌립니다.',
+        [
+          { text: '취소', style: 'cancel' },
+          {
+            text: '복원',
+            onPress: () => {
+              setSaving(true);
+              void Promise.resolve(onRestoreFullBackup(state, uri))
+                .then(() => {
+                  setImportJson('');
+                  setStatus('사진 포함 전체 ZIP 복원 완료');
+                })
+                .catch(error => {
+                  const message = error instanceof Error ? error.message : String(error);
+                  setStatus(`전체 ZIP 복원 실패: ${message}`);
+                  Alert.alert('전체 ZIP 복원 실패', message);
+                })
+                .finally(() => setSaving(false));
+            },
+          },
+        ],
+      );
+    } catch (error) {
+      setStatus(`전체 ZIP 파일 선택 실패: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   async function importBackupRaw(rawText: string) {
     if (saving) return;
     try {
@@ -1841,12 +1896,17 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
 
         <View style={[styles.card, activeSection !== 'user' && styles.hidden]}>
           <Text style={styles.cardTitle}>백업</Text>
-          <Text style={styles.help}>현재 WebView 앱에서 백업한 msgod_state_v2.json을 새 저장소로 가져오거나, RN 앱의 현재 데이터를 JSON으로 내보냅니다.</Text>
+          <Text style={styles.label}>사진 포함 전체 ZIP</Text>
+          <Text style={styles.help}>캐릭터·대화·설정과 앱이 관리하는 사진을 함께 저장합니다. 다른 기기나 재설치 복원에는 이 형식을 권장합니다.</Text>
+          <Pressable onPress={exportFullBackup} disabled={saving} style={[styles.secondary, saving && styles.disabled]}><Text style={styles.secondaryText}>사진 포함 전체 ZIP 내보내기</Text></Pressable>
+          <Pressable onPress={importFullBackupFile} disabled={saving} style={[styles.secondary, saving && styles.disabled]}><Text style={styles.secondaryText}>사진 포함 전체 ZIP 복원</Text></Pressable>
+          <Text style={styles.label}>상태만 JSON</Text>
+          <Text style={styles.help}>사진 파일은 제외하고 캐릭터·대화·설정만 저장합니다. 기존 WebView의 msgod_state_v2.json 가져오기도 이 영역에서 지원합니다.</Text>
           <Text style={styles.label}>백업 JSON 붙여넣기</Text>
           <TextInput value={importJson} onChangeText={setImportJson} style={[styles.input, styles.textarea]} multiline textAlignVertical="top" autoCapitalize="none" />
           <Pressable onPress={importBackupFile} disabled={saving} style={[styles.secondary, saving && styles.disabled]}><Text style={styles.secondaryText}>JSON 파일 선택 임포트</Text></Pressable>
           <Pressable onPress={importPastedBackup} disabled={saving} style={[styles.secondary, saving && styles.disabled]}><Text style={styles.secondaryText}>붙여넣은 JSON 임포트</Text></Pressable>
-          <Pressable onPress={exportBackup} style={styles.secondary}><Text style={styles.secondaryText}>현재 데이터 내보내기/공유</Text></Pressable>
+          <Pressable onPress={exportBackup} style={styles.secondary}><Text style={styles.secondaryText}>상태만 JSON 내보내기/공유</Text></Pressable>
         </View>
         <View style={[styles.card, activeSection !== 'prompts' && styles.hidden]}>
           <Text style={styles.cardTitle}>프롬프트</Text>

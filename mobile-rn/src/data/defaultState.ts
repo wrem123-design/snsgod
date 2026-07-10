@@ -32,6 +32,12 @@ export function createDefaultState(): SNSGodState {
           apiModel: 'gemini-2.5-pro',
           maxTokens: 700,
           temperature: 0.85
+        },
+        grok: {
+          apiEndpoint: 'http://168.110.122.66/api/xai-proxy/v1/chat/completions',
+          apiModel: 'grok-4.3',
+          maxTokens: 700,
+          temperature: 0.85
         }
       },
       userName: '나',
@@ -167,6 +173,7 @@ export function createDefaultState(): SNSGodState {
     roomSummaries: [],
     groupRoomSummaries: [],
     characterMemories: [],
+    characterEvents: [],
     randomChats: [],
     loreEntries: [],
     loreFolders: [],

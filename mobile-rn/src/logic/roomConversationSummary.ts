@@ -62,6 +62,8 @@ export function buildPrivateRoomSummaryChatMessages(
         'Summarize this private chat room into durable relationship memory for future roleplay replies.',
         'Write in Korean. Return plain text only. No markdown table, no JSON.',
         'Focus on facts the characters should remember: relationship changes, promises, nicknames, boundaries, emotional events, unresolved topics, preferences, important phone-call memories, and recurring inside jokes.',
+        'Every bullet must be a concise factual statement that remains useful outside the original scene.',
+        'Never preserve scene prose, physical action narration, atmosphere, internal monologue, or direct dialogue. Do not imitate the transcript writing style.',
         'Do not include trivial line-by-line recap. Do not invent facts. If uncertain, phrase it as uncertain.',
         'Keep it compact but useful, around 8-16 bullet lines.'
       ].join('\n')

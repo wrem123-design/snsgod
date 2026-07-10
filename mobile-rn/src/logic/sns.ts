@@ -7,6 +7,8 @@ import { lorePromptBlock, resolveActiveLore } from './loreEngine';
 import { pushNotification } from './notifications';
 import { DEFAULT_PROMPTS, configuredPrompt } from './prompts';
 import { SNSDmThread, SNSGodCharacter, SNSGodState, SNSPost } from '../types';
+import { resolveCharacterRuntimeState, runtimeStatePromptBlock } from './characterWorld';
+import { compactLegacyMemoryFacts } from './memoryBridge';
 
 type GeneratedPlatform = {
   platform?: string;
@@ -498,7 +500,8 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
   const transcript = roomTranscriptForSns(state, character, options.roomId);
   const phoneSummary = phoneSummaryForSns(state, character);
   const lore = snsLoreBlock(state, character, options.roomId, `${transcript}\n${phoneSummary}`);
-  const memories = (character.memories || []).slice(-8).map(item => `- ${item}`).join('\n');
+  const memories = compactLegacyMemoryFacts(character.memories || [], 8).map(item => '- ' + item).join('\\n');
+  const runtimeState = resolveCharacterRuntimeState(state, character);
   const targetPlatform = platform === 'instagram' ? 'instagram' : 'twitter/x';
   const dailyMicro = !transcript.trim() && !sns.subject && !options.image;
   const prompt = [
@@ -516,6 +519,7 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
     'For every DM message, from must be one of the participant display names. Do not make every message from the character. Create a plausible back-and-forth conversation.',
     `Target platform: ${targetPlatform}.`,
     `Current time context: ${timeContextForSns(state)}.`,
+    runtimeStatePromptBlock(runtimeState),
     dailyMicro ? 'Daily micro mode: no strong recent chat direction exists, so write a short ordinary daily/private account post. Set imagePrompt empty unless the user attached an image.' : '',
     `Comment count per platform: ${sns.commentQty || '2-4'} (${commentCountHint(sns.commentQty)} desired).`,
     sns.autoComments === false ? 'Do not invent audience comments; return comments as an empty array.' : 'Invent fresh believable audience comments for this post only.',
@@ -680,6 +684,9 @@ export async function maybeCreateBackgroundAutoSNSPost(state: SNSGodState): Prom
       return rooms.map(room => ({ character, room, messages: state.messages[room.id] || [] }));
     })
     .filter(item => {
+      const runtime = resolveCharacterRuntimeState(state, item.character);
+      if (runtime.phoneAvailability === 'sleeping' || runtime.phoneAvailability === 'offline') return false;
+      if (runtime.phoneAvailability === 'busy' && runtime.energy < 45) return false;
       const messages = item.messages;
       if (messages.length < Math.max(2, Number(state.config.snsStartCount ?? 6))) return false;
       const latest = [...messages].reverse().find(message => message.role === 'user' || message.role === 'character');

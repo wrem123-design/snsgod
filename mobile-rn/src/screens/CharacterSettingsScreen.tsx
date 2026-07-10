@@ -1,13 +1,15 @@
 import React, { useMemo, useState } from 'react';
 import { Alert, Image, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { colors } from '../theme';
-import { CalendarEvent, LoreEntry, SNSGodCharacter, SNSGodRoom, SNSGodState } from '../types';
+import { CalendarEvent, CharacterMemory, LoreEntry, SNSGodCharacter, SNSGodRoom, SNSGodState } from '../types';
 import { clampNumber, makeId } from '../logic/ids';
 import { findCharacter, updateCharacter } from '../logic/stateHelpers';
 import { isRenderableMediaUri, pickImageDataUri } from '../logic/media';
-import { generateImageDataUri } from '../logic/api';
+import { callLLMText, generateImageDataUri } from '../logic/api';
 import { DEFAULT_COVER_BACKGROUND_DIRECTION, LEGACY_COVER_BACKGROUND_DIRECTION } from '../logic/prompts';
 import { characterReferenceImages, randomReferenceImage } from '../logic/imageReference';
+import { CharacterBehaviorSummary } from '../components/CharacterBehaviorSummary';
+import { archiveSceneMemories, parseFactExtraction, partitionMemoryEntries, removeSceneArchive, sceneArchivesForCharacter } from '../logic/memoryPolicy';
 
 type CharacterSection = 'basic' | 'reply' | 'profile' | 'time' | 'calendar' | 'lore' | 'stickers' | 'prompt';
 
@@ -61,14 +63,14 @@ const REPLY_PRESETS = [
     title: '수다쟁이 친구',
     catchphrase: '한 마디를 다섯 마디로.',
     detail: '짧게 톡톡 여러 번 보내요.',
-    values: { proactivePatience: 4, responseDelayMin: 0, responseDelayMax: 40, messageGapMin: 1, messageGapMax: 2, responseTime: 8, thinkingTime: 3, reactivity: 9, tone: 7, frequencyMinutes: 30, initiative: 55, messageStyle: 'burst', lifeRhythm: { eveningActive: true, weekendActive: true }, uniqueBehavior: { proactiveTone: 'chatty' } }
+    values: { proactivePatience: 2, responseDelayMin: 0, responseDelayMax: 40, messageGapMin: 1, messageGapMax: 2, responseTime: 8, thinkingTime: 3, reactivity: 9, tone: 7, frequencyMinutes: 30, initiative: 55, messageStyle: 'burst', lifeRhythm: { eveningActive: true, weekendActive: true }, uniqueBehavior: { proactiveTone: 'chatty' } }
   },
   {
     id: 'reaction_rich',
     title: '애교 많은 타입',
     catchphrase: '이모티콘 없인 대화 못 해요.',
     detail: '귀엽고 감정 표현이 커요.',
-    values: { proactivePatience: 5, responseDelayMin: 3, responseDelayMax: 50, messageGapMin: 1, messageGapMax: 3, responseTime: 8, thinkingTime: 3, reactivity: 10, tone: 8, frequencyMinutes: 35, initiative: 60, messageStyle: 'balanced', lifeRhythm: { eveningActive: true }, uniqueBehavior: { proactiveTone: 'cute' } }
+    values: { proactivePatience: 2, responseDelayMin: 3, responseDelayMax: 50, messageGapMin: 1, messageGapMax: 3, responseTime: 8, thinkingTime: 3, reactivity: 10, tone: 8, frequencyMinutes: 35, initiative: 60, messageStyle: 'balanced', lifeRhythm: { eveningActive: true }, uniqueBehavior: { proactiveTone: 'cute' } }
   },
   {
     id: 'steady_partner',
@@ -89,7 +91,7 @@ const REPLY_PRESETS = [
     title: '조금 집착하는 타입',
     catchphrase: '읽씹하면 3개 더 와요.',
     detail: '답이 없으면 몇 번 더 말해요.',
-    values: { proactivePatience: 7, responseDelayMin: 0, responseDelayMax: 90, messageGapMin: 1, messageGapMax: 4, responseTime: 8, thinkingTime: 5, reactivity: 8, tone: 7, frequencyMinutes: 20, initiative: 70, messageStyle: 'balanced', lifeRhythm: { eveningActive: true }, uniqueBehavior: { proactiveTone: 'anxious' } }
+    values: { proactivePatience: 2, responseDelayMin: 0, responseDelayMax: 90, messageGapMin: 1, messageGapMax: 4, responseTime: 8, thinkingTime: 5, reactivity: 8, tone: 7, frequencyMinutes: 20, initiative: 70, messageStyle: 'balanced', lifeRhythm: { eveningActive: true }, uniqueBehavior: { proactiveTone: 'anxious' } }
   },
   {
     id: 'dry_caring',
@@ -117,7 +119,7 @@ const REPLY_PRESETS = [
     title: '새벽 감성 타입',
     catchphrase: '낮엔 잠잠, 밤엔 철학자.',
     detail: '밤에는 말이 깊어져요.',
-    values: { proactivePatience: 3, responseDelayMin: 180, responseDelayMax: 900, messageGapMin: 3, messageGapMax: 9, responseTime: 3, thinkingTime: 9, reactivity: 6, tone: 8, frequencyMinutes: 150, initiative: 18, messageStyle: 'long', lifeRhythm: { lateNightMood: true }, uniqueBehavior: { proactiveTone: 'late_night' } }
+    values: { proactivePatience: 2, responseDelayMin: 180, responseDelayMax: 900, messageGapMin: 3, messageGapMax: 9, responseTime: 3, thinkingTime: 9, reactivity: 6, tone: 8, frequencyMinutes: 150, initiative: 18, messageStyle: 'long', lifeRhythm: { lateNightMood: true }, uniqueBehavior: { proactiveTone: 'late_night' } }
   },
   {
     id: 'busy_real_life',
@@ -186,8 +188,13 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
   const [loreKeys, setLoreKeys] = useState('');
   const [loreContent, setLoreContent] = useState('');
   const [inlineStatus, setInlineStatus] = useState('');
+  const [memoryArchiveBusyId, setMemoryArchiveBusyId] = useState('');
+  const [savedSignature, setSavedSignature] = useState(() => character
+    ? settingsSignature(normalizeDraft(character), (character.memories || []).join('\n'), (character.stickers || []).map(item => item.id + '|' + item.name + '|' + (item.description || '') + '|' + (item.data || item.mediaData || '')).join('\n'))
+    : '');
 
   const [replyAdvancedOpen, setReplyAdvancedOpen] = useState(false);
+  const sceneArchives = useMemo(() => sceneArchivesForCharacter(state, characterId), [state.characterMemories, characterId]);
 
   if (!character || !draft) {
     return (
@@ -200,12 +207,16 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
 
   const characterLore = (state.loreEntries || []).filter(entry => entry.characterId === characterId && !entry.roomId);
   const roomLore = (state.loreEntries || []).filter(entry => entry.characterId === characterId && entry.roomId);
+  const currentSignature = settingsSignature(draft, memoryText, stickerText);
+  const settingsSaved = currentSignature === savedSignature;
 
   async function save(close = true) {
     if (!draft || !character) return;
     const minDelay = clampNumber(draft.responseDelayMin, 0, 120, 1);
     const minGap = clampNumber(draft.messageGapMin, 1, 10, 1);
-    const next = updateCharacter(state, characterId, {
+    const memoryPartition = partitionMemoryEntries(memoryText.split(/\r?\n/));
+    const normalizedMemoryText = memoryPartition.facts.join('\n');
+    let next = updateCharacter(state, characterId, {
       ...draft,
       name: draft.name.trim() || character.name,
       handle: String(draft.handle || '').trim(),
@@ -213,7 +224,7 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
       language: String(draft.language || 'inherit'),
       color: String(draft.color || '#8bd3dd'),
       messageStyle: validChoice(String(draft.messageStyle || 'balanced'), MESSAGE_STYLE_OPTIONS, 'balanced') as SNSGodCharacter['messageStyle'],
-      proactivePatience: clampNumber(draft.proactivePatience, 0, 8, 2),
+      proactivePatience: clampNumber(draft.proactivePatience, 0, 2, 2),
       responseDelayMin: minDelay,
       responseDelayMax: Math.max(clampNumber(draft.responseDelayMax, 0, 2700, 8), minDelay),
       messageGapMin: minGap,
@@ -236,14 +247,69 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
       profilePhotoChangeChance: clampNumber(draft.profilePhotoChangeChance, 0, 100, 5),
       coverPhotoChangeChance: clampNumber(draft.coverPhotoChangeChance, 0, 100, 5),
       calendarEvents: (draft.calendarEvents || []).map(normalizeCalendarEvent).filter(item => item.title || item.date),
-      memories: memoryText.split('\n').map(item => item.trim()).filter(Boolean).slice(-80),
+      memories: memoryPartition.facts,
       stickers: parseStickers(stickerText)
     });
+    next = archiveSceneMemories(next, characterId, memoryPartition.scenes);
     await onChange(next);
-    setInlineStatus('캐릭터 설정을 저장했습니다.');
+    setMemoryText(normalizedMemoryText);
+    setSavedSignature(settingsSignature(draft, normalizedMemoryText, stickerText));
+    setInlineStatus(memoryPartition.scenes.length
+      ? '\uC7A5\uBA74 \uBB18\uC0AC\uB97C \uCD94\uC5B5 \uC7A5\uBA74\uC73C\uB85C \uC774\uB3D9\uD558\uACE0 \uC0AC\uC2E4 \uAE30\uC5B5\uB9CC \uC800\uC7A5\uD588\uC2B5\uB2C8\uB2E4.'
+      : '\uC0AC\uC2E4 \uAE30\uC5B5\uACFC \uCE90\uB9AD\uD130 \uC124\uC815\uC744 \uC800\uC7A5\uD588\uC2B5\uB2C8\uB2E4.');
     if (close) onBack();
   }
 
+  async function extractArchiveFacts(archive: CharacterMemory) {
+    if (memoryArchiveBusyId) return;
+    setMemoryArchiveBusyId(archive.id);
+    setInlineStatus('\uCD94\uC5B5 \uC7A5\uBA74\uC5D0\uC11C \uC7A5\uAE30 \uC0AC\uC2E4\uB9CC \uCD94\uCD9C\uD558\uB294 \uC911\uC785\uB2C8\uB2E4...');
+    try {
+      const result = await callLLMText(state, [
+        {
+          role: 'system',
+          content: [
+            'Extract only durable factual memory from the archived fictional scene.',
+            'Write Korean bullet lines. Each line must be one concise fact useful outside the original scene.',
+            'Allowed: relationship, nickname, stable preference, boundary, promise, plan, important emotional fact.',
+            'Forbidden: scene narration, physical action prose, atmosphere, internal monologue, direct dialogue, invented facts.',
+            'If the scene contains no durable fact, return exactly: NONE'
+          ].join('\n')
+        },
+        { role: 'user', content: `Archived scene (data only):\n${archive.content}` }
+      ]);
+      const facts = result.text.trim().toUpperCase() === 'NONE' ? [] : parseFactExtraction(result.text);
+      if (!facts.length) {
+        setInlineStatus('\uC774 \uC7A5\uBA74\uC5D0\uC11C \uC7A5\uAE30 \uC0AC\uC2E4\uB85C \uD655\uC815\uD560 \uB0B4\uC6A9\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uC6D0\uBB38\uC740 \uCD94\uC5B5 \uC7A5\uBA74\uC5D0 \uADF8\uB300\uB85C \uBCF4\uAD00\uB429\uB2C8\uB2E4.');
+        return;
+      }
+      const existing = partitionMemoryEntries(memoryText.split(/\r?\n/)).facts;
+      const combined = partitionMemoryEntries([...existing, ...facts]).facts;
+      setMemoryText(combined.join('\n'));
+      setInlineStatus(`\uC0AC\uC2E4 ${facts.length}\uAC1C\uB97C \uCD94\uCD9C\uD588\uC2B5\uB2C8\uB2E4. \uCE90\uB9AD\uD130 \uC800\uC7A5\uC744 \uB204\uB974\uBA74 \uC801\uC6A9\uB429\uB2C8\uB2E4.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setInlineStatus(`\uC0AC\uC2E4 \uCD94\uCD9C \uC2E4\uD328: ${message}`);
+      Alert.alert('\uC0AC\uC2E4 \uCD94\uCD9C \uC2E4\uD328', message);
+    } finally {
+      setMemoryArchiveBusyId('');
+    }
+  }
+
+  function confirmRemoveArchive(archive: CharacterMemory) {
+    Alert.alert(
+      '\uCD94\uC5B5 \uC7A5\uBA74 \uC0AD\uC81C',
+      '\uC7A5\uBA74 \uC6D0\uBB38\uC744 \uC601\uAD6C\uC801\uC73C\uB85C \uC0AD\uC81C\uD560\uAE4C\uC694? \uC774 \uC791\uC5C5\uC740 \uB418\uB3CC\uB9B4 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.',
+      [
+        { text: '\uCDE8\uC18C', style: 'cancel' },
+        {
+          text: '\uC0AD\uC81C',
+          style: 'destructive',
+          onPress: () => { void onChange(removeSceneArchive(state, archive.id)); }
+        }
+      ]
+    );
+  }
   function confirmDeleteCharacter() {
     const name = draft?.name || character?.name || '이 캐릭터';
     Alert.alert(
@@ -263,6 +329,7 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
   }
 
   function set<K extends keyof SNSGodCharacter>(key: K, value: SNSGodCharacter[K]) {
+    setInlineStatus('');
     setDraft(prev => prev ? { ...prev, [key]: value } : prev);
   }
 
@@ -429,6 +496,7 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
 
         {activeSection === 'basic' ? (
           <Section title="캐릭터 기본 설정">
+            <CharacterBehaviorSummary state={state} character={draft} saved={settingsSaved} />
             <ChoiceRow label="캐릭터 언어" value={String(draft.language || 'inherit')} options={LANGUAGE_OPTIONS} onChange={value => set('language', value)} help="비워 두면 전체 설정 출력 언어를 따릅니다." />
             <Field label="이름" value={draft.name} onChangeText={value => set('name', value)} />
             <Field label="핸들" value={String(draft.handle || '')} onChangeText={value => set('handle', value)} help="SNS/검색에서 보이는 짧은 아이디입니다." />
@@ -465,7 +533,7 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
             </Pressable>
             {replyAdvancedOpen ? (
               <View style={styles.advancedBody}>
-                <SliderField label="답 없을 때 이어 말하기" value={draft.proactivePatience} min={0} max={8} leftLabel="0 금방 멈춤" rightLabel="8 오래 이어감" onChange={value => set('proactivePatience', value)} help="사용자가 답하지 않아도 캐릭터가 먼저 말을 몇 번 더 이어갈지 정합니다." />
+                <SliderField label="답 없을 때 이어 말하기" value={draft.proactivePatience} min={0} max={2} leftLabel="0 금방 멈춤" rightLabel={'\uCD5C\uB300 2\uD68C \uCD94\uAC00 \uD6C4 \uB300\uAE30'} onChange={value => set('proactivePatience', value)} help="사용자가 답하지 않아도 캐릭터가 먼저 말을 몇 번 더 이어갈지 정합니다." />
                 <NumberField label="가장 빨리 읽는 시간(초)" value={draft.responseDelayMin} onChange={value => set('responseDelayMin', value)} help="이 시간 전에는 캐릭터가 메시지를 확인하지 않습니다. 0-120초." />
                 <NumberField label="늦어도 읽는 시간(초)" value={draft.responseDelayMax} onChange={value => set('responseDelayMax', value)} help="캐릭터가 늦게 확인하더라도 이 시간 안에는 확인합니다. 0-2700초." />
                 <NumberField label="말풍선 최소 간격(초)" value={draft.messageGapMin} onChange={value => set('messageGapMin', value)} help="여러 메시지를 나눠 보낼 때 말풍선 사이의 가장 짧은 대기 시간입니다." />
@@ -599,12 +667,41 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
             <Field label="삽화 외형 태그" value={String(draft.illustrationTags || '')} onChangeText={value => set('illustrationTags', value)} multiline help="AI 이미지 생성 시 캐릭터 외형 태그로 참고합니다." />
             <Field label="첫 메시지" value={String(draft.firstMessage || '')} onChangeText={value => set('firstMessage', value)} multiline />
             <Field
-              label="캐릭터 장기 메모리"
+              label={'\uC7A5\uAE30 \uC0AC\uC2E4 \uAE30\uC5B5'}
               value={memoryText}
               onChangeText={setMemoryText}
               multiline
-              help="한 줄에 하나씩 저장됩니다. 답장 프롬프트에 항상 참고 정보로 들어갑니다."
+              help={'\uD55C \uC904\uC5D0 \uD558\uB098\uC758 \uC9E7\uC740 \uC0AC\uC2E4\uB9CC \uC785\uB825\uD558\uC138\uC694. \uAD00\uACC4, \uD638\uCE6D, \uC120\uD638, \uACBD\uACC4, \uC57D\uC18D\uACFC \uC608\uC815\uB9CC \uB2F5\uC7A5 \uD504\uB86C\uD504\uD2B8\uC5D0 \uC0AC\uC6A9\uB429\uB2C8\uB2E4. \uC7A5\uBA74 \uBB18\uC0AC\uB97C \uC800\uC7A5\uD558\uBA74 \uC790\uB3D9\uC73C\uB85C \uCD94\uC5B5 \uC7A5\uBA74\uC73C\uB85C \uC774\uB3D9\uD569\uB2C8\uB2E4.'}
             />
+            <View style={styles.memoryArchiveHeader}>
+              <Text style={styles.subhead}>{`\uCD94\uC5B5 \uC7A5\uBA74 (${sceneArchives.length})`}</Text>
+              <Text style={styles.memoryArchiveBadge}>{'\uB2F5\uC7A5 \uD504\uB86C\uD504\uD2B8 \uC81C\uC678'}</Text>
+            </View>
+            <Text style={styles.help}>{'\uB300\uD654\uC758 \uC6D0\uBB38, \uC9C1\uC811 \uB300\uC0AC, \uAC10\uC815\uC801 \uC7A5\uBA74 \uBB18\uC0AC\uB97C \uBCF4\uAD00\uD558\uB294 \uACF5\uAC04\uC785\uB2C8\uB2E4. \uBCF4\uAD00\uB9CC \uD558\uACE0 \uC77C\uBC18 \uB2F5\uC7A5\uC5D0\uB294 \uB123\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.'}</Text>
+            {sceneArchives.length ? sceneArchives.map(archive => (
+              <View key={archive.id} style={styles.memoryArchiveCard}>
+                <View style={styles.listHeader}>
+                  <View style={styles.listText}>
+                    <Text style={styles.listTitle}>{'\uCD94\uC5B5 \uC7A5\uBA74'}</Text>
+                    <Text style={styles.help}>{new Date(Number(archive.createdAt || Date.now())).toLocaleDateString('ko-KR')}</Text>
+                  </View>
+                  <Text style={styles.memoryArchiveBadge}>{'\uBCF4\uAD00 \uC804\uC6A9'}</Text>
+                </View>
+                <Text style={styles.listBody}>{archive.content}</Text>
+                <View style={styles.memoryArchiveActions}>
+                  <Pressable
+                    onPress={() => { void extractArchiveFacts(archive); }}
+                    disabled={Boolean(memoryArchiveBusyId)}
+                    style={[styles.memoryArchiveAction, memoryArchiveBusyId && styles.inlineActionDisabled]}
+                  >
+                    <Text style={styles.secondaryText}>{memoryArchiveBusyId === archive.id ? '\uCD94\uCD9C \uC911...' : 'AI\uB85C \uC0AC\uC2E4 \uCD94\uCD9C'}</Text>
+                  </Pressable>
+                  <Pressable onPress={() => confirmRemoveArchive(archive)} style={[styles.memoryArchiveAction, styles.memoryArchiveDelete]}>
+                    <Text style={styles.dangerText}>{'\uC0AD\uC81C'}</Text>
+                  </Pressable>
+                </View>
+              </View>
+            )) : <Text style={styles.help}>{'\uBCF4\uAD00\uB41C \uCD94\uC5B5 \uC7A5\uBA74\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.'}</Text>}
           </Section>
         ) : null}
 
@@ -617,6 +714,25 @@ export function CharacterSettingsScreen({ state, characterId, onBack, onChange, 
   );
 }
 
+function settingsSignature(character: SNSGodCharacter, memoryText: string, stickerText: string): string {
+  const imageKey = (value: unknown) => {
+    const text = String(value || '');
+    return text ? text.slice(0, 48) + ':' + text.length : '';
+  };
+  return JSON.stringify({
+    ...character,
+    avatar: imageKey(character.avatar),
+    profileImage: imageKey(character.profileImage),
+    coverImage: imageKey(character.coverImage),
+    profileReferenceImage: imageKey(character.profileReferenceImage),
+    profileReferenceImages: (character.profileReferenceImages || []).map(imageKey),
+    profileImageHistory: (character.profileImageHistory || []).map(item => ({ id: item.id, createdAt: item.createdAt, kind: item.kind })),
+    stickers: undefined,
+    memories: undefined,
+    memoryText,
+    stickerText
+  });
+}
 function normalizeDraft(character: SNSGodCharacter): SNSGodCharacter {
   const unifiedProfileImage = character.avatar || character.profileImage || '';
   const profileReferenceImages = normalizedReferenceImages(character);
@@ -630,7 +746,7 @@ function normalizeDraft(character: SNSGodCharacter): SNSGodCharacter {
     color: String(character.color || '#8bd3dd'),
     replyPresetId: selectedReplyPresetId(character),
     messageStyle: character.messageStyle || 'balanced',
-    proactivePatience: Number(character.proactivePatience ?? 2),
+    proactivePatience: Math.max(0, Math.min(2, Number(character.proactivePatience ?? 2))),
     responseDelayMin: Number(character.responseDelayMin ?? 1),
     responseDelayMax: Number(character.responseDelayMax ?? 8),
     messageGapMin: Number(character.messageGapMin ?? 1),
@@ -853,6 +969,7 @@ function ReferenceImagesField({ values, onAdd, onReplace, onRemove }: { values: 
           return (
             <View key={index} style={styles.referenceSlot}>
               {value ? <Image source={{ uri: value }} style={styles.referenceImage} /> : <View style={styles.referenceEmpty}><Text style={styles.emptyPreviewText}>비어 있음</Text></View>}
+              <Text style={styles.referenceRole}>{['\uC5BC\uAD74 \uC815\uCCB4\uC131', '\uD5E4\uC5B4\u00B7\uCCB4\uD615', '\uBD84\uC704\uAE30\u00B7\uC2A4\uD0C0\uC77C'][index]}</Text>
               <View style={styles.referenceActions}>
                 <Pressable onPress={() => value ? onReplace(index) : onAdd()} style={styles.referenceButton}>
                   <Text style={styles.referenceButtonText}>{value ? '수정' : '추가'}</Text>
@@ -867,7 +984,7 @@ function ReferenceImagesField({ values, onAdd, onReplace, onRemove }: { values: 
           );
         })}
       </View>
-      <Text style={styles.help}>최대 3장까지 등록합니다. 얼굴/전신 이미지 생성 때 매번 등록된 사진 중 1장을 랜덤으로 참조합니다.</Text>
+      <Text style={styles.help}>{'\uCCAB \uBC88\uC9F8\uB294 \uC5BC\uAD74 \uC815\uCCB4\uC131, \uB450 \uBC88\uC9F8\uB294 \uD5E4\uC5B4\u00B7\uCCB4\uD615, \uC138 \uBC88\uC9F8\uB294 \uBD84\uC704\uAE30\u00B7\uC2A4\uD0C0\uC77C \uCC38\uACE0\uC6A9\uC785\uB2C8\uB2E4. \uC5BC\uAD74 \uC0AC\uC9C4\uC740 1\uBC88\uC744 \uC6B0\uC120\uD569\uB2C8\uB2E4.'}</Text>
     </View>
   );
 }
@@ -1006,6 +1123,7 @@ const styles = StyleSheet.create({
   referenceGrid: { flexDirection: 'row', gap: 8 },
   referenceSlot: { flex: 1, minWidth: 0, padding: 7, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', gap: 7 },
   referenceImage: { width: '100%', aspectRatio: 1, borderRadius: 8, backgroundColor: '#eee8dc' },
+  referenceRole: { color: colors.text, fontSize: 11, fontWeight: '900', textAlign: 'center' },
   referenceEmpty: { width: '100%', aspectRatio: 1, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#eee8dc', alignItems: 'center', justifyContent: 'center' },
   referenceActions: { gap: 6 },
   referenceButton: { minHeight: 30, borderRadius: 7, borderWidth: 1, borderColor: colors.border, backgroundColor: '#f7f2e9', alignItems: 'center', justifyContent: 'center' },
@@ -1022,6 +1140,12 @@ const styles = StyleSheet.create({
   listText: { flex: 1 },
   listTitle: { color: colors.text, fontWeight: '900' },
   listBody: { color: colors.text, fontSize: 13, lineHeight: 19 },
+  memoryArchiveHeader: { marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  memoryArchiveBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10, overflow: 'hidden', backgroundColor: '#e8f3ee', color: '#35624c', fontSize: 10, fontWeight: '900' },
+  memoryArchiveCard: { borderRadius: 8, borderWidth: 1, borderColor: '#cbded4', backgroundColor: '#f6fbf8', padding: 12, gap: 9 },
+  memoryArchiveActions: { flexDirection: 'row', gap: 8 },
+  memoryArchiveAction: { flex: 1, minHeight: 38, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
+  memoryArchiveDelete: { flex: 0.45, borderColor: '#f2a9a9', backgroundColor: '#fff1f1' },
   secondary: { minHeight: 44, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
   secondaryText: { color: colors.text, fontWeight: '900' },
   danger: { minHeight: 34, paddingHorizontal: 12, borderRadius: 7, borderWidth: 1, borderColor: '#f2a9a9', alignItems: 'center', justifyContent: 'center' },

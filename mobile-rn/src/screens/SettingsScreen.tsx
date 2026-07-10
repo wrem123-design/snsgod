@@ -16,8 +16,9 @@ import { DEFAULT_USER_APPEARANCE_PROMPT } from '../logic/prompts';
 import { MAX_CONTEXT_MESSAGES } from '../logic/limits';
 import { editableForbiddenPromptRules } from '../logic/imagePromptRules';
 import { getRecommendedOptimizationStatus, maybePromptBatteryOptimizationExemption, RecommendedOptimizationStatus } from '../logic/backgroundAutomation';
+import { bootstrapServer, registerServerDevice, syncServerMessages } from '../logic/serverMessaging';
 
-const PROVIDERS: ApiProvider[] = ['vertex', 'gemini', 'openai', 'anthropic', 'custom'];
+const PROVIDERS: ApiProvider[] = ['vertex', 'gemini', 'openai', 'anthropic', 'custom', 'grok'];
 const PROVIDER_PRESETS: Partial<Record<ApiProvider, { endpoint: string; model: string }[]>> = {
   vertex: [
     { endpoint: '', model: 'gemini-3-flash-preview' },
@@ -40,6 +41,9 @@ const PROVIDER_PRESETS: Partial<Record<ApiProvider, { endpoint: string; model: s
   ],
   custom: [
     { endpoint: 'https://api.cerebras.ai/v1/chat/completions', model: 'gemma-4-31b' }
+  ],
+  grok: [
+    { endpoint: 'http://168.110.122.66/api/xai-proxy/v1/chat/completions', model: 'grok-4.3' }
   ]
 };
 
@@ -314,7 +318,9 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   const [snsIncludeUserInDM, setSnsIncludeUserInDM] = useState((state.config.sns || {}).includeUserInDM !== false);
   const [autoEnabled, setAutoEnabled] = useState(state.config.autoEnabled !== false);
   const [privateFirst, setPrivateFirst] = useState(state.config.privateFirst === true);
-  const [groupFirst, setGroupFirst] = useState(state.config.groupFirst === true);
+  const [groupFirst, setGroupFirst] = useState(state.config.groupFirst === true);  const serverMessagingConfig = state.config.serverMessaging || {};
+  const [serverBaseUrl, setServerBaseUrl] = useState(String(serverMessagingConfig.baseUrl || 'http://168.110.122.66/snsgod-message'));
+  const [serverPairingSecret, setServerPairingSecret] = useState('');
   const [randomDmEnabled, setRandomDmEnabled] = useState(state.config.randomDmEnabled !== false);
   const [snsAutoPostEnabled, setSnsAutoPostEnabled] = useState(state.config.snsAutoPostEnabled !== false);
   const [characterPhoneCallEnabled, setCharacterPhoneCallEnabled] = useState(state.config.characterPhoneCallEnabled !== false);
@@ -624,7 +630,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
         }
       }
     };
-    return { next, keyCount: provider === 'vertex' ? (vertexServiceAccountJson.trim() ? 1 : 0) : keys.length };
+    return { next, keyCount: provider === 'vertex' ? (vertexServiceAccountJson.trim() ? 1 : 0) : provider === 'grok' ? 1 : keys.length };
   }
 
   async function saveApi() {
@@ -646,7 +652,7 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
   async function testApi() {
     if (testingApi) return;
     const { next, keyCount } = buildApiState();
-    if (!keyCount) {
+    if (!keyCount && provider !== 'grok') {
       setStatus(provider === 'vertex' ? 'API 테스트 실패: Vertex Service Account JSON을 먼저 입력하세요.' : 'API 테스트 실패: API 키를 먼저 입력하세요.');
       return;
     }
@@ -832,6 +838,38 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
     }
   }
 
+  async function saveServerMessaging(connect = false) {
+    if (saving) return;
+    setSaving(true);
+    try {
+      let next: SNSGodState = {
+        ...state,
+        config: {
+          ...state.config,
+          serverMessaging: {
+            ...(state.config.serverMessaging || {}),
+            enabled: true,
+            baseUrl: serverBaseUrl.trim().replace(/\/+$/, ''),
+            pairingSecret: serverPairingSecret.trim() || state.config.serverMessaging?.pairingSecret || '',
+            lastError: ''
+          }
+        }
+      };
+      if (connect) {
+        next = await registerServerDevice(next);
+        await onChange(next);
+        next = await bootstrapServer(next);
+        next = await syncServerMessages(next);
+        setServerPairingSecret('');
+      }
+      await onChange(next);
+      setStatus(connect ? 'Oracle 메시지 서버 연결 및 초기 동기화 완료' : 'Oracle 메시지 서버 설정 저장 완료');
+    } catch (error) {
+      setStatus('Oracle 메시지 서버 설정 실패: ' + String(error instanceof Error ? error.message : error));
+    } finally {
+      setSaving(false);
+    }
+  }
   async function saveImageGeneration() {
     if (saving) return;
     setSaving(true);
@@ -1444,6 +1482,8 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
               <SwitchLine label="Direct 모드" value={vertexDirectMode} onChange={setVertexDirectMode} />
               <SwitchLine label="서버에서 모델 목록 불러오기" value={vertexFetchModels} onChange={setVertexFetchModels} />
             </>
+          ) : provider === 'grok' ? (
+            <Text style={styles.help}>Grok은 이 Oracle 서버에 로그인된 Grok 계정을 사용하므로 별도 API 키가 필요하지 않습니다.</Text>
           ) : (
             <>
               <Text style={styles.label}>API 키 1</Text>
@@ -1474,6 +1514,22 @@ export function SettingsScreen({ state, onChange, onBack, onOpenLorebook, onOpen
           </View>
         </View>
 
+        <View style={[styles.card, activeSection !== 'api' && styles.hidden]}>
+          <Text style={styles.cardTitle}>Oracle 메시지 서버</Text>
+          <Text style={styles.help}>앱이 완전히 종료되어도 1:1·단톡방 답장과 선톡을 서버에서 생성합니다. 처음 연결할 때만 서버 연결 키가 필요하며, 연결 후에는 기기 토큰으로 동기화합니다.</Text>
+          <Text style={styles.label}>서버 주소</Text>
+          <TextInput value={serverBaseUrl} onChangeText={setServerBaseUrl} style={styles.input} autoCapitalize="none" placeholder="https://message.example.com" placeholderTextColor="#9a9387" />
+          <Text style={styles.label}>서버 연결 키</Text>
+          <TextInput value={serverPairingSecret} onChangeText={setServerPairingSecret} style={styles.input} secureTextEntry autoCapitalize="none" placeholder={state.config.serverMessaging?.deviceToken ? '새 기기 등록 시에만 입력' : 'Oracle 서버의 BOOTSTRAP_SECRET'} placeholderTextColor="#9a9387" />
+          <Text style={styles.help}>답장과 선톡은 Oracle 서버에서 실행됩니다. 별도 서버 시간은 사용하지 않으며 자동화 화면의 개인톡/단톡 선톡 설정과 캐릭터별 답장시간·빈도·주도성 설정을 그대로 사용합니다.</Text>
+          <Text style={styles.help}>텍스트 생성은 위에서 선택하고 저장한 Provider·Endpoint·모델·키 설정을 앱 채팅과 서버 답장/선톡이 함께 사용합니다. 인증정보는 서버 전용 공개키로 암호화해서 동기화합니다.</Text>
+          <Text style={styles.help}>{state.config.serverMessaging?.deviceToken ? ('마지막 동기화: ' + (state.config.serverMessaging.lastSyncAt ? new Date(state.config.serverMessaging.lastSyncAt).toLocaleString() : '아직 없음')) : '아직 기기 등록 전입니다. 서버 주소와 연결 키를 입력한 뒤 연결하세요.'}</Text>
+          {state.config.serverMessaging?.lastError ? <Text style={styles.help}>최근 오류: {state.config.serverMessaging.lastError}</Text> : null}
+          <View style={styles.buttonRow}>
+            <Pressable onPress={() => void saveServerMessaging(false)} disabled={saving} style={[styles.secondaryInline, styles.rowButton, saving && styles.disabled]}><Text style={styles.secondaryText}>설정 저장</Text></Pressable>
+            <Pressable onPress={() => void saveServerMessaging(true)} disabled={saving} style={[styles.primary, styles.rowButton, saving && styles.disabled]}><Text style={styles.primaryText}>{state.config.serverMessaging?.deviceToken ? '다시 동기화' : '연결 및 동기화'}</Text></Pressable>
+          </View>
+        </View>
         <View style={[styles.card, activeSection !== 'screen' && styles.hidden]}>
           <Text style={styles.cardTitle}>화면</Text>
           <Text style={styles.label}>SNS 테마</Text>

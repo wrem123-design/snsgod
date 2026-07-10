@@ -1,4 +1,5 @@
 import { CharacterMemory, GroupRoom, GroupRoomSummary, RoomSummary, SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
+import { isLikelySceneMemory, partitionMemoryEntries } from './memoryPolicy';
 
 const SUMMARY_INTERVAL = 20;
 const MAX_ROOM_SUMMARIES = 180;
@@ -49,17 +50,20 @@ export function privateMemoryPromptBlock(state: SNSGodState, room: SNSGodRoom, c
     includeGroupPublic: true,
     roomId: room.id
   });
+  const summaryBlock = roomSummary ? [
+    roomSummary.fixedRelationship?.length ? 'Fixed relationship facts: ' + roomSummary.fixedRelationship.join(' / ') : '',
+    roomSummary.activeEvents?.length ? 'Active events and promises: ' + roomSummary.activeEvents.join(' / ') : '',
+    roomSummary.lastingMemories?.length ? 'Long-term facts: ' + roomSummary.lastingMemories.join(' / ') : '',
+    roomSummary.temporaryContext?.length ? 'Temporary recent context: ' + roomSummary.temporaryContext.join(' / ') : '',
+    !isLikelySceneMemory(roomSummary.summary) ? 'Recent factual summary: ' + compactMemoryFact(roomSummary.summary) : ''
+  ].filter(Boolean).join('\n') : '';
   const pieces = [
-    roomSummary ? [
-      `Current private room summary: ${roomSummary.summary}`,
-      roomSummary.topics.length ? `Topics: ${roomSummary.topics.join(', ')}` : '',
-      roomSummary.followUps.length ? `Follow-ups: ${roomSummary.followUps.join(' / ')}` : ''
-    ].filter(Boolean).join('\n') : '',
+    summaryBlock,
     relatedPrivate.length ? [
-      'Relevant memories this character is allowed to know:',
-      ...relatedPrivate.map(memory => `- [${memory.visibility}] ${memory.content}`)
+      'Relevant factual memories this character is allowed to know:',
+      ...relatedPrivate.map(memory => '- [' + (memory.kind || 'summary') + ' / ' + memory.visibility + '] ' + compactMemoryFact(memory.content))
     ].join('\n') : '',
-    'Memory visibility rules: private_with_user memories may be directly mentioned in this 1:1 room. group_public memories may be referenced only if this character was in that group. Never pretend to know memories not listed here.'
+    'Memory rules: facts and promises may guide the reply, but scene prose is not a script. Never replay old dialogue or expose memories not listed here. Temporary or expired memories must not be treated as permanent facts.'
   ].filter(Boolean);
   return pieces.join('\n\n');
 }
@@ -69,6 +73,7 @@ export function groupMemoryPromptBlock(state: SNSGodState, roomId: string, parti
   const participantIds = participants.map(character => character.id);
   const publicMemories = (state.characterMemories || [])
     .filter(memory => memory.visibility === 'group_public' && memory.sourceRoomId === roomId)
+    .filter(memory => memory.kind !== 'scene_archive' && !isLikelySceneMemory(memory.content))
     .filter(memory => memory.knownByCharacterIds.some(id => participantIds.includes(id)))
     .sort((a, b) => scoreMemory(b, latestText) - scoreMemory(a, latestText))
     .slice(0, 8);
@@ -178,6 +183,7 @@ export function applyPrivateRoomLlmSummary(
     topics: topics.length ? topics : (previous?.topics || []),
     mood,
     followUps: followUps.length ? followUps : (previous?.followUps || []),
+    ...structuredSummaryFields(state, roomId, cleaned, followUps, topics),
     updatedAt: Date.now(),
     lastMessageAt: Number(messages[messages.length - 1]?.createdAt || Date.now())
   };
@@ -298,15 +304,36 @@ function buildRoomSummary(state: SNSGodState, roomId: string, roomType: RoomKind
     topics,
     mood,
     followUps,
+    ...structuredSummaryFields(state, roomId, textLines.join('\n'), followUps, topics),
     updatedAt: Date.now(),
     lastMessageAt
   };
 }
 
-function buildCharacterMemory(input: Omit<CharacterMemory, 'id' | 'createdAt' | 'lastUsedAt'>): CharacterMemory {
+function structuredSummaryFields(state: SNSGodState, roomId: string, text: string, followUps: string[], topics: string[]) {
+  const room = allRooms(state).find(item => item.id === roomId);
+  const lines = String(text || '').split(/\n|(?<=[.!?\u3002\uFF01\uFF1F])\s+/).map(compactMemoryFact).filter(Boolean);
+  const lastingPattern = /\uC88B\uC544|\uC2EB\uC5B4|\uC120\uD638|\uC0DD\uC77C|\uAE30\uB150|\uBE44\uBC00|\uACE0\uBC31|\uAC00\uC871|\uC9C1\uC5C5|\uCDE8\uBBF8|\uC57D\uC18D|preference|birthday|anniversary|secret|promise/i;
+  const activePattern = /\uC624\uB298|\uB0B4\uC77C|\uBAA8\uB808|\uB9CC\uB098|\uC608\uC57D|\uD1B5\uD654|\uC804\uD654|\uAC00\uC790|\uBCF4\uC790|today|tomorrow|meet|call|reservation/i;
+  const lasting = lines.filter(line => lastingPattern.test(line)).slice(-6);
+  const active = [...followUps.map(compactMemoryFact), ...lines.filter(line => activePattern.test(line))]
+    .filter(Boolean).filter((item, index, all) => all.indexOf(item) === index).slice(-6);
   return {
+    fixedRelationship: [room?.relationshipNote || ''].map(compactMemoryFact).filter(Boolean).slice(0, 3),
+    activeEvents: active,
+    lastingMemories: lasting,
+    temporaryContext: topics.slice(0, 6)
+  };
+}
+
+function buildCharacterMemory(input: Omit<CharacterMemory, 'id' | 'createdAt' | 'lastUsedAt'>): CharacterMemory {
+  const kind = input.kind || (isLikelySceneMemory(input.content) ? 'scene_archive' : 'summary');
+  return {
+    status: 'active',
     ...input,
-    id: `memory_${input.characterId}_${input.sourceRoomId}_${input.visibility}`,
+    kind,
+    fingerprint: input.fingerprint || memoryFingerprint(input.content),
+    id: 'memory_' + input.characterId + '_' + input.sourceRoomId + '_' + input.visibility,
     createdAt: Date.now(),
     lastUsedAt: Date.now()
   };
@@ -326,7 +353,10 @@ function selectRelevantMemories(
   latestText: string,
   options: { includePrivate: boolean; includeGroupPublic: boolean; roomId?: string }
 ): CharacterMemory[] {
+  const now = Date.now();
   return (state.characterMemories || [])
+    .filter(memory => memory.status !== 'expired' && (!memory.expiresAt || memory.expiresAt > now))
+    .filter(memory => memory.kind !== 'scene_archive')
     .filter(memory => memory.characterId === characterId || memory.knownByCharacterIds.includes(characterId))
     .filter(memory => {
       if (memory.visibility === 'private_with_user') return options.includePrivate;
@@ -438,7 +468,9 @@ function upsertGroupByRoom(items: GroupRoomSummary[], item: GroupRoomSummary): G
 }
 
 function upsertMemory(items: CharacterMemory[], item: CharacterMemory): CharacterMemory[] {
-  return [item, ...items.filter(existing => existing.id !== item.id)].slice(0, MAX_CHARACTER_MEMORIES);
+  const now = Date.now();
+  const active = items.filter(existing => existing.status !== 'expired' && (!existing.expiresAt || existing.expiresAt > now));
+  return [item, ...active.filter(existing => existing.id !== item.id && existing.fingerprint !== item.fingerprint)].slice(0, MAX_CHARACTER_MEMORIES);
 }
 
 function groupRoomById(state: SNSGodState, roomId: string): GroupRoom | undefined {
@@ -468,9 +500,28 @@ function messageLine(state: SNSGodState, message: SNSGodMessage): string {
 }
 
 function compactSummary(lines: string[], topics: string[], mood: string): string {
-  const latest = lines.slice(-8).join(' / ').replace(/\s+/g, ' ').slice(0, 520);
-  const topicText = topics.length ? `주요 화제는 ${topics.join(', ')}.` : '짧은 대화 흐름이 이어졌다.';
-  return `${topicText} 분위기는 ${mood}. 최근 흐름: ${latest}`;
+  const followUps = extractFollowUps(lines.join('\n')).map(compactMemoryFact).filter(Boolean);
+  const topicText = topics.length ? 'Key topics: ' + topics.join(', ') : 'Key topics: none established';
+  const followUpText = followUps.length ? 'Open plans or follow-ups: ' + followUps.join(' / ') : 'Open plans or follow-ups: none';
+  return (topicText + '. Current mood: ' + mood + '. ' + followUpText).slice(0, 620);
+}
+
+export function compactLegacyMemoryFacts(memories: string[], limit = 8): string[] {
+  return partitionMemoryEntries(memories).facts.slice(-limit);
+}
+
+function compactMemoryFact(value: string): string {
+  return String(value || '')
+    .replace(/\[[^\]]{0,40}\]/g, '')
+    .replace(/^[^:]{1,20}:\s*/g, '')
+    .replace(/[\u201C\u201D"']/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
+}
+
+function memoryFingerprint(value: string): string {
+  return keywordTokens(compactMemoryFact(value)).sort().slice(0, 12).join('|') || compactMemoryFact(value).slice(0, 60);
 }
 
 function extractTopics(text: string): string[] {
@@ -495,6 +546,7 @@ function inferMood(text: string): string {
 function publicInfoFromMessages(state: SNSGodState, messages: SNSGodMessage[], participantIds: string[]): string[] {
   return messages.slice(-SUMMARY_INTERVAL)
     .filter(message => message.role === 'user' || (message.characterId && participantIds.includes(message.characterId)))
+    .filter(message => /\uC57D\uC18D|\uB9CC\uB098|\uC608\uC57D|\uC88B\uC544|\uC2EB\uC5B4|\uC120\uD638|\uC0DD\uC77C|\uAE30\uB150|\uBE44\uBC00|\uC9C1\uC5C5|\uCDE8\uBBF8|promise|meet|preference|birthday|secret/i.test(message.content || ''))
     .map(message => messageLine(state, message).slice(0, 130))
     .filter(Boolean)
     .slice(-6);
@@ -505,6 +557,7 @@ function characterTakeaways(state: SNSGodState, characterId: string, messages: S
   const name = character?.name || '이 캐릭터';
   return messages.slice(-SUMMARY_INTERVAL)
     .filter(message => message.role === 'user' || message.characterId === characterId)
+    .filter(message => /\uC57D\uC18D|\uB9CC\uB098|\uC608\uC57D|\uC88B\uC544|\uC2EB\uC5B4|\uC120\uD638|\uC0DD\uC77C|\uAE30\uB150|\uBE44\uBC00|\uC9C1\uC5C5|\uCDE8\uBBF8|promise|meet|preference|birthday|secret/i.test(message.content || ''))
     .map(message => `${name} 관점에서 기억할 공개 흐름: ${messageLine(state, message).slice(0, 120)}`)
     .slice(-4);
 }

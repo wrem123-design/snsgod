@@ -45,6 +45,7 @@ import { startReplyJob } from './logic/replyEngine';
 import { createGroupMeetingEventSession, createManualGroupMeetingEventPrompt, createManualMeetingEventPrompt, createMeetingEventSession, shouldStartGroupMeetingEvent, shouldStartMeetingEvent } from './logic/meetingEvent';
 import { forceUpdateRoomMemory } from './logic/memoryBridge';
 import { maybeCreateBackgroundAutoSNSPost } from './logic/sns';
+import { bootstrapServer, enqueueServerMessage, flushServerOutbox, isServerMessagingEnabled, registerServerDevice, syncServerMessages, withServerError } from './logic/serverMessaging';
 
 const INTERRUPTED_REPLY_RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -96,6 +97,8 @@ export default function App() {
   const routeHistoryRef = useRef<Route[]>([]);
   const incomingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hydratedRef = useRef(false);
+  const serverPolicySyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const serverPolicyFingerprintRef = useRef('');
 
   function clearRuntimeOnlyState(next: SNSGodState): SNSGodState {
     return { ...next, pendingReplies: {} };
@@ -140,7 +143,11 @@ export default function App() {
       hydratedRef.current = true;
       setHydrated(true);
       void appendDebugLog('app', `state loaded: characters=${next.characters.length}, rooms=${Object.values(next.chatRooms).flat().length}`);
-      setTimeout(() => resumeInterruptedReplies(ready), 0);
+      if (isServerMessagingEnabled(ready)) {
+        void syncOracleMessages('startup');
+      } else {
+        setTimeout(() => resumeInterruptedReplies(ready), 0);
+      }
       // Only after real device battery-opt check; skips when already excluded.
       setTimeout(() => {
         void maybePromptBatteryOptimizationExemption();
@@ -154,6 +161,56 @@ export default function App() {
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+  const serverPolicyFingerprint = state ? JSON.stringify({
+    server: {
+      enabled: state.config.serverMessaging?.enabled === true,
+      baseUrl: state.config.serverMessaging?.baseUrl || '',
+      registered: Boolean(state.config.serverMessaging?.deviceToken)
+    },
+    automation: {
+      enabled: state.config.autoEnabled !== false,
+      privateFirst: state.config.privateFirst === true,
+      groupFirst: state.config.groupFirst === true
+    },
+    textGeneration: {
+      provider: state.config.apiType,
+      profile: state.config.apiProfiles[state.config.apiType] || {}
+    },
+    characters: state.characters.map(character => ({
+      id: character.id,
+      enabled: character.enabled !== false,
+      proactiveEnabled: character.proactiveEnabled !== false,
+      responseDelayMin: character.responseDelayMin,
+      responseDelayMax: character.responseDelayMax,
+      frequencyMinutes: character.frequencyMinutes,
+      initiative: character.initiative,
+      proactivePatience: character.proactivePatience
+    })),
+    directRooms: Object.values(state.chatRooms || {}).flat().map(room => ({ id: room.id, disabled: room.disabled === true })),
+    groupRooms: (state.groupRooms || []).map(room => ({ id: room.id, disabled: room.disabled === true, participantIds: room.participantIds }))
+  }) : '';
+
+  useEffect(() => {
+    if (!hydrated || !serverPolicyFingerprint) return;
+    if (!serverPolicyFingerprintRef.current) {
+      serverPolicyFingerprintRef.current = serverPolicyFingerprint;
+      return;
+    }
+    if (serverPolicyFingerprintRef.current === serverPolicyFingerprint) return;
+    serverPolicyFingerprintRef.current = serverPolicyFingerprint;
+    if (serverPolicySyncTimerRef.current) clearTimeout(serverPolicySyncTimerRef.current);
+    if (!stateRef.current || !isServerMessagingEnabled(stateRef.current)) return;
+    serverPolicySyncTimerRef.current = setTimeout(() => {
+      serverPolicySyncTimerRef.current = null;
+      void syncOracleMessages('automation-settings-changed');
+    }, 900);
+    return () => {
+      if (serverPolicySyncTimerRef.current) {
+        clearTimeout(serverPolicySyncTimerRef.current);
+        serverPolicySyncTimerRef.current = null;
+      }
+    };
+  }, [hydrated, serverPolicyFingerprint]);
 
   useEffect(() => {
     routeRef.current = route;
@@ -171,8 +228,12 @@ export default function App() {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', nextState => {
       if (nextState === 'active') {
-        // Catch up immediately when returning to the app (or after a freeze).
-        void runAutomationTickOnce('app-active');
+        // Server mode receives messages that were generated while the app was closed.
+        if (stateRef.current && isServerMessagingEnabled(stateRef.current)) {
+          void syncOracleMessages('app-active');
+        } else {
+          void runAutomationTickOnce('app-active');
+        }
         return;
       }
       const current = stateRef.current;
@@ -183,7 +244,7 @@ export default function App() {
         setState(snapshot);
         void flushSaveState(snapshot, { backup: 'force', verify: 'full', reason: 'app background' });
         // Keep process priority high so setInterval/reply delays continue after Home.
-        if (current.config.autoEnabled !== false) {
+        if (current.config.autoEnabled !== false && !isServerMessagingEnabled(current)) {
           void setAutomationKeepAliveRunning(true, { force: true });
           void runAutomationTickOnce('app-background');
         }
@@ -241,7 +302,7 @@ export default function App() {
 
   useEffect(() => {
     if (!hydrated) return;
-    const autoOn = state?.config.autoEnabled !== false;
+    const autoOn = Boolean(state && state.config.autoEnabled !== false && !isServerMessagingEnabled(state));
     // Defer native service start slightly so first paint/JS boot is stable.
     const timer = setTimeout(() => {
       void setAutomationKeepAliveRunning(autoOn);
@@ -253,7 +314,7 @@ export default function App() {
   }, [hydrated, state?.config.autoEnabled]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || (state && isServerMessagingEnabled(state))) return;
     // First tick soon after load, then every minute while the process lives.
     const initial = setTimeout(() => {
       void runAutomationTickOnce('startup');
@@ -269,11 +330,11 @@ export default function App() {
 
   async function runAutomationTickOnce(reason: string) {
     const current = stateRef.current;
-    if (!current || isAutomationQueueBusy()) return;
+    if (!current || isServerMessagingEnabled(current) || isAutomationQueueBusy()) return;
     const profile = current.config.apiProfiles[current.config.apiType] || {};
     const hasKey = current.config.apiType === 'vertex'
       ? Boolean(String(profile.serviceAccountJson || '').trim())
-      : Boolean(profile.apiKey || profile.apiKeys?.some(Boolean));
+      : current.config.apiType === 'grok' || Boolean(profile.apiKey || profile.apiKeys?.some(Boolean));
     if (!hasKey) return;
     try {
       // Global auto off: still allow SNS-only background posts when SNS auto is enabled.
@@ -466,9 +527,51 @@ export default function App() {
     await flushSaveState(stateRef.current || next, { backup: 'force', verify: 'full', important: true, reason: 'important screen flush' });
   }
 
+  async function syncOracleMessages(reason: string) {
+    const current = stateRef.current;
+    if (!current || !isServerMessagingEnabled(current)) return;
+    try {
+      let next = current;
+      if (!next.config.serverMessaging?.deviceToken) {
+        if (!String(next.config.serverMessaging?.pairingSecret || '').trim()) return;
+        next = await registerServerDevice(next);
+      }
+      next = (next.config.serverMessaging?.outbox || []).length ? await flushServerOutbox(next) : await bootstrapServer(next);
+      next = await syncServerMessages(next);
+      await commit(next);
+      void appendDebugLog('server.sync', 'sync completed reason=' + reason);
+    } catch (error) {
+      const failed = withServerError(current, error);
+      await commit(failed);
+      void appendDebugLog('server.sync', reason + ': ' + String(error instanceof Error ? error.message : error), 'warn');
+    }
+  }
+
+  async function requestServerReply(roomId: string) {
+    const current = stateRef.current;
+    if (!current || !isServerMessagingEnabled(current) || isRoomDisabled(current, roomId)) return false;
+    const userMessage = [...(current.messages[roomId] || [])].reverse().find(message => message.role === 'user');
+    if (!userMessage) return false;
+    const queued = enqueueServerMessage(current, userMessage, roomId);
+    await commit(queued);
+    try {
+      const next = await flushServerOutbox(queued);
+      await commit(next);
+      void appendDebugLog('server.reply', 'queued room=' + roomId + ' message=' + userMessage.id);
+      return true;
+    } catch (error) {
+      await commit(withServerError(queued, error));
+      void appendDebugLog('server.reply', 'queue failed room=' + roomId + ': ' + String(error instanceof Error ? error.message : error), 'warn');
+      return true;
+    }
+  }
   function requestReply(roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean; userMessageCreatedAt?: number; latestUserImageData?: string }) {
     const current = stateRef.current || state;
     if (!current || isRoomDisabled(current, roomId)) return;
+    if (!options?.randomMode && isServerMessagingEnabled(current)) {
+      void requestServerReply(roomId);
+      return;
+    }
     void startReplyJob({
       roomId,
       characterId,
@@ -526,6 +629,7 @@ export default function App() {
   }
 
   function resumeInterruptedReplies(snapshot: SNSGodState) {
+    if (isServerMessagingEnabled(snapshot)) return;
     const now = Date.now();
     for (const room of allRooms(snapshot)) {
       if (snapshot.pendingReplies?.[room.id]) continue;
@@ -771,6 +875,7 @@ export default function App() {
           onOpenMeeting={sessionId => navigate({ name: 'meeting', sessionId, returnRoute: route })}
           onMaybeStartMeeting={maybeStartMeetingEvent}
           onRequestMeetingPrompt={requestManualMeetingEvent}
+          onRequestServerReply={requestServerReply}
         />
       ) : route.name === 'chatRoom' ? (
         <ChatRoomScreen

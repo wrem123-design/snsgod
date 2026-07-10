@@ -3,7 +3,7 @@
  */
 import './bootstrapGlobals';
 
-const root = globalThis as typeof globalThis & {
+const root = globalThis as unknown as {
   FormData?: unknown;
   performance?: { now?: () => number; [key: string]: unknown };
   nativePerformanceNow?: () => number;

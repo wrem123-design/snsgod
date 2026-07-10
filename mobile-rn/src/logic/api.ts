@@ -5,6 +5,7 @@ import { ApiProfile, ImageGenerationConfig, SNSGodCharacter, SNSGodState } from 
 import { editableForbiddenPromptRules } from './imagePromptRules';
 import { appendDebugLog } from './debugLog';
 import { configuredPrompt } from './prompts';
+import { imageContinuityPromptBlock, resolveCharacterRuntimeState } from './characterWorld';
 
 type ChatMessage = {
   role: 'system' | 'user' | 'assistant';
@@ -667,7 +668,7 @@ async function callOpenAI(profile: ApiProfile, key: string, messages: ChatMessag
   const usesChatCompletions = /\/chat\/completions\/?$/i.test(endpoint);
   const response = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+    headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) },
     body: JSON.stringify(usesChatCompletions
       ? {
         model: profile.apiModel || 'gpt-4.1-mini',
@@ -719,6 +720,7 @@ async function callWithProvider(state: SNSGodState, profile: ApiProfile, key: st
   if (state.config.apiType === 'openai') return callOpenAI(profile, key, messages);
   if (state.config.apiType === 'anthropic') return callAnthropic(profile, key, messages);
   if (state.config.apiType === 'custom') return callOpenAI(profile, key, messages);
+  if (state.config.apiType === 'grok') return callOpenAI(profile, key, messages);
   throw new Error('RisuAI provider는 단독 RN 앱에서 직접 호출할 수 없습니다. Gemini/OpenAI/Anthropic/Custom API를 설정하세요.');
 }
 
@@ -727,6 +729,13 @@ export async function callLLM(state: SNSGodState, messages: ChatMessage[]): Prom
   if (state.config.apiType === 'vertex') {
     await appendDebugLog('llm.request', compactMessagesForLog(state.config.apiType, messages));
     const text = await callVertex(profile, messages);
+    const reply = parseJsonish(text);
+    await appendDebugLog('llm.response', compactReplyForLog(state.config.apiType, text, reply));
+    return { reply, keyIndex: 0 };
+  }
+  if (state.config.apiType === 'grok') {
+    await appendDebugLog('llm.request', compactMessagesForLog(state.config.apiType, messages));
+    const text = await callWithProvider(state, profile, '', messages);
     const reply = parseJsonish(text);
     await appendDebugLog('llm.response', compactReplyForLog(state.config.apiType, text, reply));
     return { reply, keyIndex: 0 };
@@ -756,6 +765,12 @@ export async function callLLMText(state: SNSGodState, messages: ChatMessage[]): 
   if (state.config.apiType === 'vertex') {
     await appendDebugLog('llm-text.request', compactMessagesForLog(state.config.apiType, messages));
     const text = await callVertex(profile, messages);
+    await appendDebugLog('llm-text.response', `provider=${state.config.apiType}\nraw=${text.slice(0, 1600)}`);
+    return { text, keyIndex: 0 };
+  }
+  if (state.config.apiType === 'grok') {
+    await appendDebugLog('llm-text.request', compactMessagesForLog(state.config.apiType, messages));
+    const text = await callWithProvider(state, profile, '', messages);
     await appendDebugLog('llm-text.response', `provider=${state.config.apiType}\nraw=${text.slice(0, 1600)}`);
     return { text, keyIndex: 0 };
   }
@@ -855,6 +870,8 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
   const globalRules = forbiddenRules ? `Global forbidden prompt rules: ${forbiddenRules}` : '';
   const requested = imagePromptWithoutCharacterName(prompt, character);
   const configuredTone = options.state ? configuredPrompt(options.state, 'imageGenerationToneRules') : '';
+  const runtimeState = options.state && character ? resolveCharacterRuntimeState(options.state, character) : undefined;
+  const continuity = runtimeState && character ? imageContinuityPromptBlock(character, runtimeState) : '';
   const nsfw = config.nsfw
     ? `NSFW/private fictional adult image tone is enabled. ${configuredTone || 'Keep every depicted person clearly adult.'}`
     : configuredTone || 'Mature fictional adult tone is allowed when it fits the character and scene. Keep every depicted person clearly adult.';
@@ -874,6 +891,7 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
         ? 'MANDATORY FEMALE IDENTITY REFERENCE: use the attached reference image only for the female character visual identity. Preserve her face, face shape, eye spacing, nose, lips, jawline, hairstyle, hair length, bangs or no bangs, hair color, and recognizable likeness from the reference. Do not invent a new woman. Do not apply the reference face to the male user.'
         : '',
       'Create a realistic horizontal cinematic still from an in-person meeting event, not a phone call, not a messenger screenshot, not SNS.',
+      continuity,
       'Show the fictional female character and the male user as two distinct people when the scene calls for both. Keep their clothing and posture grounded in the recent conversation, time, place, and mood.',
       prefix,
       globalRules,
@@ -907,13 +925,14 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
     }
     return [
       'Use the attached reference image as the visual identity reference. Create the same person from the reference image, preserving face, hairstyle, and overall likeness.',
+      continuity,
       prefix,
       globalRules,
       `Requested scene: ${requested}`,
       nsfw
     ].filter(Boolean).join('\n');
   }
-  return [prefix, globalRules, `Requested image: ${requested}`, nsfw].filter(Boolean).join('\n');
+  return [prefix, continuity, globalRules, `Requested image: ${requested}`, nsfw].filter(Boolean).join('\n');
 }
 
 function normalizeGrokBaseUrl(value?: string): string {

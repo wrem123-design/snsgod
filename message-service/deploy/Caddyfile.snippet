@@ -1,0 +1,4 @@
+# Add this to the existing site block. handle_path removes the prefix.
+handle_path /snsgod-message/* {
+    reverse_proxy 127.0.0.1:8787
+}

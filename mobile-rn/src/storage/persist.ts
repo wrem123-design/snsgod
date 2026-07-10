@@ -10,6 +10,7 @@ import { normalizeLoreEntries } from '../logic/loreEngine';
 import { normalizeNotifications } from '../logic/notifications';
 import { externalizeStateMedia, inspectMediaFiles, MEDIA_MANIFEST_FILE, MEDIA_ROOT_DIR } from '../logic/media';
 import { normalizeSumGodState } from '../logic/sumgod';
+import { migrateMemoryState } from '../logic/memoryPolicy';
 
 const STATE_KEY = 'snsgod.state.v1';
 const LEGACY_BACKUP_KEY = 'snsgod.legacyBackup.v1';
@@ -1179,6 +1180,23 @@ function migrateState(state: SNSGodState): SNSGodState {
       characterMemories: Array.isArray(next.characterMemories) ? next.characterMemories : []
     };
   }
+  if (version < 4) {
+    next = {
+      ...next,
+      characterEvents: Array.isArray(next.characterEvents) ? next.characterEvents : [],
+      referenceFaceSlots: (next.referenceFaceSlots || []).map(slot => ({
+        ...slot,
+        role: slot.role || 'identity',
+        weight: Number.isFinite(Number(slot.weight)) ? Math.max(0, Math.min(100, Number(slot.weight))) : 100
+      })),
+      characterMemories: (next.characterMemories || []).map(memory => ({
+        ...memory,
+        kind: memory.kind || 'summary',
+        status: memory.status || 'active'
+      }))
+    };
+  }
+  if (version < 5) next = migrateMemoryState(next);
   return { ...next, schemaVersion: STATE_SCHEMA_VERSION };
 }
 
@@ -1197,7 +1215,8 @@ function normalizeState(state: SNSGodState): SNSGodState {
     }
   };
   const migrated = migrateState(merged);
-  return normalizeMessageCaps(normalizeSumGodState(normalizeNotifications(normalizeLoreEntries(normalizeRandomChats(ensureCharacterRooms(normalizeSnsOptions(normalizeApiProfiles(normalizeProfileImages(migrated)))))))));
+  const normalized = normalizeMessageCaps(normalizeSumGodState(normalizeNotifications(normalizeLoreEntries(normalizeRandomChats(ensureCharacterRooms(normalizeSnsOptions(normalizeApiProfiles(normalizeProfileImages(migrated)))))))));
+  return migrateMemoryState(normalized);
 }
 
 function prepareStateForSave(state: SNSGodState, options: { includeMessages?: boolean } = {}): SNSGodState {

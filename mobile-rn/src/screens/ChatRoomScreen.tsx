@@ -735,6 +735,16 @@ function MessageBubble({ message, layout, character, userStickers, roomId, meeti
       anchor={menuAnchor}
       align={system ? 'center' : mine ? 'right' : 'left'}
       onCopy={() => { void copyMessageText(); }}
+      onInfo={message.generationInfo ? () => Alert.alert(
+        '생성 정보',
+        [
+          'API: ' + (message.generationInfo?.provider || '-'),
+          '모델: ' + (message.generationInfo?.model || '-'),
+          '방식: ' + (message.generationInfo?.mode || '-'),
+          message.generationInfo?.proactiveStage ? '선톡 단계: ' + message.generationInfo.proactiveStage : '',
+          message.generationInfo?.generatedAt ? '생성 시각: ' + new Date(message.generationInfo.generatedAt).toLocaleString() : ''
+        ].filter(Boolean).join(String.fromCharCode(10))
+      ) : undefined}
       onDelete={deleteMessage}
       onClose={() => {
         setMenuOpen(false);

@@ -13,6 +13,8 @@ import { characterReferenceImages, randomReferenceImage } from './imageReference
 import { characterWithConversationRhythm, conversationRhythmInstruction } from './conversationRhythm';
 import { groupMemoryPromptBlock } from './memoryBridge';
 import { maybeCreateBackgroundAutoSNSPost } from './sns';
+import { refreshCharacterWorldState, resolveCharacterRuntimeState } from './characterWorld';
+import { proactiveDecision } from './proactivePolicy';
 
 type GroupAutonomousMessage = {
   characterId?: string;
@@ -90,6 +92,8 @@ function eligiblePrivateRooms(state: SNSGodState, firstMessageOnly: boolean): { 
       if (room.disabled === true) continue;
       if (isRoomBusy(room.id)) continue;
       const messages = state.messages[room.id] || [];
+      const decision = proactiveDecision(state, character, room.id);
+      if (!decision.allowed) continue;
       if (firstMessageOnly) {
         if (sent[room.id]) continue;
         if (messages.some(message => message.role === 'user')) continue;
@@ -120,6 +124,7 @@ function eligibleGroupRooms(state: SNSGodState): { room: GroupRoom; speaker: SNS
     const pool = participants.filter(character => character.id !== lastCharacterId);
     const speakerPool = pool.length ? pool : participants;
     const speaker = speakerPool[Math.floor(Math.random() * speakerPool.length)];
+    if (!proactiveDecision(state, speaker, room.id).allowed) continue;
     const rhythmSpeaker = characterWithConversationRhythm(state, speaker);
     const chance = Math.max(0, Math.min(100, Number(rhythmSpeaker.initiative ?? 40)));
     if (Math.random() * 100 > chance) continue;
@@ -341,6 +346,7 @@ async function runStatusMessageAutomation(state: SNSGodState): Promise<SNSGodSta
             `Character name: ${character.name}`,
             `Current status message: ${character.statusMessage || '(empty)'}`,
             `Character profile:\n${character.prompt || '(empty)'}`,
+            'Current unified state: ' + JSON.stringify(resolveCharacterRuntimeState(state, character)),
             `Recent activity context:\n${recentContext || '(no recent activity)'}`
           ].join('\n\n')
         }
@@ -400,6 +406,7 @@ async function recentCoverPromptFor(state: SNSGodState, character: SNSGodCharact
           `Character profile:\n${character.prompt || '(empty)'}`,
           `Character base location: ${character.locationName || state.config.locationName || 'Seoul'}`,
           extraDirection ? `User cover direction:\n${extraDirection}` : '',
+            'Current unified state: ' + JSON.stringify(resolveCharacterRuntimeState(state, character)),
           `Recent activity context:\n${recentContext || '(no recent activity)'}`
         ].filter(Boolean).join('\n\n')
       }
@@ -458,8 +465,14 @@ async function runProfileImageAutomation(state: SNSGodState): Promise<SNSGodStat
   for (const character of state.characters) {
     if (character.randomTemporary === true || character.enabled === false) continue;
     const baseIntervalMinutes = Math.max(180, Number(character.frequencyMinutes || 10) * 30);
-    const canProfile = character.profilePhotoAutoChange === true && minutesSince(Number(character.lastProfilePhotoChangeAt || 0)) >= baseIntervalMinutes;
-    const canCover = character.coverPhotoAutoChange === true && minutesSince(Number(character.lastCoverPhotoChangeAt || 0)) >= baseIntervalMinutes;
+    const runtimeState = resolveCharacterRuntimeState(state, character);
+    const eventDriven = Boolean(runtimeState.activeEvent);
+    const locationChanged = character.imageContinuity?.dayKey !== runtimeState.dayKey
+      || character.imageContinuity?.location !== runtimeState.location;
+    const canProfile = character.profilePhotoAutoChange === true && eventDriven
+      && minutesSince(Number(character.lastProfilePhotoChangeAt || 0)) >= baseIntervalMinutes;
+    const canCover = character.coverPhotoAutoChange === true && (eventDriven || locationChanged)
+      && minutesSince(Number(character.lastCoverPhotoChangeAt || 0)) >= baseIntervalMinutes;
     const profileChance = Math.max(0, Math.min(100, Number(character.profilePhotoChangeChance ?? 5)));
     const coverChance = Math.max(0, Math.min(100, Number(character.coverPhotoChangeChance ?? 5)));
     const shouldProfile = canProfile && Math.random() * 100 <= profileChance;
@@ -478,7 +491,16 @@ async function runProfileImageAutomation(state: SNSGodState): Promise<SNSGodStat
             avatar: image,
             profileImage: image,
             lastProfilePhotoChangeAt: now,
-            profileImageHistory: [historyItem, ...(item.profileImageHistory || [])].slice(0, 60)
+            profileImageHistory: [historyItem, ...(item.profileImageHistory || [])].slice(0, 60),
+            imageContinuity: {
+              dayKey: runtimeState.dayKey,
+              currentOutfit: runtimeState.currentOutfit,
+              hairStyle: runtimeState.hairStyle,
+              accessories: runtimeState.accessories,
+              location: runtimeState.location,
+              lastImageAt: now,
+              lastImagePrompt: prompt
+            }
           } : item)
         };
       }
@@ -492,7 +514,16 @@ async function runProfileImageAutomation(state: SNSGodState): Promise<SNSGodStat
             ...item,
             coverImage: image,
             lastCoverPhotoChangeAt: now,
-            profileImageHistory: [historyItem, ...(item.profileImageHistory || [])].slice(0, 60)
+            profileImageHistory: [historyItem, ...(item.profileImageHistory || [])].slice(0, 60),
+            imageContinuity: {
+              dayKey: runtimeState.dayKey,
+              currentOutfit: runtimeState.currentOutfit,
+              hairStyle: runtimeState.hairStyle,
+              accessories: runtimeState.accessories,
+              location: runtimeState.location,
+              lastImageAt: now,
+              lastImagePrompt: prompt
+            }
           } : item)
         };
       }
@@ -570,7 +601,16 @@ async function runPrivateFirstMessage(state: SNSGodState, firstMessageOnly: bool
       characterId: character.id,
       content: bubble.content,
       createdAt: bubbleAt,
-      sourceMode: firstMessageOnly ? 'random_first' : overdue ? 'proactive_catchup' : 'proactive'
+      sourceMode: firstMessageOnly ? 'random_first' : overdue ? 'proactive_catchup' : 'proactive',
+      proactiveBatchId: 'local_' + room.id + '_' + bubbleAt,
+      generationInfo: {
+        provider: state.config.apiType,
+        model: String(state.config.apiProfiles[state.config.apiType]?.apiModel || ''),
+        mode: firstMessageOnly ? 'random_first' : 'proactive',
+        generatedAt: Date.now(),
+        proactiveStage: proactiveDecision(state, character, room.id).stage,
+        stateUpdatedAt: Number(resolveCharacterRuntimeState(state, character).lastUpdatedAt || 0)
+      }
     });
     bubbleAt = Math.min(Date.now(), bubbleAt + 900 + Math.floor(Math.random() * 1600));
   }
@@ -652,7 +692,16 @@ async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | u
       characterId: item.speaker.id,
       content: item.content,
       createdAt,
-      sourceMode: groupOverdue ? 'group_autonomous_catchup' : 'group_autonomous'
+      sourceMode: groupOverdue ? 'group_autonomous_catchup' : 'group_autonomous',
+      proactiveBatchId: 'local_group_' + room.id + '_' + groupBubbleAt,
+      generationInfo: {
+        provider: state.config.apiType,
+        model: String(state.config.apiProfiles[state.config.apiType]?.apiModel || ''),
+        mode: 'group_autonomous',
+        generatedAt: Date.now(),
+        proactiveStage: proactiveDecision(state, item.speaker, room.id).stage,
+        stateUpdatedAt: resolveCharacterRuntimeState(state, item.speaker).lastUpdatedAt
+      }
     });
     firstDelivered = firstDelivered || item;
     deliveredCount += 1;
@@ -669,31 +718,32 @@ async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | u
 }
 
 export async function runAutomationTick(state: SNSGodState): Promise<SNSGodState> {
-  const statusNext = await runStatusMessageAutomation(state);
+  const worldState = refreshCharacterWorldState(state);
+
+  const statusNext = await runStatusMessageAutomation(worldState);
   if (statusNext) return statusNext;
 
-  const profileImageNext = await runProfileImageAutomation(state);
+  const profileImageNext = await runProfileImageAutomation(worldState);
   if (profileImageNext) return profileImageNext;
 
-  const diaryNext = await runDailyDiaryMemory(state);
+  const diaryNext = await runDailyDiaryMemory(worldState);
   if (diaryNext) return diaryNext;
 
-  const calendarNext = await runCalendarEvent(state);
+  const calendarNext = await runCalendarEvent(worldState);
   if (calendarNext) return calendarNext;
 
-  // SNS auto can run while the app is backgrounded / between chats.
-  // Does not require a live reply job; uses the same eligibility as post-reply SNS.
-  const snsNext = await maybeCreateBackgroundAutoSNSPost(state);
+  // SNS, chat, profile and calls now consume the same refreshed character state.
+  const snsNext = await maybeCreateBackgroundAutoSNSPost(worldState);
   if (snsNext) return snsNext;
 
-  const randomFirstNext = await runPrivateFirstMessage(state, true);
+  const randomFirstNext = await runPrivateFirstMessage(worldState, true);
   if (randomFirstNext) return randomFirstNext;
 
-  const privateNext = await runPrivateFirstMessage(state, false);
+  const privateNext = await runPrivateFirstMessage(worldState, false);
   if (privateNext) return privateNext;
 
-  const groupNext = await runGroupFirstMessage(state);
+  const groupNext = await runGroupFirstMessage(worldState);
   if (groupNext) return groupNext;
 
-  return runPhoneInvite(state) || state;
+  return runPhoneInvite(worldState) || worldState;
 }

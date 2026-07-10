@@ -15,6 +15,7 @@ export type MessageActionAnchor = {
 export function MessageActionMenu({
   visible,
   onCopy,
+  onInfo,
   onDelete,
   onClose,
   anchor,
@@ -22,6 +23,7 @@ export function MessageActionMenu({
 }: {
   visible: boolean;
   onCopy: () => void;
+  onInfo?: () => void;
   onDelete: () => void;
   onClose: () => void;
   anchor?: MessageActionAnchor | null;
@@ -30,7 +32,7 @@ export function MessageActionMenu({
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   if (!visible) return null;
 
-  const menuWidth = 120;
+  const menuWidth = onInfo ? 190 : 120;
   const menuHeight = 38;
   const gap = 8;
   let left = 16;
@@ -61,6 +63,21 @@ export function MessageActionMenu({
           >
             <Text style={styles.text}>복사</Text>
           </Pressable>
+          {onInfo ? (
+            <>
+              <View style={styles.divider} />
+              <Pressable
+                accessibilityLabel="메시지 생성 정보"
+                onPress={() => {
+                  onClose();
+                  onInfo();
+                }}
+                style={styles.button}
+              >
+                <Text style={styles.text}>정보</Text>
+              </Pressable>
+            </>
+          ) : null}
           <View style={styles.divider} />
           <Pressable
             accessibilityLabel="메시지 삭제"

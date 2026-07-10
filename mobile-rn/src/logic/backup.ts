@@ -26,7 +26,15 @@ export function stateWithoutSecrets(state: SNSGodState): SNSGodState {
       imageGeneration: state.config.imageGeneration ? {
         ...state.config.imageGeneration,
         apiKey: ''
-      } : state.config.imageGeneration
+      } : state.config.imageGeneration,
+      serverMessaging: state.config.serverMessaging ? {
+        ...state.config.serverMessaging,
+        pairingSecret: '',
+        deviceId: '',
+        deviceToken: '',
+        syncCursor: 0,
+        lastError: ''
+      } : state.config.serverMessaging
     }
   };
 }

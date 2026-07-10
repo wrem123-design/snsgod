@@ -2,6 +2,7 @@ import { RandomChatRoom, SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState
 import { makeId } from './ids';
 import { MAX_ROOM_MESSAGES } from './limits';
 import { updateRoomMemoryAfterAppend } from './memoryBridge';
+import { applyMessageToCharacterWorld } from './characterWorld';
 
 function randomRoomAsChatRoom(room: RandomChatRoom): SNSGodRoom {
   return {
@@ -93,7 +94,8 @@ export function appendMessage(state: SNSGodState, roomId: string, message: SNSGo
       chatRooms[room.characterId] = rooms;
     }
   }
-  return updateRoomMemoryAfterAppend({ ...state, messages, chatRooms, randomChats }, roomId);
+  const withMemory = updateRoomMemoryAfterAppend({ ...state, messages, chatRooms, randomChats }, roomId);
+  return room?.characterId ? applyMessageToCharacterWorld(withMemory, room.characterId, roomId, message) : withMemory;
 }
 
 export function updateRoom(state: SNSGodState, roomId: string, patch: Partial<SNSGodRoom>): SNSGodState {

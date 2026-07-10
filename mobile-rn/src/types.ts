@@ -1,4 +1,4 @@
-export type ApiProvider = 'gemini' | 'openai' | 'anthropic' | 'custom' | 'vertex' | 'risuai';
+export type ApiProvider = 'gemini' | 'openai' | 'anthropic' | 'custom' | 'grok' | 'vertex' | 'risuai';
 
 export type ApiProfile = {
   apiKey?: string;
@@ -44,6 +44,30 @@ export type ImageGenerationConfig = {
   illustrationMode?: boolean;
 };
 
+export type ServerMessagingConfig = {
+  enabled?: boolean;
+  baseUrl?: string;
+  pairingSecret?: string;
+  deviceId?: string;
+  deviceToken?: string;
+  syncCursor?: number;
+  lastSyncAt?: number;
+  lastError?: string;
+  directReplies?: boolean;
+  groupReplies?: boolean;
+  directProactive?: boolean;
+  groupProactive?: boolean;
+  directFrequencyMinutes?: number;
+  groupFrequencyMinutes?: number;
+  directInitiative?: number;
+  groupInitiative?: number;
+  responseDelayMin?: number;
+  responseDelayMax?: number;
+  maxProactiveWithoutReply?: number;
+  maxGroupMessages?: number;
+  quietHours?: { enabled?: boolean; startHour?: number; endHour?: number };
+  outbox?: Array<{ id: string; roomId: string; content: string; createdAt: number; sticker?: string; hasMedia?: boolean }>;
+};
 export type PromptSet = {
   systemRules: string;
   roleObjective: string;
@@ -106,6 +130,7 @@ export type SNSGodConfig = {
   datingAppAcceptanceChancePercent?: number;
   datingAppAgeRange?: string;
   imageGeneration?: ImageGenerationConfig;
+  serverMessaging?: ServerMessagingConfig;
   sns?: {
     platform?: 'instagram' | 'twitter';
     anonymous?: boolean;
@@ -171,6 +196,46 @@ export type ConversationProactiveTone =
   | 'busy'
   | 'public_figure';
 
+export type CharacterRuntimeState = {
+  currentActivity: string;
+  location: string;
+  mood: string;
+  energy: number;
+  phoneAvailability: 'available' | 'brief' | 'busy' | 'offline' | 'sleeping';
+  currentOutfit?: string;
+  hairStyle?: string;
+  accessories?: string;
+  activeEvent?: string;
+  nextPlan?: string;
+  dayKey: string;
+  lastUpdatedAt: number;
+  source: 'time_rhythm' | 'calendar' | 'conversation' | 'manual' | string;
+};
+
+export type CharacterImageContinuity = {
+  dayKey: string;
+  currentOutfit?: string;
+  hairStyle?: string;
+  accessories?: string;
+  location?: string;
+  lastImageAt?: number;
+  lastImagePrompt?: string;
+};
+
+export type CharacterEvent = {
+  id: string;
+  characterId: string;
+  kind: 'calendar' | 'conversation' | 'daily_state' | 'meeting' | 'sns' | string;
+  title: string;
+  detail?: string;
+  status: 'active' | 'resolved' | 'cancelled';
+  startedAt: number;
+  expiresAt?: number;
+  resolvedAt?: number;
+  importance: number;
+  source?: string;
+};
+
 export type SNSGodCharacter = {
   id: string;
   name: string;
@@ -216,6 +281,8 @@ export type SNSGodCharacter = {
   profileAvatarPrompt?: string;
   profileCoverPrompt?: string;
   calendarEvents?: CalendarEvent[];
+  runtimeState?: CharacterRuntimeState;
+  imageContinuity?: CharacterImageContinuity;
   memories?: string[];
   stickers?: Sticker[];
   snsAutoEnabled?: boolean;
@@ -254,6 +321,10 @@ export type RoomSummary = {
   topics: string[];
   mood: string;
   followUps: string[];
+  fixedRelationship?: string[];
+  activeEvents?: string[];
+  lastingMemories?: string[];
+  temporaryContext?: string[];
   updatedAt: number;
   lastMessageAt: number;
 };
@@ -273,6 +344,10 @@ export type CharacterMemory = {
   visibility: 'private_with_user' | 'group_public' | 'character_private' | 'global';
   knownByCharacterIds: string[];
   content: string;
+  kind?: 'relationship' | 'event' | 'preference' | 'promise' | 'summary' | 'temporary' | 'scene_archive';
+  status?: 'active' | 'resolved' | 'expired';
+  expiresAt?: number;
+  fingerprint?: string;
   importance: number;
   createdAt: number;
   lastUsedAt?: number;
@@ -297,6 +372,14 @@ export type SNSGodMessage = {
   imagePrompt?: string;
   imageCaption?: string;
   mediaData?: string;
+  generationInfo?: {
+    provider?: string;
+    model?: string;
+    mode?: string;
+    generatedAt?: number;
+    proactiveStage?: number;
+    stateUpdatedAt?: number;
+  };
   [key: string]: unknown;
 };
 
@@ -714,6 +797,9 @@ export type ReferenceFaceSlot = {
   id: string;
   image: string;
   name?: string;
+  role?: 'identity' | 'body_hair' | 'mood_style';
+  weight?: number;
+  appearanceTags?: string[];
   createdAt: number;
 };
 
@@ -889,6 +975,7 @@ export type SNSGodState = {
   roomSummaries?: RoomSummary[];
   groupRoomSummaries?: GroupRoomSummary[];
   characterMemories?: CharacterMemory[];
+  characterEvents?: CharacterEvent[];
   loreEntries?: LoreEntry[];
   loreFolders?: unknown[];
   referenceFaceSlots?: ReferenceFaceSlot[];

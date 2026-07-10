@@ -15,6 +15,8 @@ import { chatNowContext, isImplausibleCompletedActivity, repairTimeRealityInstru
 import { SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
 import { appendDebugLog } from './debugLog';
 import { characterWithConversationRhythm } from './conversationRhythm';
+import { resolveCharacterRuntimeState } from './characterWorld';
+import { ingestCharacterMemory } from './memoryPolicy';
 
 type CommitPatch = (patch: (current: SNSGodState) => SNSGodState, options?: { persist?: boolean }) => Promise<void> | void;
 
@@ -76,7 +78,9 @@ function characterDelayMs(state: SNSGodState | undefined, character: SNSGodChara
   const speed = Math.max(1, Math.min(10, Number(timedCharacter.responseTime || 6)));
   const randomSeconds = min + Math.random() * Math.max(0, max - min);
   const speedFactor = 1.15 - speed * 0.07;
-  const seconds = Math.max(min, Math.min(max, randomSeconds * speedFactor));
+  const availability = state ? resolveCharacterRuntimeState(state, character).phoneAvailability : 'available';
+  const availabilityFactor = availability === 'sleeping' || availability === 'offline' ? 2.4 : availability === 'busy' ? 1.8 : availability === 'brief' ? 1.25 : 1;
+  const seconds = Math.max(min, Math.min(max, randomSeconds * speedFactor * availabilityFactor));
   return Math.round(seconds * 1000);
 }
 
@@ -320,9 +324,36 @@ export async function startReplyJob(input: StartReplyJobInput) {
           imageCaption: mediaData || (imageAllowed && bubble.imageCaption?.trim()) ? bubble.imageCaption : undefined,
           mediaData: mediaData || undefined,
           mediaType: mediaData ? 'image' : undefined,
-          sourceMode: timeline.catchUp ? 'reply_catchup' : 'reply'
+          sourceMode: timeline.catchUp ? 'reply_catchup' : 'reply',
+          generationInfo: {
+            provider: promptState.config.apiType,
+            model: String(promptState.config.apiProfiles[promptState.config.apiType]?.apiModel || ''),
+            mode: 'reply',
+            generatedAt: Date.now(),
+            stateUpdatedAt: resolveCharacterRuntimeState(promptState, promptTarget.character).lastUpdatedAt
+          }
         };
-        await input.commitCurrent(current => appendMessage(current, input.roomId, message));
+        await input.commitCurrent(current => {
+          let next = appendMessage(current, input.roomId, message);
+          if (mediaData) {
+            const currentCharacter = findCharacter(next, latestForBubble.character.id);
+            if (currentCharacter) {
+              const runtime = resolveCharacterRuntimeState(next, currentCharacter);
+              next = updateCharacter(next, currentCharacter.id, {
+                imageContinuity: {
+                  dayKey: runtime.dayKey,
+                  currentOutfit: runtime.currentOutfit,
+                  hairStyle: runtime.hairStyle,
+                  accessories: runtime.accessories,
+                  location: runtime.location,
+                  lastImageAt: bubbleAt,
+                  lastImagePrompt: bubble.imagePrompt
+                }
+              });
+            }
+          }
+          return next;
+        });
         deliveredCount += 1;
       }
       if (phone.card) {
@@ -338,17 +369,20 @@ export async function startReplyJob(input: StartReplyJobInput) {
         characterId: promptTarget.character.id,
         content: '응, 방금 말 계속 생각하고 있었어.',
         createdAt: timeline.catchUp ? Math.min(Date.now(), timeline.deliveryBaseAt) : Date.now(),
-        sourceMode: timeline.catchUp ? 'reply_catchup' : 'reply'
+        sourceMode: timeline.catchUp ? 'reply_catchup' : 'reply',
+        generationInfo: {
+          provider: promptState.config.apiType,
+          model: String(promptState.config.apiProfiles[promptState.config.apiType]?.apiModel || ''),
+          mode: 'reply_fallback',
+          generatedAt: Date.now(),
+          stateUpdatedAt: resolveCharacterRuntimeState(promptState, promptTarget.character).lastUpdatedAt
+        }
       }));
     }
 
     if (!isCurrentChatJob(input.roomId, jobId)) return;
     if (reply.newMemory?.trim()) {
-      await input.commitCurrent(current => {
-        const updated = findCharacter(current, input.characterId);
-        if (!updated) return current;
-        return updateCharacter(current, input.characterId, { memories: [...(updated.memories || []), reply.newMemory?.trim()].filter(Boolean).slice(-80) as string[] });
-      });
+      await input.commitCurrent(current => ingestCharacterMemory(current, input.characterId, reply.newMemory || '', input.roomId));
     }
 
     if (input.randomMode) {

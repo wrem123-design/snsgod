@@ -25,9 +25,79 @@ export type MediaManifestAdapter = {
   replaceAtomically(entries: MediaManifestEntry[]): Promise<void>;
 };
 
+/** Result prepared while the manifest queue is held exclusively. */
+export type MediaManifestMutation<Result> = {
+  /** Omit to perform a read-only transaction without rewriting the manifest. */
+  entries?: readonly MediaManifestEntry[];
+  result: Result;
+  /** Restores external side effects if the atomic manifest replacement fails. */
+  rollback?: () => Promise<void>;
+};
+
 export type SerializedMediaManifestStore = {
   read(): Promise<MediaManifestEntry[]>;
   upsert(entry: MediaManifestEntry): Promise<MediaManifestEntry[]>;
+  mutate<Result>(
+    operation: (
+      entries: readonly MediaManifestEntry[],
+    ) => Promise<MediaManifestMutation<Result>>,
+  ): Promise<Result>;
+};
+
+/** Minimal state edge required to calculate manifest reachability. */
+export type MediaReachabilityReference = {
+  key: string;
+  uri: string;
+  force: boolean;
+};
+
+/** Deterministic preview of active, collectible, and protected manifest rows. */
+export type MediaGarbageCollectionPlan = {
+  referenceCounts: Record<string, number>;
+  reachableEntries: MediaManifestEntry[];
+  candidateEntries: MediaManifestEntry[];
+  protectedEntries: MediaManifestEntry[];
+  unmanagedReferenceUris: string[];
+  totalCandidateBytes: number;
+};
+
+/** Recoverable record for a file moved out of the active media directory. */
+export type MediaTrashEntry = {
+  entry: MediaManifestEntry;
+  trashFileUri: string;
+  trashedAt: number;
+  status: 'prepared' | 'committed';
+};
+
+export type MediaGarbageCollectionResult = MediaGarbageCollectionPlan & {
+  dryRun: boolean;
+  trashedEntries: MediaTrashEntry[];
+  missingReachableEntries: MediaManifestEntry[];
+  missingCandidateEntries: MediaManifestEntry[];
+};
+
+export type MediaGarbageCollectionAdapter = {
+  manifestStore: SerializedMediaManifestStore;
+  readTrashManifest(): Promise<MediaTrashEntry[]>;
+  replaceTrashManifest(entries: readonly MediaTrashEntry[]): Promise<void>;
+  fileExists(fileUri: string): Promise<boolean>;
+  moveFile(from: string, to: string): Promise<void>;
+  removeFile(fileUri: string): Promise<void>;
+  trashFileUri(entry: MediaManifestEntry, now: number): string;
+};
+
+export type MediaGarbageCollector = {
+  collect(
+    references: readonly MediaReachabilityReference[],
+    options: { dryRun: boolean; mediaRootUri: string; now: number },
+  ): Promise<MediaGarbageCollectionResult>;
+  recoverInterruptedCollection(): Promise<{ restoredCount: number; committedCount: number }>;
+  purge(options: { before: number; dryRun: boolean }): Promise<{
+    dryRun: boolean;
+    candidateEntries: MediaTrashEntry[];
+    deletedCount: number;
+    failedEntries: MediaTrashEntry[];
+  }>;
 };
 
 export type AsyncSingleFlight<Key, Value> = {
@@ -249,6 +319,287 @@ export function createSerializedMediaManifestStore(
         const next = upsertMediaManifestEntry(current, entry);
         await adapter.replaceAtomically(next);
         return next;
+      });
+    },
+    mutate(operation) {
+      return enqueue(async () => {
+        const current = await adapter.read();
+        const mutation = await operation([...current]);
+        if (!mutation.entries) return mutation.result;
+        try {
+          await adapter.replaceAtomically([...mutation.entries]);
+        } catch (replacementError) {
+          if (mutation.rollback) {
+            try {
+              await mutation.rollback();
+            } catch (rollbackError) {
+              throw new AggregateError(
+                [replacementError, rollbackError],
+                'Media manifest replacement and rollback both failed.',
+              );
+            }
+          }
+          throw replacementError;
+        }
+        return mutation.result;
+      });
+    },
+  };
+}
+
+/**
+ * Calculates which manifest assets are still reachable without touching disk.
+ *
+ * Entries outside `mediaRootUri` are always protected because this app must not
+ * move or delete files it does not own.
+ */
+export function planMediaGarbageCollection(
+  references: readonly MediaReachabilityReference[],
+  manifest: readonly MediaManifestEntry[],
+  mediaRootUri: string,
+): MediaGarbageCollectionPlan {
+  const root = mediaRootUri.endsWith('/') ? mediaRootUri : `${mediaRootUri}/`;
+  const referenceCounts: Record<string, number> = Object.create(null) as Record<string, number>;
+  for (const reference of references) {
+    referenceCounts[reference.uri] = (referenceCounts[reference.uri] || 0) + 1;
+  }
+  const manifestUris = new Set(manifest.map(entry => entry.fileUri));
+  const reachableEntries: MediaManifestEntry[] = [];
+  const candidateEntries: MediaManifestEntry[] = [];
+  const protectedEntries: MediaManifestEntry[] = [];
+  for (const entry of manifest) {
+    if (!isUriWithinRoot(entry.fileUri, root)) {
+      protectedEntries.push(entry);
+    } else if ((referenceCounts[entry.fileUri] || 0) > 0) {
+      reachableEntries.push(entry);
+    } else {
+      candidateEntries.push(entry);
+    }
+  }
+  const unmanagedReferenceUris = [...new Set(
+    references
+      .map(reference => reference.uri)
+      .filter(uri => isUriWithinRoot(uri, root) && !manifestUris.has(uri)),
+  )].sort();
+  return {
+    referenceCounts,
+    reachableEntries,
+    candidateEntries,
+    protectedEntries,
+    unmanagedReferenceUris,
+    totalCandidateBytes: candidateEntries.reduce(
+      (total, entry) => total + Number(entry.size || 0),
+      0,
+    ),
+  };
+}
+
+/** Returns true only for a concrete descendant URI without traversal segments. */
+export function isUriWithinRoot(uri: string, rootUri: string): boolean {
+  const root = rootUri.endsWith('/') ? rootUri : `${rootUri}/`;
+  if (!uri.startsWith(root)) return false;
+  const relative = uri.slice(root.length);
+  if (!relative) return false;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(relative).replace(/\\/g, '/');
+  } catch {
+    return false;
+  }
+  return decoded.split('/').every(segment => (
+    segment.length > 0 && segment !== '.' && segment !== '..'
+  ));
+}
+
+/** Creates a serialized, rollback-capable media trash and purge service. */
+export function createMediaGarbageCollector(
+  adapter: MediaGarbageCollectionAdapter,
+): MediaGarbageCollector {
+  let maintenanceTail: Promise<void> = Promise.resolve();
+
+  function enqueue<Result>(operation: () => Promise<Result>): Promise<Result> {
+    const result = maintenanceTail.catch(() => undefined).then(operation);
+    maintenanceTail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  async function rollbackPrepared(
+    previousTrash: readonly MediaTrashEntry[],
+    prepared: readonly MediaTrashEntry[],
+  ): Promise<void> {
+    for (const trashEntry of [...prepared].reverse()) {
+      const trashExists = await adapter.fileExists(trashEntry.trashFileUri);
+      if (!trashExists) continue;
+      const originalExists = await adapter.fileExists(trashEntry.entry.fileUri);
+      if (originalExists) {
+        await adapter.removeFile(trashEntry.trashFileUri);
+      } else {
+        await adapter.moveFile(trashEntry.trashFileUri, trashEntry.entry.fileUri);
+      }
+    }
+    await adapter.replaceTrashManifest(previousTrash);
+  }
+
+  async function recoverUnlocked(): Promise<{ restoredCount: number; committedCount: number }> {
+    return adapter.manifestStore.mutate(async manifest => {
+      const trash = await adapter.readTrashManifest();
+      const activeMediaIds = new Set(manifest.map(entry => entry.mediaId));
+      const retained: MediaTrashEntry[] = [];
+      let restoredCount = 0;
+      let committedCount = 0;
+      let changed = false;
+      for (const trashEntry of trash) {
+        if (trashEntry.status === 'committed') {
+          retained.push(trashEntry);
+          continue;
+        }
+        const originalExists = await adapter.fileExists(trashEntry.entry.fileUri);
+        const trashExists = await adapter.fileExists(trashEntry.trashFileUri);
+        if (activeMediaIds.has(trashEntry.entry.mediaId)) {
+          if (trashExists && !originalExists) {
+            await adapter.moveFile(trashEntry.trashFileUri, trashEntry.entry.fileUri);
+          } else if (trashExists && originalExists) {
+            await adapter.removeFile(trashEntry.trashFileUri);
+          } else if (!originalExists) {
+            throw new Error(`Prepared media asset is missing from both locations: ${trashEntry.entry.mediaId}`);
+          }
+          restoredCount += 1;
+          changed = true;
+          continue;
+        }
+        if (!trashExists && originalExists) {
+          await adapter.moveFile(trashEntry.entry.fileUri, trashEntry.trashFileUri);
+        } else if (!trashExists) {
+          throw new Error(`Committed media trash file is missing: ${trashEntry.entry.mediaId}`);
+        }
+        retained.push({ ...trashEntry, status: 'committed' });
+        committedCount += 1;
+        changed = true;
+      }
+      if (changed) await adapter.replaceTrashManifest(retained);
+      return { result: { restoredCount, committedCount } };
+    });
+  }
+
+  return {
+    collect(references, options) {
+      return enqueue(async () => {
+        await recoverUnlocked();
+        const result = await adapter.manifestStore.mutate(async manifest => {
+          const plan = planMediaGarbageCollection(
+            references,
+            manifest,
+            options.mediaRootUri,
+          );
+          const missingReachableEntries: MediaManifestEntry[] = [];
+          const missingCandidateEntries: MediaManifestEntry[] = [];
+          const existingCandidateEntries: MediaManifestEntry[] = [];
+          for (const entry of plan.reachableEntries) {
+            if (!await adapter.fileExists(entry.fileUri)) missingReachableEntries.push(entry);
+          }
+          for (const entry of plan.candidateEntries) {
+            if (await adapter.fileExists(entry.fileUri)) {
+              existingCandidateEntries.push(entry);
+            } else {
+              missingCandidateEntries.push(entry);
+            }
+          }
+          const baseResult: MediaGarbageCollectionResult = {
+            ...plan,
+            dryRun: options.dryRun,
+            trashedEntries: [],
+            missingReachableEntries,
+            missingCandidateEntries,
+          };
+          if (options.dryRun || plan.candidateEntries.length === 0) {
+            return { result: baseResult };
+          }
+          const previousTrash = await adapter.readTrashManifest();
+          const prepared: MediaTrashEntry[] = existingCandidateEntries.map(entry => ({
+            entry,
+            trashFileUri: adapter.trashFileUri(entry, options.now),
+            trashedAt: options.now,
+            status: 'prepared',
+          }));
+          try {
+            for (const trashEntry of prepared) {
+              if (await adapter.fileExists(trashEntry.trashFileUri)) {
+                throw new Error(`Media trash destination already exists: ${trashEntry.trashFileUri}`);
+              }
+            }
+            if (prepared.length) {
+              await adapter.replaceTrashManifest([...previousTrash, ...prepared]);
+              for (const trashEntry of prepared) {
+                await adapter.moveFile(trashEntry.entry.fileUri, trashEntry.trashFileUri);
+              }
+            }
+          } catch (preparationError) {
+            await rollbackPrepared(previousTrash, prepared);
+            throw preparationError;
+          }
+          const candidateIds = new Set(plan.candidateEntries.map(entry => entry.mediaId));
+          return {
+            entries: manifest.filter(entry => !candidateIds.has(entry.mediaId)),
+            result: { ...baseResult, trashedEntries: prepared },
+            rollback: () => rollbackPrepared(previousTrash, prepared),
+          };
+        });
+        if (result.trashedEntries.length) {
+          const trash = await adapter.readTrashManifest();
+          const committedKeys = new Set(result.trashedEntries.map(
+            item => `${item.entry.mediaId}\u0000${item.trashFileUri}`,
+          ));
+          await adapter.replaceTrashManifest(trash.map(item => (
+            committedKeys.has(`${item.entry.mediaId}\u0000${item.trashFileUri}`)
+              ? { ...item, status: 'committed' }
+              : item
+          )));
+        }
+        return {
+          ...result,
+          trashedEntries: result.trashedEntries.map(item => ({
+            ...item,
+            status: 'committed',
+          })),
+        };
+      });
+    },
+    recoverInterruptedCollection() {
+      return enqueue(recoverUnlocked);
+    },
+    purge(options) {
+      return enqueue(async () => {
+        const trash = await adapter.readTrashManifest();
+        const candidateEntries = trash.filter(
+          entry => entry.status === 'committed' && entry.trashedAt <= options.before,
+        );
+        if (options.dryRun || candidateEntries.length === 0) {
+          return {
+            dryRun: options.dryRun,
+            candidateEntries,
+            deletedCount: 0,
+            failedEntries: [],
+          };
+        }
+        const failedEntries: MediaTrashEntry[] = [];
+        const deletedKeys = new Set<string>();
+        for (const entry of candidateEntries) {
+          try {
+            await adapter.removeFile(entry.trashFileUri);
+            deletedKeys.add(`${entry.entry.mediaId}\u0000${entry.trashFileUri}`);
+          } catch {
+            failedEntries.push(entry);
+          }
+        }
+        await adapter.replaceTrashManifest(trash.filter(entry => (
+          !deletedKeys.has(`${entry.entry.mediaId}\u0000${entry.trashFileUri}`)
+        )));
+        return {
+          dryRun: false,
+          candidateEntries,
+          deletedCount: deletedKeys.size,
+          failedEntries,
+        };
       });
     },
   };

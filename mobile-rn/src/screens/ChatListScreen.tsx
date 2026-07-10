@@ -4,7 +4,8 @@ import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
 import { GroupRoom, SNSGodCharacter, SNSGodRoom, SNSGodState } from '../types';
 import { cancelChatJob } from '../logic/chatJobs';
-import { deleteRoom, updateRoom } from '../logic/stateHelpers';
+import { deleteRoomCascade } from '../logic/deletionCascadePolicy';
+import { updateRoom } from '../logic/stateHelpers';
 
 type Row = {
   kind: 'direct';
@@ -132,31 +133,9 @@ export function ChatListScreen({ state, onOpenSettings, onOpenRoom, onNewRoom, o
         text: '삭제',
         style: 'destructive',
         onPress: async () => {
-          cancelChatJob(row.room.id);
-          if (row.kind === 'group') {
-            const messages = { ...state.messages };
-            const unreadCounts = { ...state.unreadCounts };
-            const pendingReplies = { ...(state.pendingReplies || {}) };
-            delete messages[row.room.id];
-            delete unreadCounts[row.room.id];
-            delete pendingReplies[row.room.id];
-            await onChange({
-              ...state,
-              groupRooms: (state.groupRooms || []).filter(room => room.id !== row.room.id),
-              messages,
-              unreadCounts,
-              pendingReplies,
-              roomSummaries: (state.roomSummaries || []).filter(summary => summary.roomId !== row.room.id),
-              groupRoomSummaries: (state.groupRoomSummaries || []).filter(summary => summary.roomId !== row.room.id),
-              characterMemories: (state.characterMemories || []).filter(memory => memory.sourceRoomId !== row.room.id),
-              selectedRoomId: state.selectedRoomId === row.room.id ? undefined : state.selectedRoomId
-            });
-            return;
-          }
-          const next = deleteRoom(state, row.room.id);
-          const pendingReplies = { ...(next.pendingReplies || {}) };
-          delete pendingReplies[row.room.id];
-          await onChange({ ...next, pendingReplies });
+          const deletion = deleteRoomCascade(state, row.room.id);
+          for (const roomId of deletion.cancelledJobRoomIds) cancelChatJob(roomId);
+          await onChange(deletion.state);
         }
       }
     ]);

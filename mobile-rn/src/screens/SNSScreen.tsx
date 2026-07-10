@@ -4,6 +4,7 @@ import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
 import { SNSDmMessage, SNSDmParticipant, SNSDmThread, SNSGodCharacter, SNSGodState, SNSPost } from '../types';
 import { generateSNSPost, generateSnsDmReply, snsOptionsFor } from '../logic/sns';
+import { deleteSnsDmThreadCascade, deleteSnsPostCascade } from '../logic/deletionCascadePolicy';
 import { makeId } from '../logic/ids';
 import { isRenderableMediaUri, pickImageDataUri } from '../logic/media';
 
@@ -287,11 +288,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
         text: '삭제',
         style: 'destructive',
         onPress: async () => {
-          await onChange({
-            ...state,
-            snsPosts: (state.snsPosts || []).filter(post => post.id !== postId),
-            snsDmThreads: (state.snsDmThreads || []).filter(thread => thread.postId !== postId)
-          });
+          await onChange(deleteSnsPostCascade(state, postId).state);
         }
       }
     ]);
@@ -344,19 +341,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
         text: '삭제',
         style: 'destructive',
         onPress: async () => {
-          const nextPosts = (state.snsPosts || []).map(post => {
-            if (post.id !== thread.postId || !post.dms?.length) return post;
-            const dms = post.dms.filter((dm, index) => {
-              const generatedId = `postdmthread:${post.id}:${dm.id || index}`;
-              return generatedId !== thread.id;
-            });
-            return { ...post, dms };
-          });
-          await onChange({
-            ...state,
-            snsPosts: nextPosts,
-            snsDmThreads: (state.snsDmThreads || []).filter(item => item.id !== threadId)
-          });
+          await onChange(deleteSnsDmThreadCascade(state, threadId).state);
           if (activeDmId === threadId) setActiveDmId('');
           if (dmHub?.postId === thread.postId) setDmHub(null);
         }

@@ -4,6 +4,8 @@ import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
 import { MeetingEventSession, SNSGodMessage, SNSGodState, Sticker } from '../types';
 import { makeId } from '../logic/ids';
+import { cancelChatJob } from '../logic/chatJobs';
+import { deleteMessageCascade } from '../logic/deletionCascadePolicy';
 import { appendMessage, findCharacter, findRoom, roomMessages } from '../logic/stateHelpers';
 import { isRenderableMediaUri, pickImageDataUri } from '../logic/media';
 import { formatMessageDateLabel, formatMessageTime, isSameMessageDate } from '../logic/time';
@@ -294,25 +296,9 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
   async function deleteMessage(messageId: string) {
     if (!roomId || !messageId) return;
     await commitCurrent(current => {
-      const roomList = current.messages[roomId] || [];
-      const target = roomList.find(item => item.id === messageId);
-      if (!target) return current;
-      const meetingId = String(target.meetingEventId || '');
-      return {
-        ...current,
-        messages: {
-          ...current.messages,
-          [roomId]: roomList.filter(item => item.id !== messageId)
-        },
-        // Drop dismissed/pending prompt sessions only tied to this deleted card.
-        meetingEventSessions: meetingId
-          ? (current.meetingEventSessions || []).filter(session => {
-            if (session.id !== meetingId) return true;
-            // Keep active/ended live sessions; remove orphan pending prompt shells.
-            return session.status === 'active' || session.status === 'ended';
-          })
-          : current.meetingEventSessions
-      };
+      const deletion = deleteMessageCascade(current, roomId, messageId);
+      for (const affectedRoomId of deletion.cancelledJobRoomIds) cancelChatJob(affectedRoomId);
+      return deletion.state;
     });
   }
 

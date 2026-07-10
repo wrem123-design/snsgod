@@ -2,6 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors } from '../theme';
 import { SNSGodState } from '../types';
+import { cancelChatJob } from '../logic/chatJobs';
+import { deleteRoomCascade } from '../logic/deletionCascadePolicy';
 import { forceUpdateRoomMemory } from '../logic/memoryBridge';
 
 export function GroupRoomSettingsScreen({ state, roomId, onBack, onChange }: {
@@ -54,20 +56,9 @@ export function GroupRoomSettingsScreen({ state, roomId, onBack, onChange }: {
         text: '삭제',
         style: 'destructive',
         onPress: async () => {
-          const messages = { ...state.messages };
-          const unreadCounts = { ...state.unreadCounts };
-          delete messages[roomId];
-          delete unreadCounts[roomId];
-          await onChange({
-            ...state,
-            groupRooms: (state.groupRooms || []).filter(item => item.id !== roomId),
-            messages,
-            unreadCounts,
-            roomSummaries: (state.roomSummaries || []).filter(summary => summary.roomId !== roomId),
-            groupRoomSummaries: (state.groupRoomSummaries || []).filter(summary => summary.roomId !== roomId),
-            characterMemories: (state.characterMemories || []).filter(memory => memory.sourceRoomId !== roomId),
-            selectedRoomId: state.selectedRoomId === roomId ? undefined : state.selectedRoomId
-          });
+          const deletion = deleteRoomCascade(state, roomId);
+          for (const affectedRoomId of deletion.cancelledJobRoomIds) cancelChatJob(affectedRoomId);
+          await onChange(deletion.state);
           onBack();
         }
       }

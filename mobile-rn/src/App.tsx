@@ -34,11 +34,12 @@ import { flushSaveState, getStoragePaths, importState, loadState, recordSkippedS
 import { colors } from './theme';
 import { SNSGodCharacter, SNSGodState, SNSPost } from './types';
 import { isAutomationQueueBusy, runAutomationQueueTick } from './logic/automationQueue';
-import { cancelAllChatJobs } from './logic/chatJobs';
+import { cancelAllChatJobs, cancelChatJob } from './logic/chatJobs';
 import { maybePromptBatteryOptimizationExemption, setAutomationKeepAliveRunning } from './logic/backgroundAutomation';
 import { appendDebugLog } from './logic/debugLog';
-import { findRandomChat, promoteRandomChatRoom, removeRandomChatRoom } from './logic/randomChat';
-import { allRooms, deleteCharacter, findCharacter, isRoomDisabled } from './logic/stateHelpers';
+import { findRandomChat, promoteRandomChatRoom } from './logic/randomChat';
+import { allRooms, findCharacter, isRoomDisabled } from './logic/stateHelpers';
+import { deleteCharacterCascade, deleteRoomCascade } from './logic/deletionCascadePolicy';
 import { roomRouteKind } from './logic/roomStore';
 import { IncomingPhoneCall, markPhoneCardStatus, missIncomingPhoneCall, newestPendingPhoneCandidate, rejectIncomingPhoneCall } from './logic/phone';
 import { markRoomRead, pushNotification } from './logic/notifications';
@@ -49,10 +50,12 @@ import { maybeCreateBackgroundAutoSNSPost } from './logic/sns';
 import { bootstrapServer, enqueueServerMessage, flushServerOutbox, isServerMessagingEnabled, registerServerDevice, syncServerMessages, withServerError } from './logic/serverMessaging';
 import {
   applyStateMediaUriReplacements,
+  collectStateMediaReferences,
   collectStateMediaUris,
   createStateMediaReplacementCache,
   type StateMediaUriReplacement,
 } from './logic/stateMediaPolicy';
+import { previewMediaGarbageCollection, purgeMediaTrash, recoverInterruptedMediaGarbageCollection, trashUnreachableMedia } from './logic/media';
 import { hasSameServerIdentity, mergeStaleState } from './logic/staleStateMergePolicy';
 import { canCommitRuntimeEpoch } from './logic/runtimeEpochPolicy';
 import { getSumGodProgress, invalidateSumGodBackupWrites, replaceSumGodBackup } from './logic/sumgod';
@@ -63,6 +66,7 @@ const MEDIA_REPLACEMENT_CACHE_TTL_MS = 30_000;
 const MEDIA_REPLACEMENT_CACHE_SWEEP_MS = 5_000;
 const MEDIA_REPLACEMENT_CACHE_MAX_ENTRIES = 12;
 const MEDIA_REPLACEMENT_CACHE_MAX_DATA_URI_CHARACTERS = 6_000_000;
+const MEDIA_TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 type Route =
   | { name: 'chatList' }
@@ -177,6 +181,16 @@ export default function App() {
       ...storagePaths
     });
     void appendDebugLog('storage.identity', `applicationId=${Application.applicationId || 'unknown'} version=${Application.nativeApplicationVersion || 'unknown'} build=${Application.nativeBuildVersion || 'unknown'} documentDirectory=${FileSystem.documentDirectory || 'unknown'} sqlite=${storagePaths.sqliteDatabaseName} asyncKey=${storagePaths.asyncStorageKey} media=${storagePaths.mediaDirectory} backup=${storagePaths.backupDirectory}`);
+    void recoverInterruptedMediaGarbageCollection()
+      .then(async recovery => {
+        const purge = await purgeMediaTrash(Date.now() - MEDIA_TRASH_RETENTION_MS);
+        if (recovery.restoredCount || recovery.committedCount || purge.deletedCount || purge.failedCount) {
+          void appendDebugLog('media.gc', `startup recovery restored=${recovery.restoredCount} committed=${recovery.committedCount} purged=${purge.deletedCount} failed=${purge.failedCount}`);
+        }
+      })
+      .catch(error => {
+        void appendDebugLog('media.gc', `startup recovery failed: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+      });
     loadState().then(next => {
       const ready = clearRuntimeOnlyState(next);
       setState(ready);
@@ -597,6 +611,31 @@ export default function App() {
     });
   }
 
+  async function previewCurrentMediaCleanup() {
+    const current = stateRef.current;
+    if (!current) throw new Error('미디어를 검사할 앱 상태가 아직 준비되지 않았습니다.');
+    return previewMediaGarbageCollection(collectStateMediaReferences(current));
+  }
+
+  async function trashCurrentUnreachableMedia() {
+    const operationEpoch = runtimeEpochRef.current;
+    const current = stateRef.current;
+    if (!isRuntimeEpochCurrent(operationEpoch) || !current) {
+      throw new Error('미디어 정리 요청이 더 이상 현재 상태가 아닙니다.');
+    }
+    await flushSaveState(current, {
+      backup: 'force',
+      verify: 'full',
+      reason: 'before media garbage collection',
+      onMediaExternalized: applyPersistedMediaUris,
+    });
+    if (!isRuntimeEpochCurrent(operationEpoch) || !stateRef.current) {
+      throw new Error('저장 상태가 바뀌어 미디어 정리를 취소했습니다.');
+    }
+    const references = collectStateMediaReferences(stateRef.current || current);
+    return trashUnreachableMedia(references);
+  }
+
   async function syncOracleMessages(reason: string) {
     const operationEpoch = runtimeEpochRef.current;
     const current = stateRef.current;
@@ -948,8 +987,9 @@ export default function App() {
     const operationEpoch = runtimeEpochRef.current;
     const current = stateRef.current;
     if (!isRuntimeEpochCurrent(operationEpoch) || !current) return;
-    const next = removeRandomChatRoom(current, roomId);
-    await commit(next);
+    const deletion = deleteRoomCascade(current, roomId);
+    for (const affectedRoomId of deletion.cancelledJobRoomIds) cancelChatJob(affectedRoomId);
+    await commit(deletion.state);
     if (!isRuntimeEpochCurrent(operationEpoch)) return;
     navigate({ name: 'random' }, { replace: true });
   }
@@ -972,8 +1012,9 @@ export default function App() {
     const operationEpoch = runtimeEpochRef.current;
     const current = stateRef.current;
     if (!isRuntimeEpochCurrent(operationEpoch) || !current) return;
-    const next = deleteCharacter(current, characterId);
-    await commit(next);
+    const deletion = deleteCharacterCascade(current, characterId);
+    for (const roomId of deletion.cancelledJobRoomIds) cancelChatJob(roomId);
+    await commit(deletion.state);
     if (!isRuntimeEpochCurrent(operationEpoch)) return;
     routeHistoryRef.current = [];
     navigate({ name: 'chatList' }, { replace: true });
@@ -1117,7 +1158,13 @@ export default function App() {
           onOpenDebug={() => navigateRendered({ name: 'debug' })}
         />
       ) : route.name === 'gallery' ? (
-        <GalleryScreen state={state} onChange={commitRenderedState} onBack={goBackRendered} />
+        <GalleryScreen
+          state={state}
+          onChange={commitRenderedState}
+          onBack={goBackRendered}
+          onPreviewMediaCleanup={previewCurrentMediaCleanup}
+          onTrashMediaCleanup={trashCurrentUnreachableMedia}
+        />
       ) : route.name === 'debug' ? (
         <DebugScreen state={state} onBack={goBackRendered} onRestoreState={restoreImportedState} onReloadState={reloadSavedState} onReloadBundle={reloadBundle} onSaveNow={() => flushSaveState(stateRef.current || undefined, {
           backup: 'force',

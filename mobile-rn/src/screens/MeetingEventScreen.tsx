@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Image, ImageBackground, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Animated, BackHandler, Image, ImageBackground, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors } from '../theme';
 import { Avatar } from '../components/Avatar';
 import { callLLMText, parseJsonObject } from '../logic/api';
@@ -8,6 +8,7 @@ import { findCharacter, findRoom } from '../logic/stateHelpers';
 import { makeId } from '../logic/ids';
 import { isRenderableMediaUri } from '../logic/media';
 import { userNameFor } from '../logic/prompts';
+import { transitionInteractionLifecycle } from '../logic/interactionLifecycle';
 import { MeetingChoice, MeetingChoiceStyle, MeetingEventLine, MeetingEventSession, MeetingResultCard, MeetingScenarioPhase, MeetingStats, SNSGodCharacter, SNSGodState } from '../types';
 
 type MeetingPhase = 'opening' | 'character_typing' | 'awaiting_next' | 'awaiting_choice' | 'awaiting_text' | 'user_sending' | 'thinking' | 'ending' | 'ended';
@@ -125,13 +126,13 @@ export function MeetingEventScreen({ state, sessionId, onBack, onChange }: {
   const character = findCharacter(state, session?.characterId || session?.primaryCharacterId) || groupParticipants[0];
   const room = findRoom(state, session?.roomId);
   const userName = character ? userNameFor(state, character, room) : '나';
-  const [phase, setPhase] = useState<MeetingPhase>('opening');
-  const [displayText, setDisplayText] = useState('');
-  const [currentFullText, setCurrentFullText] = useState('만남을 준비하는 중...');
-  const [currentSpeakerLines, setCurrentSpeakerLines] = useState<MeetingEventLine[]>([]);
-  const [choices, setChoices] = useState<MeetingChoice[]>([]);
-  const [uiMode, setUiMode] = useState<MeetingUiMode>('choices');
-  const [allowDirectReply, setAllowDirectReply] = useState(true);
+  const [phase, setPhase] = useState<MeetingPhase>(session?.resumePhase || 'opening');
+  const [displayText, setDisplayText] = useState(session?.resumeDisplayText || '');
+  const [currentFullText, setCurrentFullText] = useState(session?.resumeDisplayText || '만남을 준비하는 중...');
+  const [currentSpeakerLines, setCurrentSpeakerLines] = useState<MeetingEventLine[]>(session?.resumeSpeakerLines || []);
+  const [choices, setChoices] = useState<MeetingChoice[]>(session?.resumeChoices || []);
+  const [uiMode, setUiMode] = useState<MeetingUiMode>(session?.resumeUiMode || 'choices');
+  const [allowDirectReply, setAllowDirectReply] = useState(session?.resumeAllowDirectReply !== false);
   const [draftText, setDraftText] = useState('');
   const [resultCard, setResultCard] = useState<MeetingResultCard | undefined>(undefined);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -161,8 +162,42 @@ export function MeetingEventScreen({ state, sessionId, onBack, onChange }: {
   }, []);
 
   useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      void pauseMeeting();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [session?.id]);
+
+  useEffect(() => {
     if (!session || bootedRef.current) return;
     bootedRef.current = true;
+    if (session.status === 'paused' || session.resumeDisplayText) {
+      const restoredPhase = session.resumePhase === 'awaiting_text'
+        ? 'awaiting_text'
+        : session.resumeChoices?.length
+          ? 'awaiting_choice'
+          : 'awaiting_next';
+      const restoredText = session.resumeDisplayText
+        || [...session.lines].reverse().find(item => item.speaker === 'character')?.text
+        || '이어서 대화를 시작합니다.';
+      setCurrentFullText(restoredText);
+      setDisplayText(restoredText);
+      setCurrentSpeakerLines(session.resumeSpeakerLines || []);
+      setChoices(session.resumeChoices || []);
+      setUiMode(session.resumeUiMode || (session.resumeChoices?.length ? 'choices' : 'next'));
+      setAllowDirectReply(session.resumeAllowDirectReply !== false);
+      setPhase(restoredPhase);
+      if (session.status === 'paused') {
+        const active = transitionInteractionLifecycle(session, 'active');
+        void onChange(stateWithLocalSession(state, {
+          status: active.status,
+          lifecycleRevision: active.lifecycleRevision,
+          updatedAt: active.updatedAt
+        }));
+      }
+      return;
+    }
     if (isGroup) {
       const firstLines = session.lines.filter(item => item.speaker === 'character').slice(0, 3);
       void showGroupText(firstLines, false, firstMeetingChoices(session.seedSummary || session.mood || ''), 'choices', true);
@@ -185,10 +220,16 @@ export function MeetingEventScreen({ state, sessionId, onBack, onChange }: {
       ...base,
       meetingEventSessions: (base.meetingEventSessions || []).map(item => item.id === session.id ? {
         ...item,
-        ...sessionPatchRef.current,
         lines: localLines,
         turnCount: localLines.filter(line => line.speaker === 'user').length,
-        totalUserTurns: localLines.filter(line => line.speaker === 'user').length
+        totalUserTurns: localLines.filter(line => line.speaker === 'user').length,
+        resumePhase: phase,
+        resumeUiMode: uiMode,
+        resumeChoices: choices,
+        resumeAllowDirectReply: allowDirectReply,
+        resumeDisplayText: displayText || currentFullText,
+        resumeSpeakerLines: currentSpeakerLines,
+        ...sessionPatchRef.current
       } : item)
     };
   }
@@ -223,7 +264,15 @@ export function MeetingEventScreen({ state, sessionId, onBack, onChange }: {
     if (append) {
       const line = { id: makeId('meetingline'), speaker: 'character' as const, text, createdAt: Date.now() };
       linesRef.current = [...linesRef.current, line];
-      await onChange(stateWithLocalSession(state));
+      await onChange(stateWithLocalSession(state, {
+        ...patch,
+        resumeChoices: nextChoices,
+        resumeUiMode: mode,
+        resumeAllowDirectReply: direct,
+        resumeDisplayText: text,
+        resumeSpeakerLines: [],
+        resumePhase: mode === 'next' ? 'awaiting_next' : mode === 'input' ? 'awaiting_text' : 'awaiting_choice'
+      }));
     }
     await typeText(text, mode === 'next' ? 'awaiting_next' : mode === 'input' ? 'awaiting_text' : 'awaiting_choice');
   }
@@ -256,7 +305,15 @@ export function MeetingEventScreen({ state, sessionId, onBack, onChange }: {
     setPhase('character_typing');
     if (append) {
       linesRef.current = [...linesRef.current, ...safeLines];
-      await onChange(stateWithLocalSession(state, patch));
+      await onChange(stateWithLocalSession(state, {
+        ...patch,
+        resumeChoices: nextChoices,
+        resumeUiMode: mode,
+        resumeAllowDirectReply: direct,
+        resumeDisplayText: groupTextFor(safeLines),
+        resumeSpeakerLines: safeLines,
+        resumePhase: mode === 'next' ? 'awaiting_next' : mode === 'input' ? 'awaiting_text' : 'awaiting_choice'
+      }));
     }
     await typeText(groupTextFor(safeLines), mode === 'next' ? 'awaiting_next' : mode === 'input' ? 'awaiting_text' : 'awaiting_choice');
   }
@@ -428,6 +485,7 @@ export function MeetingEventScreen({ state, sessionId, onBack, onChange }: {
             ].join('\n\n')
           }
         ]);
+        if (endingRef.current) return;
         const turn = parseGroupTurn(result.text);
         const patch: Partial<MeetingEventSession> = { phase: turn.phase || nextScenarioPhase, phaseTurn: (currentSession?.phaseTurn || 0) + 1 };
         if (turn.endEvent && canEndMeeting(userTurnCount)) {
@@ -472,6 +530,7 @@ export function MeetingEventScreen({ state, sessionId, onBack, onChange }: {
           ].join('\n\n')
         }
       ]);
+      if (endingRef.current) return;
       const turn = parseTurn(result.text);
       const patch: Partial<MeetingEventSession> = { phase: turn.phase || nextScenarioPhase, phaseTurn: (currentSession?.phaseTurn || 0) + 1 };
       if (turn.endEvent && canEndMeeting(userTurnCount)) {
@@ -480,6 +539,7 @@ export function MeetingEventScreen({ state, sessionId, onBack, onChange }: {
       }
       await showCharacterText(turn.line, true, turn.choices, turn.uiMode, turn.allowDirectReply, patch);
     } catch {
+      if (endingRef.current) return;
       if (isGroup) {
         const speaker = groupParticipants[0];
         await showGroupText([{
@@ -555,6 +615,28 @@ export function MeetingEventScreen({ state, sessionId, onBack, onChange }: {
     setPhase('ended');
   }
 
+  async function pauseMeeting() {
+    if (!session || endingRef.current) return;
+    endingRef.current = true;
+    typingTokenRef.current += 1;
+    const local = stateWithLocalSession(state, {
+      resumePhase: phase === 'awaiting_text' ? 'awaiting_text' : choices.length ? 'awaiting_choice' : 'awaiting_next',
+      resumeUiMode: uiMode,
+      resumeChoices: choices,
+      resumeAllowDirectReply: allowDirectReply,
+      resumeDisplayText: displayText || currentFullText,
+      resumeSpeakerLines: currentSpeakerLines
+    });
+    const current = (local.meetingEventSessions || []).find(item => item.id === session.id);
+    const paused = current?.status === 'active' ? transitionInteractionLifecycle(current, 'paused') : current;
+    await onChange({
+      ...local,
+      activeMeetingEventId: local.activeMeetingEventId === session.id ? undefined : local.activeMeetingEventId,
+      meetingEventSessions: (local.meetingEventSessions || []).map(item => item.id === session.id && paused ? paused : item)
+    });
+    onBack();
+  }
+
   if (!session || (!character && !isGroup)) {
     return (
       <View style={styles.fallback}>
@@ -591,7 +673,7 @@ export function MeetingEventScreen({ state, sessionId, onBack, onChange }: {
       <View style={styles.overlay} />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.stage, keyboardTyping && styles.stageKeyboard]}>
         <View style={styles.header}>
-          <Pressable onPress={endMeeting} style={styles.headerButton}><Text style={styles.headerButtonText}>‹</Text></Pressable>
+          <Pressable onPress={pauseMeeting} style={styles.headerButton}><Text style={styles.headerButtonText}>‹</Text></Pressable>
           <View style={styles.headerCenter}>
             <Text style={styles.headerTitle}>{isGroup ? '단톡 만남' : `${character?.name || '상대'}와 만남`}</Text>
             {isGroup ? <View style={styles.participantRow}>{groupParticipants.map(item => <Avatar key={item.id} character={item} size={24} />)}</View> : null}

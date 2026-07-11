@@ -152,6 +152,11 @@ function pruneDeletionDependents(
     && !sessionReferencesCharacter(session, characterIds)
   ));
   const retainedMeetingIds = new Set(meetingEventSessions.map(session => session.id));
+  const callSessions = (state.callSessions || []).filter(session => (
+    !roomIds.has(String(session.roomId || ''))
+    && !characterIds.has(session.characterId)
+  ));
+  const retainedCallIds = new Set(callSessions.map(session => session.id));
   const serverMessaging = state.config.serverMessaging ? {
     ...state.config.serverMessaging,
     outbox: (state.config.serverMessaging.outbox || []).filter(item => !roomIds.has(item.roomId)),
@@ -179,6 +184,11 @@ function pruneDeletionDependents(
     pendingReplies,
     snsPosts,
     snsDmThreads,
+    callSessions,
+    activeCallSessionId: state.activeCallSessionId
+      && retainedCallIds.has(state.activeCallSessionId)
+      ? state.activeCallSessionId
+      : undefined,
     meetingEventSessions,
     activeMeetingEventId: state.activeMeetingEventId
       && retainedMeetingIds.has(state.activeMeetingEventId)
@@ -318,7 +328,7 @@ export function deleteMessageCascade(
     && state.pendingReplies?.[roomId]?.sourceMessageId === target.id;
   const meetingId = typeof target.meetingEventId === 'string' ? target.meetingEventId : undefined;
   const meetingEventSessions = meetingId ? (state.meetingEventSessions || []).filter(session => (
-    session.id !== meetingId || session.status === 'active' || session.status === 'ended'
+    session.id !== meetingId || session.status === 'active' || session.status === 'finished'
   )) : state.meetingEventSessions;
   const retainedMeetingIds = new Set((meetingEventSessions || []).map(session => session.id));
   const pendingState = cancelPendingReply

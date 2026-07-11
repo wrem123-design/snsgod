@@ -17,6 +17,7 @@ import { clearComposerInput, createComposerSendGuard, isComposerSendEnter } from
 import { reverseMessagesForInvertedList, useStickToBottomList } from '../logic/useStickToBottomList';
 import { MessageActionAnchor, MessageActionMenu } from '../components/MessageActionMenu';
 import { cancelPendingReplyJob } from '../logic/pendingReplyJobs';
+import { transitionInteractionLifecycle } from '../logic/interactionLifecycle';
 
 const TermuxBridge = NativeModules.TermuxBridge as undefined | {
   copyText: (text: string) => Promise<string>;
@@ -276,7 +277,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
     await commitCurrent(current => ({
       ...current,
       activeMeetingEventId: sessionId,
-      meetingEventSessions: (current.meetingEventSessions || []).map(session => session.id === sessionId ? { ...session, status: 'active' } : session)
+      meetingEventSessions: (current.meetingEventSessions || []).map(session => session.id === sessionId ? transitionInteractionLifecycle(session, 'active') : session)
     }));
     onOpenMeeting?.(sessionId);
   }
@@ -284,7 +285,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
   async function cancelMeetingEvent(sessionId: string, messageId: string) {
     await commitCurrent(current => ({
       ...current,
-      meetingEventSessions: (current.meetingEventSessions || []).map(session => session.id === sessionId ? { ...session, status: 'dismissed', endedAt: Date.now() } : session),
+      meetingEventSessions: (current.meetingEventSessions || []).map(session => session.id === sessionId ? transitionInteractionLifecycle(session, 'cancelled') : session),
       messages: {
         ...current.messages,
         [roomId]: (current.messages[roomId] || []).map(message => message.id === messageId ? {
@@ -746,7 +747,8 @@ function MessageBubble({ message, layout, character, userStickers, roomId, meeti
 
   if (system) {
     const meetingSessionId = String(message.meetingEventId || '');
-    const pendingMeeting = Boolean(message.meetingEventPrompt && meetingSessionId && meetingStatus === 'pending');
+    const pendingMeeting = Boolean(message.meetingEventPrompt && meetingSessionId && (meetingStatus === 'pending' || meetingStatus === 'paused'));
+    const resumingMeeting = meetingStatus === 'paused';
     return (
       <View ref={bubbleRef} collapsable={false} style={[styles.bubbleAnchor, styles.systemAnchor]}>
         {actionMenu}
@@ -761,7 +763,7 @@ function MessageBubble({ message, layout, character, userStickers, roomId, meeti
           {pendingMeeting ? (
             <View style={styles.meetingActions}>
               <Pressable onPress={() => onStartMeeting?.(meetingSessionId)} style={styles.meetingPrimary}>
-                <Text style={styles.meetingPrimaryText}>이벤트</Text>
+                <Text style={styles.meetingPrimaryText}>{resumingMeeting ? '이어서 만나기' : '이벤트'}</Text>
               </Pressable>
               <Pressable onPress={() => onCancelMeeting?.(meetingSessionId, message.id)} style={styles.meetingSecondary}>
                 <Text style={styles.meetingSecondaryText}>취소</Text>
@@ -815,14 +817,16 @@ function MessageBubble({ message, layout, character, userStickers, roomId, meeti
             <View style={styles.callCard}>
               <Text style={styles.callTitle}>{String(message.callTitle || message.mediaName || `${character.name} 전화`)}</Text>
               <Text style={styles.callBody}>{String(message.callLine || '통화 요청이 도착했습니다.')}</Text>
-              {message.callStatus ? <Text style={styles.callStatus}>{callStatusLabel(String(message.callStatus))}</Text> : (
+              {message.callStatus && message.callStatus !== 'paused' ? <Text style={styles.callStatus}>{callStatusLabel(String(message.callStatus))}</Text> : (
                 <View style={styles.callActions}>
-                  <Pressable onPress={() => onOpenCall?.(String(message.characterId || character.id), roomId, message.id)} style={styles.callButton}>
-                    <Text style={styles.callButtonText}>받기</Text>
+                  <Pressable onPress={() => onOpenCall?.(String(message.characterId || character.id), roomId, message.callResumeSessionId ? undefined : message.id)} style={styles.callButton}>
+                    <Text style={styles.callButtonText}>{message.callStatus === 'paused' ? '통화 이어가기' : '받기'}</Text>
                   </Pressable>
-                  <Pressable onPress={() => onRejectCall?.(message)} style={[styles.callButton, styles.callRejectButton]}>
-                    <Text style={styles.callRejectText}>거절</Text>
-                  </Pressable>
+                  {message.callStatus !== 'paused' ? (
+                    <Pressable onPress={() => onRejectCall?.(message)} style={[styles.callButton, styles.callRejectButton]}>
+                      <Text style={styles.callRejectText}>거절</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               )}
             </View>
@@ -901,6 +905,7 @@ function callStatusLabel(status: string) {
   if (status === 'rejected') return '통화 취소';
   if (status === 'missed') return '부재중 전화';
   if (status === 'ringing') return '수신 중';
+  if (status === 'paused') return '통화 일시 정지';
   return status;
 }
 

@@ -23,6 +23,7 @@ import { appendDebugLog } from '../logic/debugLog';
 import { isRenderableMediaUri } from '../logic/media';
 import { characterReferenceImageForPrompt } from '../logic/imageReference';
 import { characterWithConversationRhythm } from '../logic/conversationRhythm';
+import { transitionInteractionLifecycle } from '../logic/interactionLifecycle';
 import { forceUpdateRoomMemory, groupMemoryPromptBlock, updateRoomMemoryAfterAppend } from '../logic/memoryBridge';
 import { dateGroundingInstruction, localTimeContext, resolvedPrompts, weatherContext } from '../logic/prompts';
 import { applyMessageToCharacterWorld, resolveCharacterRuntimeState, runtimeStatePromptBlock } from '../logic/characterWorld';
@@ -541,7 +542,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
     await commitCurrent(current => ({
       ...current,
       activeMeetingEventId: sessionId,
-      meetingEventSessions: (current.meetingEventSessions || []).map(session => session.id === sessionId ? { ...session, status: 'active' } : session)
+      meetingEventSessions: (current.meetingEventSessions || []).map(session => session.id === sessionId ? transitionInteractionLifecycle(session, 'active') : session)
     }));
     onOpenMeeting?.(sessionId);
   }
@@ -549,7 +550,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
   async function cancelMeetingEvent(sessionId: string, messageId: string) {
     await commitCurrent(current => ({
       ...current,
-      meetingEventSessions: (current.meetingEventSessions || []).map(session => session.id === sessionId ? { ...session, status: 'dismissed', endedAt: Date.now() } : session),
+      meetingEventSessions: (current.meetingEventSessions || []).map(session => session.id === sessionId ? transitionInteractionLifecycle(session, 'cancelled') : session),
       messages: {
         ...current.messages,
         [roomId]: (current.messages[roomId] || []).map(message => message.id === messageId ? {
@@ -770,7 +771,8 @@ function GroupBubble({ message, layout, participants, userName, userStickers, me
 
   if (system) {
     const meetingSessionId = String(message.meetingEventId || '');
-    const pendingMeeting = Boolean(message.meetingEventPrompt && meetingSessionId && meetingStatus === 'pending');
+    const pendingMeeting = Boolean(message.meetingEventPrompt && meetingSessionId && (meetingStatus === 'pending' || meetingStatus === 'paused'));
+    const resumingMeeting = meetingStatus === 'paused';
     return (
       <View ref={bubbleRef} collapsable={false} style={[styles.bubbleAnchor, styles.systemAnchor]}>
         {actionMenu}
@@ -780,7 +782,7 @@ function GroupBubble({ message, layout, participants, userName, userStickers, me
           {pendingMeeting ? (
             <View style={styles.meetingActions}>
               <Pressable onPress={() => onStartMeeting?.(meetingSessionId)} style={styles.meetingPrimary}>
-                <Text style={styles.meetingPrimaryText}>단톡 만남 시작</Text>
+                <Text style={styles.meetingPrimaryText}>{resumingMeeting ? '단톡 만남 이어가기' : '단톡 만남 시작'}</Text>
               </Pressable>
               <Pressable onPress={() => onCancelMeeting?.(meetingSessionId, message.id)} style={styles.meetingSecondary}>
                 <Text style={styles.meetingSecondaryText}>취소</Text>

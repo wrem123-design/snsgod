@@ -425,6 +425,47 @@ export type ContactLedgerEntry = {
   updatedAt: number;
 };
 
+export type InteractionLifecycleStatus = 'pending' | 'active' | 'paused' | 'cancelled' | 'finished';
+
+export type InteractionLifecycleMetadata = {
+  status: InteractionLifecycleStatus;
+  lifecycleRevision?: number;
+  updatedAt?: number;
+  pausedAt?: number;
+  cancelledAt?: number;
+  finishedAt?: number;
+  resultAppliedAt?: number;
+};
+
+export type CallSessionLine = {
+  id: string;
+  speaker: 'user' | 'character' | 'system';
+  text: string;
+  createdAt: number;
+};
+
+export type CallSessionPhase = 'dialing' | 'ringing' | 'connected' | 'character_typing' | 'awaiting_next' | 'awaiting_choice' | 'awaiting_text' | 'user_sending' | 'listening' | 'ending' | 'ended';
+export type CallSessionUiMode = 'next' | 'choices' | 'input' | 'mixed';
+
+export type CallSession = InteractionLifecycleMetadata & {
+  id: string;
+  characterId: string;
+  roomId?: string;
+  sourceMessageId?: string;
+  direction: 'incoming' | 'outgoing';
+  startedAt: number;
+  connectedAt?: number;
+  endedAt?: number;
+  turnCount: number;
+  lines: CallSessionLine[];
+  phase: CallSessionPhase;
+  pages: string[];
+  pageIndex: number;
+  choices: string[];
+  uiMode: CallSessionUiMode;
+  allowDirectReply: boolean;
+};
+
 export type MeetingEventLine = {
   id: string;
   speaker: 'user' | 'character' | 'system';
@@ -482,7 +523,7 @@ export type MeetingResultCard = {
   afterMessage?: string;
 };
 
-export type MeetingEventSession = {
+export type MeetingEventSession = InteractionLifecycleMetadata & {
   id: string;
   roomId: string;
   roomType?: 'dm' | 'group';
@@ -494,7 +535,6 @@ export type MeetingEventSession = {
   absentCharacterIds?: string[];
   startedAt: number;
   endedAt?: number;
-  status: 'pending' | 'active' | 'dismissed' | 'ended';
   eventType?: MeetingEventType;
   phase?: MeetingScenarioPhase;
   phasePlan?: MeetingScenarioPhase[];
@@ -525,6 +565,12 @@ export type MeetingEventSession = {
   summary?: string;
   perCharacterSummaries?: Record<string, string>;
   relationshipDeltas?: Record<string, { affinity?: number; trust?: number; tension?: number }>;
+  resumePhase?: 'opening' | 'character_typing' | 'awaiting_next' | 'awaiting_choice' | 'awaiting_text' | 'user_sending' | 'thinking' | 'ending' | 'ended';
+  resumeUiMode?: 'next' | 'choices' | 'input' | 'mixed';
+  resumeChoices?: MeetingChoice[];
+  resumeAllowDirectReply?: boolean;
+  resumeDisplayText?: string;
+  resumeSpeakerLines?: MeetingEventLine[];
 };
 
 export type BlindDateMode = 'encounter' | 'profile' | 'question' | 'worldcup' | 'rotation';
@@ -1058,6 +1104,8 @@ export type SNSGodState = {
   randomCharacters?: SNSGodCharacter[];
   pendingReplies?: Record<string, PendingReplyJob>;
   contactLedger?: Record<string, ContactLedgerEntry>;
+  callSessions?: CallSession[];
+  activeCallSessionId?: string;
   meetingEventSessions?: MeetingEventSession[];
   activeMeetingEventId?: string;
   blindDate?: BlindDateProgress;

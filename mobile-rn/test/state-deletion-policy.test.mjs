@@ -73,6 +73,8 @@ test('room deletion cascades through jobs, sessions, generated SNS, DM, notifica
     loreEntries: [{ id: 'lore-room', title: '', keys: [], content: '', roomId: 'room-1' }, { id: 'lore-other', title: '', keys: [], content: '', roomId: 'room-2' }],
     meetingEventSessions: [{ id: 'meeting-1', roomId: 'room-1' }, { id: 'meeting-2', roomId: 'room-2' }],
     activeMeetingEventId: 'meeting-1',
+    callSessions: [{ id: 'call-1', roomId: 'room-1', characterId: 'character-1' }, { id: 'call-2', roomId: 'room-2', characterId: 'character-2' }],
+    activeCallSessionId: 'call-1',
     snsPosts: [{ id: 'post-room', characterId: 'character-2', platform: 'instagram', content: '', createdAt: 1, generationRoomId: 'room-1' }, { id: 'post-other', characterId: 'character-2', platform: 'instagram', content: '', createdAt: 1 }],
     snsDmThreads: [{ id: 'thread-room', postId: 'post-room', characterId: 'character-2', title: '', messages: [], createdAt: 1 }, { id: 'thread-other', postId: 'post-other', characterId: 'character-2', title: '', messages: [], createdAt: 1 }],
     notifications: [
@@ -101,6 +103,8 @@ test('room deletion cascades through jobs, sessions, generated SNS, DM, notifica
   assert.deepEqual(next.config.serverMessaging.outbox.map(item => item.id), ['out-2']);
   assert.deepEqual(next.meetingEventSessions.map(item => item.id), ['meeting-2']);
   assert.equal(next.activeMeetingEventId, undefined);
+  assert.deepEqual(next.callSessions.map(item => item.id), ['call-2']);
+  assert.equal(next.activeCallSessionId, undefined);
   assert.deepEqual(next.snsPosts.map(item => item.id), ['post-other']);
   assert.deepEqual(next.snsDmThreads.map(item => item.id), ['thread-other']);
   assert.deepEqual(next.notifications.map(item => item.id), ['notification-other']);
@@ -142,6 +146,8 @@ test('character deletion removes owned rooms and collapses undersized groups whi
       { id: 'meeting-other', roomId: 'room-2', characterId: 'character-2' },
     ],
     activeMeetingEventId: 'meeting-group',
+    callSessions: [{ id: 'call-removed', roomId: 'group-keep', characterId: 'character-1' }, { id: 'call-other', roomId: 'room-2', characterId: 'character-2' }],
+    activeCallSessionId: 'call-removed',
     notifications: [{ id: 'notification-target', type: 'sns', title: '', target: { characterId: 'character-1', postId: 'post-1', threadId: 'thread-1' }, createdAt: 1 }, { id: 'notification-other', type: 'chat', title: '', characterId: 'character-2', roomId: 'room-2', createdAt: 1 }],
     sumGod: { characterId: 'character-1', view: 'today', questionOpen: false, entries: [], characterArchives: [{ id: 'archive-1', characterId: 'character-1', archivedAt: 1, entries: [] }, { id: 'archive-2', characterId: 'character-2', archivedAt: 1, entries: [] }] },
     datingApp: { requestStatus: 'accepted', acceptedRoomId: 'room-1', acceptedCharacterId: 'character-1' },
@@ -161,6 +167,8 @@ test('character deletion removes owned rooms and collapses undersized groups whi
   assert.deepEqual(next.snsDmThreads.map(item => item.id), ['thread-2']);
   assert.deepEqual(next.meetingEventSessions.map(item => item.id), ['meeting-other']);
   assert.equal(next.activeMeetingEventId, undefined);
+  assert.deepEqual(next.callSessions.map(item => item.id), ['call-other']);
+  assert.equal(next.activeCallSessionId, undefined);
   assert.deepEqual(next.characterEvents.map(item => item.id), ['event-2']);
   assert.deepEqual(next.loreEntries.map(item => item.id), ['lore-2']);
   assert.deepEqual(next.notifications.map(item => item.id), ['notification-other']);

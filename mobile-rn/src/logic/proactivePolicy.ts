@@ -1,5 +1,6 @@
 import { CharacterRuntimeState, SNSGodCharacter, SNSGodMessage, SNSGodState } from '../types';
 import { resolveCharacterRuntimeState } from './characterWorld';
+import { contactBudgetDecision } from './contactBudget';
 
 export type ProactiveDecision = {
   allowed: boolean;
@@ -18,29 +19,6 @@ function proactiveMessage(message: SNSGodMessage): boolean {
   return ['proactive', 'proactive_catchup', 'server_proactive', 'group_autonomous', 'group_autonomous_catchup'].includes(String(message.sourceMode || ''));
 }
 
-function batchCount(messages: SNSGodMessage[]): number {
-  const sorted = [...messages].sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
-  let batches = 0;
-  let lastAt = 0;
-  let lastBatchId = '';
-  for (const message of sorted) {
-    const batchId = String(message.proactiveBatchId || '');
-    const createdAt = Number(message.createdAt || 0);
-    if ((batchId && batchId !== lastBatchId) || (!batchId && (!lastAt || createdAt - lastAt > 30_000))) batches += 1;
-    lastBatchId = batchId;
-    lastAt = createdAt;
-  }
-  return batches;
-}
-
-function localDayKey(timestamp: number, timeZone: string): string {
-  try {
-    return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(timestamp));
-  } catch {
-    return new Date(timestamp).toISOString().slice(0, 10);
-  }
-}
-
 export function proactiveTopicFingerprint(value: string): string {
   return [...new Set(String(value || '')
     .toLowerCase()
@@ -50,29 +28,21 @@ export function proactiveTopicFingerprint(value: string): string {
     .slice(0, 8))].sort().join('|');
 }
 
-function dailyBudget(character: SNSGodCharacter): number {
-  const initiative = Math.max(0, Math.min(100, Number(character.initiative ?? 40)));
-  return initiative >= 90 ? 4 : initiative >= 60 ? 3 : initiative >= 25 ? 2 : 1;
-}
-
 export function proactiveDecision(state: SNSGodState, character: SNSGodCharacter, roomId: string, now = Date.now()): ProactiveDecision {
   const messages = state.messages[roomId] || [];
-  const lastUserIndex = messages.reduce((found, message, index) => message.role === 'user' ? index : found, -1);
-  const unanswered = messages.slice(lastUserIndex + 1).filter(proactiveMessage);
-  const unansweredBatches = batchCount(unanswered);
-  const timeZone = String(character.timeZone || state.config.timeZone || 'Asia/Seoul');
-  const today = localDayKey(now, timeZone);
-  const daily = messages.filter(message => proactiveMessage(message) && localDayKey(Number(message.createdAt || 0), timeZone) === today);
-  const dailyBatches = batchCount(daily);
+  const channel = (state.groupRooms || []).some(room => room.id === roomId) ? 'group' : 'private';
+  const contact = contactBudgetDecision(state, character, channel, now);
+  const unansweredBatches = contact.unansweredCount;
+  const dailyBatches = contact.used;
   const maxWithoutReply = Math.min(3, Math.max(1, 1 + Math.max(0, Number(character.proactivePatience ?? 1))));
-  const budget = dailyBudget(character);
+  const budget = contact.dailyBudget;
   const runtimeState = resolveCharacterRuntimeState(state, character, now);
   const stage = Math.min(4, unansweredBatches + 1) as 1 | 2 | 3 | 4;
   const recentTopics = messages.filter(proactiveMessage).slice(-6).map(message => proactiveTopicFingerprint(message.content)).filter(Boolean);
   const waitForUser = unansweredBatches >= maxWithoutReply || stage === 4 || dailyBatches >= budget;
   const unavailable = runtimeState.phoneAvailability === 'sleeping' || runtimeState.phoneAvailability === 'offline';
   const busyAndLowEnergy = runtimeState.phoneAvailability === 'busy' && runtimeState.energy < 45;
-  const allowed = character.proactiveEnabled !== false && !waitForUser && !unavailable && !busyAndLowEnergy;
+  const allowed = contact.allowed && !waitForUser && !unavailable && !busyAndLowEnergy;
   const reason = waitForUser
     ? (dailyBatches >= budget ? '오늘의 먼저 연락하기 횟수를 모두 사용함' : '사용자 답장을 기다리는 단계')
     : unavailable ? '휴대폰을 보지 않는 현재 상태'

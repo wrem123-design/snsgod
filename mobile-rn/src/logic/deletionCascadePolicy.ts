@@ -218,6 +218,9 @@ function pruneDeletionDependents(
       !(receipt.targetKind === 'room' && roomIds.has(receipt.targetId))
       && !(receipt.targetKind === 'snsdm' && removedThreadIds.has(receipt.targetId))
     ))),
+    contactLedger: Object.fromEntries(Object.entries(state.contactLedger || {}).filter(([, entry]) => (
+      !characterIds.has(entry.characterId)
+    ))),
     datingApp: clearInvalidDatingProgress(state.datingApp, roomIds, characterIds),
     sumGod,
     selectedRoomId: state.selectedRoomId && roomIds.has(state.selectedRoomId)

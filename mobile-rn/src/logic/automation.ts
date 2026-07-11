@@ -18,6 +18,7 @@ import { compilePromptBlocks, PromptBlock } from './promptCompiler';
 import { maybeCreateBackgroundAutoSNSPost } from './sns';
 import { refreshCharacterWorldState, resolveCharacterRuntimeState } from './characterWorld';
 import { proactiveDecision } from './proactivePolicy';
+import { contactBudgetDecision, consumeContactBudget } from './contactBudget';
 
 type GroupAutonomousMessage = {
   characterId?: string;
@@ -43,6 +44,12 @@ type NormalizedGroupAutonomousItem = {
 function minutesSince(timestamp?: number): number {
   if (!timestamp) return 9999;
   return (Date.now() - timestamp) / 60000;
+}
+
+function pickHighestPriority<T>(items: readonly T[], score: (item: T) => number): T {
+  const best = Math.max(...items.map(score));
+  const pool = items.filter(item => score(item) === best);
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 const DEFAULT_PHONE_INVITE_RARITY_LEVEL = 0;
@@ -213,6 +220,7 @@ async function runCalendarEvent(state: SNSGodState): Promise<SNSGodState | undef
     if (!event) continue;
     const marker = `${character.id}:${event.id || event.title}:${todayKey()}`;
     if (sent[marker]) continue;
+    if (!contactBudgetDecision(state, character, 'calendar').allowed) continue;
     const personaBlocks = canonicalPersonaBlocks(character, state.config.language || 'Korean', {
       userVisibleName: userNameFor(state, character, room),
       userProfile: userProfileFor(state, character),
@@ -233,8 +241,10 @@ async function runCalendarEvent(state: SNSGodState): Promise<SNSGodState | undef
       priority: promptParts.length - index,
     } : part)).content;
     const { reply, keyIndex } = await callLLM(state, [{ role: 'system', content: prompt }]);
+    const budget = consumeContactBudget(state, character, 'calendar', { eventId: `calendar:${marker}`, roomId: room.id });
+    if (!budget.consumed) return undefined;
     let next: SNSGodState = {
-      ...state,
+      ...budget.state,
       config: {
         ...state.config,
         apiProfiles: {
@@ -275,6 +285,7 @@ function runPhoneInvite(state: SNSGodState): SNSGodState | undefined {
   const chanceMultiplier = phoneInviteChanceMultiplier(state);
   const candidates = state.characters.filter(character => {
     if (character.randomTemporary === true || character.enabled === false || character.proactiveEnabled === false) return false;
+    if (!contactBudgetDecision(state, character, 'phone').allowed) return false;
     const rhythmCharacter = characterWithConversationRhythm(state, character);
     const intervalMinutes = Math.max(phoneInviteCharacterCooldownMinutes(state), Number(rhythmCharacter.frequencyMinutes || 10) * 12);
     if (minutesSince(sent[character.id]) < intervalMinutes) return false;
@@ -282,12 +293,14 @@ function runPhoneInvite(state: SNSGodState): SNSGodState | undefined {
     return Math.random() * 100 <= chance;
   });
   if (!candidates.length) return undefined;
-  const character = candidates[Math.floor(Math.random() * candidates.length)];
+  const character = pickHighestPriority(candidates, item => contactBudgetDecision(state, item, 'phone').channelPriority);
   const roomId = (state.chatRooms[character.id] || [])[0]?.id;
   if (isRoomDisabled(state, roomId)) return undefined;
   if (roomId && isRoomBusy(roomId)) return undefined;
+  const budget = consumeContactBudget(state, character, 'phone', { eventId: `phone:${character.id}:${Date.now()}`, roomId });
+  if (!budget.consumed) return undefined;
   let next: SNSGodState = {
-    ...state,
+    ...budget.state,
     __phoneInviteAt: { ...sent, [character.id]: Date.now() },
     __phoneGlobalInviteAt: Date.now()
   };
@@ -555,7 +568,9 @@ async function runProfileImageAutomation(state: SNSGodState): Promise<SNSGodStat
 async function runPrivateFirstMessage(state: SNSGodState, firstMessageOnly: boolean): Promise<SNSGodState | undefined> {
   const candidates = eligiblePrivateRooms(state, firstMessageOnly);
   if (!candidates.length) return undefined;
-  const { character, room } = candidates[Math.floor(Math.random() * candidates.length)];
+  const { character, room } = pickHighestPriority(candidates, item => (
+    contactBudgetDecision(state, item.character, 'private').channelPriority
+  ));
   const messages = (state.messages[room.id] || []).slice(-8);
   const transcript = messages.map(message => `${message.role === 'user' ? userNameFor(state, character, room) : character.name}: ${message.content}`).join('\n');
   const personaBlocks = canonicalPersonaBlocks(character, state.config.language || 'Korean', {
@@ -601,8 +616,11 @@ async function runPrivateFirstMessage(state: SNSGodState, firstMessageOnly: bool
       messages: reply.messages.map(message => ({ ...message, content: softenImplausibleCompletedActivity(message.content) }))
     };
   }
+  const contactAt = Date.now();
+  const budget = consumeContactBudget(state, character, 'private', { eventId: `private:${room.id}:${contactAt}`, roomId: room.id }, contactAt);
+  if (!budget.consumed) return undefined;
   let next: SNSGodState = {
-    ...state,
+    ...budget.state,
     config: {
       ...state.config,
       apiProfiles: {
@@ -665,7 +683,9 @@ async function runPrivateFirstMessage(state: SNSGodState, firstMessageOnly: bool
 async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | undefined> {
   const candidates = eligibleGroupRooms(state);
   if (!candidates.length) return undefined;
-  const { room, speaker, participants } = candidates[Math.floor(Math.random() * candidates.length)];
+  const { room, speaker, participants } = pickHighestPriority(candidates, item => (
+    contactBudgetDecision(state, item.speaker, 'group').channelPriority
+  ));
   const messages = (state.messages[room.id] || []).slice(-MAX_SNS_DM_CONTEXT_MESSAGES);
   const transcript = messages.map(message => {
     if (message.role === 'user') return `${state.config.userName || '나'}: ${message.content}`;
@@ -709,8 +729,22 @@ async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | u
   const { text, keyIndex } = await callLLMText(state, [{ role: 'system', content: prompt }]);
   const parsed = parseJsonObject<GroupAutonomousPayload>(text);
   const normalizedItems = normalizeGroupAutonomousItems(parsed, speaker, participants, messages);
+  const groupContactAt = Date.now();
+  let budgetState = state;
+  const allowedSpeakerIds = new Set<string>();
+  for (const item of normalizedItems) {
+    if (allowedSpeakerIds.has(item.speaker.id)) continue;
+    const consumed = consumeContactBudget(budgetState, item.speaker, 'group', {
+      eventId: `group:${room.id}:${groupContactAt}:${item.speaker.id}`,
+      roomId: room.id,
+    }, groupContactAt);
+    budgetState = consumed.state;
+    if (consumed.consumed) allowedSpeakerIds.add(item.speaker.id);
+  }
+  const budgetedItems = normalizedItems.filter(item => allowedSpeakerIds.has(item.speaker.id));
+  if (!budgetedItems.length) return undefined;
   let next: SNSGodState = {
-    ...state,
+    ...budgetState,
     config: {
       ...state.config,
       apiProfiles: {
@@ -727,7 +761,7 @@ async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | u
   const groupPlannedAt = groupLastAt + groupFrequencyMs;
   const groupOverdue = Date.now() > groupPlannedAt + 15000;
   let groupBubbleAt = groupOverdue ? Math.min(Date.now(), Math.max(groupLastAt + 1000, groupPlannedAt)) : Date.now();
-  for (const item of normalizedItems) {
+  for (const item of budgetedItems) {
     const createdAt = groupOverdue
       ? Math.min(Date.now(), groupBubbleAt + Math.max(0, Math.min(4000, Number(item.delay || 0) * 1000)))
       : Date.now() + deliveredCount * 900 + Math.max(0, Math.min(4000, Number(item.delay || 0) * 1000));
@@ -780,18 +814,21 @@ export async function runAutomationTick(state: SNSGodState): Promise<SNSGodState
   const calendarNext = await runCalendarEvent(worldState);
   if (calendarNext) return calendarNext;
 
-  // SNS, chat, profile and calls now consume the same refreshed character state.
-  const snsNext = await maybeCreateBackgroundAutoSNSPost(worldState);
-  if (snsNext) return snsNext;
-
-  const randomFirstNext = await runPrivateFirstMessage(worldState, true);
-  if (randomFirstNext) return randomFirstNext;
-
-  const privateNext = await runPrivateFirstMessage(worldState, false);
-  if (privateNext) return privateNext;
-
-  const groupNext = await runGroupFirstMessage(worldState);
-  if (groupNext) return groupNext;
-
-  return runPhoneInvite(worldState) || worldState;
+  const maxPriority = (channel: 'private' | 'group' | 'phone' | 'sns') => Math.max(0, ...worldState.characters
+    .filter(character => character.enabled !== false && character.randomTemporary !== true)
+    .map(character => {
+      const decision = contactBudgetDecision(worldState, character, channel);
+      return decision.allowed ? decision.channelPriority : 0;
+    }));
+  const contactRunners: Array<{ priority: number; run: () => Promise<SNSGodState | undefined> }> = [
+    { priority: maxPriority('private'), run: async () => (await runPrivateFirstMessage(worldState, true)) || runPrivateFirstMessage(worldState, false) },
+    { priority: maxPriority('group'), run: () => runGroupFirstMessage(worldState) },
+    { priority: maxPriority('phone'), run: async () => runPhoneInvite(worldState) },
+    { priority: maxPriority('sns'), run: () => maybeCreateBackgroundAutoSNSPost(worldState) },
+  ].sort((a, b) => b.priority - a.priority);
+  for (const runner of contactRunners) {
+    const next = await runner.run();
+    if (next) return next;
+  }
+  return worldState;
 }

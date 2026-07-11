@@ -9,6 +9,7 @@ import { DEFAULT_PROMPTS, configuredPrompt } from './prompts';
 import { SNSDmThread, SNSGodCharacter, SNSGodState, SNSPost } from '../types';
 import { resolveCharacterRuntimeState, runtimeStatePromptBlock } from './characterWorld';
 import { compactLegacyMemoryFacts } from './memoryBridge';
+import { contactBudgetDecision, consumeContactBudget } from './contactBudget';
 
 type GeneratedPlatform = {
   platform?: string;
@@ -616,6 +617,11 @@ export async function maybeCreateAutoSNSPost(state: SNSGodState, character: SNSG
     await logAutoSns(`skip room=${roomId} character=${character.id}: temporary random character`);
     return state;
   }
+  const contactDecision = contactBudgetDecision(state, character, 'sns');
+  if (!contactDecision.allowed) {
+    await logAutoSns(`skip room=${roomId} character=${character.id}: contact budget ${contactDecision.reason}`);
+    return state;
+  }
   if (autoPostingRooms.has(roomId)) {
     await logAutoSns(`skip room=${roomId} character=${character.id}: SNS auto post already running`);
     return state;
@@ -667,7 +673,12 @@ export async function maybeCreateAutoSNSPost(state: SNSGodState, character: SNSG
     const next = await generateSNSPost(state, character, platform, { roomId, manual: false });
     const created = Math.max(0, (next.snsPosts || []).length - (state.snsPosts || []).length);
     await logAutoSns(`done room=${roomId} character=${character.id} platform=${platform} posts=${created}`);
-    return next;
+    if (!created) return next;
+    const previousIds = new Set((state.snsPosts || []).map(post => post.id));
+    const createdPost = (next.snsPosts || []).find(post => !previousIds.has(post.id));
+    if (!createdPost) return next;
+    const budget = consumeContactBudget(next, character, 'sns', { eventId: `sns:${createdPost.id}`, roomId }, createdPost.createdAt);
+    return budget.consumed ? budget.state : state;
   } catch (error) {
     await logAutoSns(`failed room=${roomId} character=${character.id} platform=${platform}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
     throw error;
@@ -686,6 +697,7 @@ export async function maybeCreateBackgroundAutoSNSPost(state: SNSGodState): Prom
       return rooms.map(room => ({ character, room, messages: state.messages[room.id] || [] }));
     })
     .filter(item => {
+      if (!contactBudgetDecision(state, item.character, 'sns').allowed) return false;
       const runtime = resolveCharacterRuntimeState(state, item.character);
       if (runtime.phoneAvailability === 'sleeping' || runtime.phoneAvailability === 'offline') return false;
       if (runtime.phoneAvailability === 'busy' && runtime.energy < 45) return false;
@@ -697,7 +709,11 @@ export async function maybeCreateBackgroundAutoSNSPost(state: SNSGodState): Prom
       const cooldown = Math.max(1, Number(state.config.autoSnsCooldownMessages ?? 4));
       return messages.length - lastCount >= cooldown;
     })
-    .sort((a, b) => Number(b.messages[b.messages.length - 1]?.createdAt || 0) - Number(a.messages[a.messages.length - 1]?.createdAt || 0));
+    .sort((a, b) => {
+      const priority = contactBudgetDecision(state, b.character, 'sns').channelPriority
+        - contactBudgetDecision(state, a.character, 'sns').channelPriority;
+      return priority || Number(b.messages[b.messages.length - 1]?.createdAt || 0) - Number(a.messages[a.messages.length - 1]?.createdAt || 0);
+    });
 
   for (const item of pairs.slice(0, 6)) {
     if (autoPostingRooms.has(item.room.id)) continue;

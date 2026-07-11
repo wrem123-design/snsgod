@@ -1,5 +1,5 @@
 import { callLLM, generateImageDataUri, imagePromptWithoutCharacterName } from './api';
-import { beginChatJob, cancelChatJob, endChatJob, isCurrentChatJob, tryLockGeneratingRoom } from './chatJobs';
+import { beginChatJob, cancelChatJob, endChatJob, isCurrentChatJob, tryLockGeneratingRoom, tryResumeChatJob } from './chatJobs';
 import { shouldAllowChatImageGeneration } from './chatImageGuard';
 import { characterReferenceImageForPrompt } from './imageReference';
 import { makeId } from './ids';
@@ -12,22 +12,29 @@ import { maybeCreateAutoSNSPost } from './sns';
 import { appendMessage, findCharacter, findRoom, isRoomDisabled, roomMessages, updateCharacter } from './stateHelpers';
 import { maybeRefreshPrivateRoomLlmSummary } from './roomConversationSummary';
 import { chatNowContext, isImplausibleCompletedActivity, repairTimeRealityInstruction, softenImplausibleCompletedActivity } from './timeReality';
-import { SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
+import { PendingReplyJob, PendingReplyPhase, SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
 import { appendDebugLog } from './debugLog';
 import { characterWithConversationRhythm } from './conversationRhythm';
 import { resolveCharacterRuntimeState } from './characterWorld';
 import { ingestCharacterMemory } from './memoryPolicy';
 import { mergeStaleState, preserveLatestDeletionInvariants } from './staleStateMergePolicy';
+import { createPendingReplyJob, isPendingReplyActive, transitionPendingReplyJob } from './pendingReplyJobs';
 
-type CommitPatch = (patch: (current: SNSGodState) => SNSGodState, options?: { persist?: boolean }) => Promise<void> | void;
+type CommitPatch = (patch: (current: SNSGodState) => SNSGodState, options?: {
+  persist?: boolean;
+  save?: { important?: boolean; reason?: string };
+  flush?: boolean;
+}) => Promise<void> | void;
 
 type StartReplyJobInput = {
   roomId: string;
   characterId: string;
+  sourceMessageId?: string;
   latestUserInput: string;
   latestUserImageData?: string;
   userMessageCreatedAt?: number;
   randomMode?: boolean;
+  resumeJob?: PendingReplyJob;
   getState: () => SNSGodState | null;
   commitCurrent: CommitPatch;
 };
@@ -133,21 +140,37 @@ function planReplyTimeline(userMessageCreatedAt: number | undefined, replyDelayM
   return { now, userAt, plannedReplyAt, remainingWaitMs, catchUp, deliveryBaseAt };
 }
 
-function setPending(state: SNSGodState, roomId: string, jobId: string, phase: NonNullable<SNSGodState['pendingReplies']>[string]['phase']) {
+function planPersistedReplyTimeline(job: PendingReplyJob) {
+  const now = Date.now();
+  const userAt = Math.max(0, Number(job.sourceMessageCreatedAt || now) || now);
+  const plannedReplyAt = Math.max(userAt, Number(job.scheduledAt || userAt));
+  const remainingWaitMs = Math.max(0, plannedReplyAt - now);
+  const catchUp = remainingWaitMs <= 1500;
+  const deliveryBaseAt = catchUp ? Math.min(now, Math.max(userAt + 800, plannedReplyAt)) : plannedReplyAt;
+  return { now, userAt, plannedReplyAt, remainingWaitMs, catchUp, deliveryBaseAt };
+}
+
+function storePendingJob(state: SNSGodState, job: PendingReplyJob) {
   return {
     ...state,
     pendingReplies: {
       ...(state.pendingReplies || {}),
-      [roomId]: { jobId, startedAt: Date.now(), phase }
+      [job.roomId]: job,
     }
   };
 }
 
-function clearPending(state: SNSGodState, roomId: string, jobId: string) {
-  if (state.pendingReplies?.[roomId]?.jobId !== jobId) return state;
-  const pendingReplies = { ...(state.pendingReplies || {}) };
-  delete pendingReplies[roomId];
-  return { ...state, pendingReplies };
+function transitionPending(
+  state: SNSGodState,
+  roomId: string,
+  jobId: string,
+  phase: PendingReplyPhase,
+  failureReason?: string,
+) {
+  const current = state.pendingReplies?.[roomId];
+  if (!current || current.jobId !== jobId) return state;
+  const next = transitionPendingReplyJob(current, phase, Date.now(), failureReason);
+  return next === current ? state : storePendingJob(state, next);
 }
 
 function mergeGeneratedSns(current: SNSGodState, before: SNSGodState, generated: SNSGodState): SNSGodState {
@@ -205,18 +228,52 @@ function appendPrivateMessageIfValid(
 }
 
 export function isReplyPending(state: SNSGodState, roomId: string): boolean {
-  return Boolean(state.pendingReplies?.[roomId]);
+  return isPendingReplyActive(state.pendingReplies?.[roomId]);
 }
 
 export async function startReplyJob(input: StartReplyJobInput) {
-  cancelChatJob(input.roomId);
-  const jobId = beginChatJob(input.roomId);
-  await input.commitCurrent(current => setPending(current, input.roomId, jobId, 'delay'), { persist: false });
+  const initialState = input.getState();
+  const initial = roomStillValid(initialState, input.roomId, input.characterId);
+  if (!initialState || !initial) return;
+  const userMessages = (initialState.messages[input.roomId] || []).filter(message => message.role === 'user');
+  const sourceMessage = input.sourceMessageId
+    ? userMessages.find(message => message.id === input.sourceMessageId)
+    : userMessages[userMessages.length - 1];
+  if (!sourceMessage) return;
+  if (userMessages[userMessages.length - 1]?.id !== sourceMessage.id) return;
+
+  let job: PendingReplyJob;
+  let replyDelayMs: number;
+  if (input.resumeJob) {
+    job = input.resumeJob;
+    if (!tryResumeChatJob(input.roomId, job.jobId)) return;
+    replyDelayMs = Math.max(0, job.scheduledAt - job.sourceMessageCreatedAt);
+  } else {
+    cancelChatJob(input.roomId);
+    const jobId = beginChatJob(input.roomId);
+    replyDelayMs = characterDelayMs(initialState, initial.character);
+    const timeline = planReplyTimeline(sourceMessage.createdAt, replyDelayMs);
+    job = createPendingReplyJob({
+      jobId,
+      roomId: input.roomId,
+      characterId: input.characterId,
+      sourceMessageId: sourceMessage.id,
+      sourceMessageCreatedAt: sourceMessage.createdAt,
+      latestUserInput: input.latestUserInput,
+      scheduledAt: timeline.plannedReplyAt,
+      stateImportedAt: initialState.__importedAt,
+      creationMode: input.randomMode ? 'random' : 'direct',
+    });
+  }
+  const jobId = job.jobId;
   try {
-    const initial = roomStillValid(input.getState(), input.roomId, input.characterId);
-    if (!initial) return;
-    const replyDelayMs = characterDelayMs(input.getState() || undefined, initial.character);
-    const timeline = planReplyTimeline(input.userMessageCreatedAt, replyDelayMs);
+    if (!input.resumeJob) {
+      await input.commitCurrent(current => storePendingJob(current, job), {
+        save: { reason: 'pending reply scheduled' },
+        flush: true,
+      });
+    }
+    const timeline = planPersistedReplyTimeline(job);
     if (timeline.catchUp) {
       void appendDebugLog(
         'reply.catchup',
@@ -231,9 +288,9 @@ export async function startReplyJob(input: StartReplyJobInput) {
     const readAt = Math.max(timeline.userAt + 200, timeline.deliveryBaseAt - Math.min(2500, Math.max(400, replyDelayMs * 0.08)));
     if (timeline.catchUp) {
       // Skip long typing theatre when this reply is already "late" in story time.
-      await input.commitCurrent(current => markUserMessagesRead(setPending(current, input.roomId, jobId, 'generating'), input.roomId, readAt), { persist: false });
+      await input.commitCurrent(current => markUserMessagesRead(transitionPending(current, input.roomId, jobId, 'generating'), input.roomId, readAt));
     } else {
-      await input.commitCurrent(current => markUserMessagesRead(setPending(current, input.roomId, jobId, 'typing'), input.roomId, readAt), { persist: false });
+      await input.commitCurrent(current => markUserMessagesRead(transitionPending(current, input.roomId, jobId, 'typing'), input.roomId, readAt));
     }
     const promptState = input.getState();
     const promptTarget = roomStillValid(promptState, input.roomId, input.characterId);
@@ -241,7 +298,10 @@ export async function startReplyJob(input: StartReplyJobInput) {
     const promptMessages = buildChatPrompt(promptState, promptTarget.character, promptTarget.room, input.latestUserInput, { mode: 'reply', replyDelaySeconds: replyDelayMs / 1000, latestUserImageData: input.latestUserImageData });
 
     if (!tryLockGeneratingRoom(input.roomId, jobId)) return;
-    await input.commitCurrent(current => setPending(current, input.roomId, jobId, 'generating'), { persist: false });
+    await input.commitCurrent(current => transitionPending(current, input.roomId, jobId, 'generating'), {
+      save: { reason: 'pending reply generating' },
+      flush: true,
+    });
     let { reply, keyIndex } = await runQueuedReplyLlm(input.roomId, jobId, () => callLLM(promptState, promptMessages));
     if (!isCurrentChatJob(input.roomId, jobId)) return;
     const nowContext = chatNowContext(promptState, promptTarget.character);
@@ -331,6 +391,7 @@ export async function startReplyJob(input: StartReplyJobInput) {
       if (shouldAppendBubble) {
         const message: SNSGodMessage = {
           id: makeId('msg'),
+          replyJobId: jobId,
           role: 'character',
           characterId: latestForBubble.character.id,
           content: phone.textContent || '',
@@ -379,7 +440,7 @@ export async function startReplyJob(input: StartReplyJobInput) {
           current,
           input.roomId,
           input.characterId,
-          phone.card as SNSGodMessage,
+          { ...(phone.card as SNSGodMessage), replyJobId: jobId },
         ));
         deliveredCount += 1;
       }
@@ -388,6 +449,7 @@ export async function startReplyJob(input: StartReplyJobInput) {
     if (deliveredCount === 0 && isCurrentChatJob(input.roomId, jobId)) {
       await input.commitCurrent(current => appendPrivateMessageIfValid(current, input.roomId, input.characterId, {
         id: makeId('msg'),
+        replyJobId: jobId,
         role: 'character',
         characterId: promptTarget.character.id,
         content: '응, 방금 말 계속 생각하고 있었어.',
@@ -402,6 +464,11 @@ export async function startReplyJob(input: StartReplyJobInput) {
         }
       }));
     }
+
+    await input.commitCurrent(current => transitionPending(current, input.roomId, jobId, 'delivered'), {
+      save: { reason: 'pending reply delivered' },
+      flush: true,
+    });
 
     if (!isCurrentChatJob(input.roomId, jobId)) return;
     if (reply.newMemory?.trim()) {
@@ -481,17 +548,39 @@ export async function startReplyJob(input: StartReplyJobInput) {
     }
   } catch (error) {
     if (isCurrentChatJob(input.roomId, jobId)) {
-      await input.commitCurrent(current => markUserMessagesRead(appendPrivateMessageIfValid(current, input.roomId, input.characterId, {
-        id: makeId('msg'),
-        role: 'system',
-        content: `답장 생성 실패: ${error instanceof Error ? error.message : String(error)}`,
-        createdAt: Date.now(),
-        failed: true
-      }), input.roomId));
+      try {
+        await input.commitCurrent(current => markUserMessagesRead(appendPrivateMessageIfValid(current, input.roomId, input.characterId, {
+          id: makeId('msg'),
+          replyJobId: jobId,
+          role: 'system',
+          content: `답장 생성 실패: ${error instanceof Error ? error.message : String(error)}`,
+          createdAt: Date.now(),
+          failed: true
+        }), input.roomId));
+        await input.commitCurrent(current => transitionPending(
+          current,
+          input.roomId,
+          jobId,
+          'failed',
+          error instanceof Error ? error.message : String(error),
+        ), { save: { reason: 'pending reply failed' }, flush: true });
+      } catch (recordError) {
+        await appendDebugLog('reply.persist', `failed to record reply error room=${input.roomId}: ${recordError instanceof Error ? recordError.message : String(recordError)}`, 'error');
+      }
     }
   } finally {
     endChatJob(input.roomId, jobId);
-    await input.commitCurrent(current => clearPending(current, input.roomId, jobId), { persist: false });
+    try {
+      await input.commitCurrent(current => transitionPending(
+        current,
+        input.roomId,
+        jobId,
+        'cancelled',
+        'runtime-ended-before-terminal-state',
+      ));
+    } catch (recordError) {
+      await appendDebugLog('reply.persist', `failed to record reply cancellation room=${input.roomId}: ${recordError instanceof Error ? recordError.message : String(recordError)}`, 'error');
+    }
   }
 }
 

@@ -21,6 +21,18 @@ type DeletionCriteria = {
   cancelledJobRoomIds?: ReadonlySet<string>;
 };
 
+function cancelPendingReplyForDeletion(state: SNSGodState, roomId: string, reason: string): SNSGodState {
+  const job = state.pendingReplies?.[roomId];
+  if (!job || job.phase === 'delivered' || job.phase === 'failed' || job.phase === 'cancelled') return state;
+  return {
+    ...state,
+    pendingReplies: {
+      ...(state.pendingReplies || {}),
+      [roomId]: { ...job, phase: 'cancelled', updatedAt: Date.now(), failureReason: reason },
+    },
+  };
+}
+
 function deleteRecordKeys<Value>(
   source: Readonly<Record<string, Value>> | undefined,
   keys: ReadonlySet<string>,
@@ -290,11 +302,7 @@ export function deleteCharacterCascade(
   return { state: next, removedRoomIds, cancelledJobRoomIds };
 }
 
-function latestUserMessageId(messages: readonly SNSGodMessage[]): string | undefined {
-  return [...messages].reverse().find(message => message.role === 'user')?.id;
-}
-
-/** Deletes one message and cancels work only when it owned the latest pending reply. */
+/** Deletes one message and cancels work only when it is the persisted reply source. */
 export function deleteMessageCascade(
   state: SNSGodState,
   roomId: string,
@@ -304,16 +312,15 @@ export function deleteMessageCascade(
   const target = roomMessages.find(message => message.id === messageId);
   if (!target) return { state, removedRoomIds: [], cancelledJobRoomIds: [] };
   const cancelPendingReply = target.role === 'user'
-    && latestUserMessageId(roomMessages) === target.id
-    && Boolean(state.pendingReplies?.[roomId]);
+    && state.pendingReplies?.[roomId]?.sourceMessageId === target.id;
   const meetingId = typeof target.meetingEventId === 'string' ? target.meetingEventId : undefined;
   const meetingEventSessions = meetingId ? (state.meetingEventSessions || []).filter(session => (
     session.id !== meetingId || session.status === 'active' || session.status === 'ended'
   )) : state.meetingEventSessions;
   const retainedMeetingIds = new Set((meetingEventSessions || []).map(session => session.id));
-  const pendingReplies = cancelPendingReply
-    ? deleteRecordKeys(state.pendingReplies, new Set([roomId]))
-    : state.pendingReplies;
+  const pendingState = cancelPendingReply
+    ? cancelPendingReplyForDeletion(state, roomId, 'source-message-deleted')
+    : state;
   return {
     state: {
       ...state,
@@ -321,7 +328,7 @@ export function deleteMessageCascade(
         ...state.messages,
         [roomId]: roomMessages.filter(message => message.id !== messageId),
       },
-      pendingReplies,
+      pendingReplies: pendingState.pendingReplies,
       meetingEventSessions,
       activeMeetingEventId: state.activeMeetingEventId
         && retainedMeetingIds.has(state.activeMeetingEventId)

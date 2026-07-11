@@ -7,6 +7,7 @@ import { deleteRoomCascade } from '../logic/deletionCascadePolicy';
 import { findCharacter, findRoom, updateRoom } from '../logic/stateHelpers';
 import { normalizeRoomPromptForSave, summarizePrivateRoomWithLlm } from '../logic/roomConversationSummary';
 import { applyPrivateRoomLlmSummary, replaceAutoSummaryBlock } from '../logic/memoryBridge';
+import { cancelPendingReplyJob } from '../logic/pendingReplyJobs';
 
 export function RoomSettingsScreen({ state, roomId, onBack, onChange, onCommitCurrent }: {
   state: SNSGodState;
@@ -43,9 +44,8 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange, onCommitCu
     };
     let next = updateRoom(state, roomId, roomPatch);
     if (roomPatch.disabled) {
-      const pendingReplies = { ...(next.pendingReplies || {}) };
-      delete pendingReplies[roomId];
-      next = { ...next, pendingReplies };
+      cancelChatJob(roomId);
+      next = cancelPendingReplyJob(next, roomId, 'room-disabled');
     }
     await onChange(next);
     onBack();
@@ -95,6 +95,7 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange, onCommitCu
         text: '청소',
         style: 'destructive',
         onPress: async () => {
+          cancelChatJob(roomId);
           await onChange(cleanRoomConversation(state, roomId));
           setStatus('방 대화내역을 비웠습니다.');
         }
@@ -193,13 +194,11 @@ function cleanRoomConversation(state: SNSGodState, roomId: string): SNSGodState 
   const messages = { ...state.messages, [roomId]: [] };
   const unreadCounts = { ...state.unreadCounts };
   delete unreadCounts[roomId];
-  const pendingReplies = { ...(state.pendingReplies || {}) };
-  delete pendingReplies[roomId];
+  const cancelled = cancelPendingReplyJob(state, roomId, 'room-cleaned');
   return {
-    ...state,
+    ...cancelled,
     messages,
     unreadCounts,
-    pendingReplies,
     notifications: (state.notifications || []).filter(item => item.roomId !== roomId && item.target?.roomId !== roomId)
   };
 }

@@ -34,6 +34,14 @@ export function beginChatJob(roomId: string): string {
   return jobId;
 }
 
+/** Claims a persisted job without replacing another live runtime job. */
+export function tryResumeChatJob(roomId: string, jobId: string): boolean {
+  if (activeJobs.has(roomId) || generatingRooms.has(roomId)) return false;
+  activeJobs.set(roomId, jobId);
+  armJobTimeout(roomId, jobId);
+  return true;
+}
+
 export function isCurrentChatJob(roomId: string, jobId: string): boolean {
   return activeJobs.get(roomId) === jobId;
 }

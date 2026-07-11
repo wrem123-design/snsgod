@@ -16,6 +16,7 @@ import { characterReferenceImageForPrompt } from '../logic/imageReference';
 import { clearComposerInput, createComposerSendGuard, isComposerSendEnter } from '../logic/chatComposerKeys';
 import { reverseMessagesForInvertedList, useStickToBottomList } from '../logic/useStickToBottomList';
 import { MessageActionAnchor, MessageActionMenu } from '../components/MessageActionMenu';
+import { cancelPendingReplyJob } from '../logic/pendingReplyJobs';
 
 const TermuxBridge = NativeModules.TermuxBridge as undefined | {
   copyText: (text: string) => Promise<string>;
@@ -46,7 +47,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
   onOpenMeeting?: (sessionId: string) => void;
   onMaybeStartMeeting?: (roomId: string, latestUserInput: string) => Promise<boolean>;
   onRequestMeetingPrompt?: (roomId: string) => Promise<boolean>;
-  onRequestReply: (roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean; userMessageCreatedAt?: number; latestUserImageData?: string }) => void;
+  onRequestReply: (roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean; sourceMessageId?: string; userMessageCreatedAt?: number; latestUserImageData?: string }) => void;
 }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -144,15 +145,16 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
     clearComposerInput(inputRef, textRef, setText);
     setSending(true);
     pinToBottom();
+    cancelChatJob(room.id);
     const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content, createdAt: Date.now() };
     await commitCurrent(current => {
-      const next = appendMessage(current, room.id, userMessage);
+      const next = appendMessage(cancelPendingReplyJob(current, room.id, 'newer-user-message'), room.id, userMessage);
       return { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
     });
     setSending(false);
     if (room.disabled === true) return;
     if (!isRandomRoom && onMaybeStartMeeting && await onMaybeStartMeeting(room.id, content)) return;
-    onRequestReply(room.id, character.id, content, { randomMode: isRandomRoom, userMessageCreatedAt: userMessage.createdAt });
+    onRequestReply(room.id, character.id, content, { randomMode: isRandomRoom, sourceMessageId: userMessage.id, userMessageCreatedAt: userMessage.createdAt });
   }
 
   async function attachImage() {
@@ -162,15 +164,16 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
       if (!image) return;
       const content = text.trim() || '사진을 보냈습니다.';
       setText('');
+      cancelChatJob(room.id);
       const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content, createdAt: Date.now(), mediaData: image };
       await commitCurrent(current => {
-        const next = appendMessage(current, room.id, userMessage);
+        const next = appendMessage(cancelPendingReplyJob(current, room.id, 'newer-user-message'), room.id, userMessage);
         return { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
       });
       const promptText = `${content}\n[사용자가 사진을 보냈습니다.]`;
       if (room.disabled === true) return;
       if (!isRandomRoom && onMaybeStartMeeting && await onMaybeStartMeeting(room.id, promptText)) return;
-      onRequestReply(room.id, character.id, promptText, { randomMode: isRandomRoom, userMessageCreatedAt: userMessage.createdAt, latestUserImageData: image });
+      onRequestReply(room.id, character.id, promptText, { randomMode: isRandomRoom, sourceMessageId: userMessage.id, userMessageCreatedAt: userMessage.createdAt, latestUserImageData: image });
     } catch (error) {
       Alert.alert('사진 첨부 실패', error instanceof Error ? error.message : String(error));
     } finally {
@@ -182,15 +185,16 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
     if (!room || !character || sending) return;
     setShowStickers(false);
     setSending(true);
+    cancelChatJob(room.id);
     const userMessage: SNSGodMessage = { id: makeId('msg'), role: 'user', content: '', createdAt: Date.now(), sticker: sticker.id };
     await commitCurrent(current => {
-      const next = appendMessage(current, room.id, userMessage);
+      const next = appendMessage(cancelPendingReplyJob(current, room.id, 'newer-user-message'), room.id, userMessage);
       return { ...next, unreadCounts: { ...next.unreadCounts, [room.id]: 0 } };
     });
     setSending(false);
     if (room.disabled === true) return;
     if (!isRandomRoom && onMaybeStartMeeting && await onMaybeStartMeeting(room.id, `[스티커: ${sticker.name || sticker.id}]`)) return;
-    onRequestReply(room.id, character.id, `[스티커: ${sticker.name || sticker.id}]`, { randomMode: isRandomRoom, userMessageCreatedAt: userMessage.createdAt });
+    onRequestReply(room.id, character.id, `[스티커: ${sticker.name || sticker.id}]`, { randomMode: isRandomRoom, sourceMessageId: userMessage.id, userMessageCreatedAt: userMessage.createdAt });
   }
 
   async function requestMeetingPrompt() {
@@ -262,6 +266,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
     ].filter(Boolean).join('\n');
     onRequestReply(room.id, character.id, promptText, {
       randomMode: isRandomRoom,
+      sourceMessageId: previousUserMessage.id,
       userMessageCreatedAt: previousUserMessage.createdAt,
       latestUserImageData: typeof previousUserMessage.mediaData === 'string' ? previousUserMessage.mediaData : undefined
     });

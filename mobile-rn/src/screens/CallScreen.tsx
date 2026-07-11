@@ -7,10 +7,12 @@ import { appendMessage, findCharacter, findRoom, roomMessages } from '../logic/s
 import { makeId } from '../logic/ids';
 import { formatPhoneDuration, phoneSummaryFromLines } from '../logic/phone';
 import { isRenderableMediaUri } from '../logic/media';
-import { SNSGodState } from '../types';
+import { SNSGodMessage, SNSGodState } from '../types';
 import { canonicalPersonaBlocks } from '../logic/canonicalPersona';
 import { compilePromptBlocks, PromptBlock } from '../logic/promptCompiler';
 import { privateMemoryPromptBlock } from '../logic/memoryBridge';
+import { cancelChatJob } from '../logic/chatJobs';
+import { cancelPendingReplyJob } from '../logic/pendingReplyJobs';
 
 type CallLine = { id: string; speaker: 'user' | 'character' | 'system'; text: string; createdAt: number };
 type CallPhase = 'dialing' | 'ringing' | 'connected' | 'character_typing' | 'awaiting_next' | 'awaiting_choice' | 'awaiting_text' | 'user_sending' | 'listening' | 'ending' | 'ended';
@@ -99,7 +101,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
   sourceMessageId?: string;
   onBack: () => void;
   onChange?: (next: SNSGodState) => Promise<void> | void;
-  onRequestReply?: (roomId: string, characterId: string, latestUserInput: string) => void;
+  onRequestReply?: (roomId: string, characterId: string, latestUserInput: string, options?: { sourceMessageId?: string; userMessageCreatedAt?: number }) => void;
 }) {
   const character = findCharacter(state, characterId);
   const room = findRoom(state, roomId);
@@ -512,8 +514,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
     let conversationLines = finalLines.filter(item => item.speaker !== 'system');
     if (!conversationLines.length && onChange && roomId && !sourceMessageId) {
       const missedContent = `${character.name}에게 부재중 전화를 남겼습니다.`;
-      await showSystemCard('통화 종료 중...', 'ending');
-      await onChange(appendMessage(state, roomId, {
+      const missedMessage: SNSGodMessage = {
         id: makeId('msg'),
         role: 'user',
         characterId: character.id,
@@ -522,8 +523,14 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
         phoneLog: 'missed',
         callDirection: 'outgoing',
         sourceMode: 'phone'
-      }));
-      onRequestReply?.(roomId, character.id, missedContent);
+      };
+      await showSystemCard('통화 종료 중...', 'ending');
+      cancelChatJob(roomId);
+      await onChange(appendMessage(cancelPendingReplyJob(state, roomId, 'newer-user-message'), roomId, missedMessage));
+      onRequestReply?.(roomId, character.id, missedContent, {
+        sourceMessageId: missedMessage.id,
+        userMessageCreatedAt: missedMessage.createdAt,
+      });
       setPhase('ended');
       onBack();
       return;

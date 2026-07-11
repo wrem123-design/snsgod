@@ -1418,7 +1418,7 @@ test('full backup restore reloads imported state without flushing stale runtime 
   assert.match(restoreSource, /await flushSaveState\(undefined, \{ reason: 'before full backup import' \}\)/);
   assert.match(restoreSource, /await importState\(candidate, JSON\.stringify\(candidate\)\)/);
   assert.match(restoreSource, /await importState\(currentBeforeRestore, JSON\.stringify\(currentBeforeRestore\)\)/);
-  assert.match(restoreSource, /clearRuntimeOnlyState\(await loadState\(\)\)/);
+  assert.match(restoreSource, /reconcileLoadedState\(await loadState\(\)\)\.state/);
   assert.match(restoreSource, /setRuntimeReloadNonce\(value => value \+ 1\)/);
   assert.match(restoreSource, /catch \(error\)[\s\S]*?setState\(recovered\)[\s\S]*?setRuntimeReloadNonce/);
   assert.ok(restoreSource.indexOf('runtimeEpochRef.current += 1') < restoreSource.indexOf('await flushSaveState'));

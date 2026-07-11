@@ -167,13 +167,14 @@ test('character deletion removes owned rooms and collapses undersized groups whi
 test('deleting the latest user message cancels its pending reply and pending meeting shell', () => {
   const state = baseState({
     messages: { room: [message('old-user', undefined, 'user'), { ...message('latest-user', undefined, 'user', 'file:///media/message.jpg'), meetingEventId: 'meeting-pending' }] },
-    pendingReplies: { room: { jobId: 'job', startedAt: 1 } },
+    pendingReplies: { room: { jobId: 'job', sourceMessageId: 'latest-user', startedAt: 1, updatedAt: 1, phase: 'delay' } },
     meetingEventSessions: [{ id: 'meeting-pending', roomId: 'room', status: 'pending' }, { id: 'meeting-ended', roomId: 'room', status: 'ended' }],
     activeMeetingEventId: 'meeting-pending',
   });
   const result = deleteMessageCascade(state, 'room', 'latest-user');
   assert.deepEqual(result.state.messages.room.map(item => item.id), ['old-user']);
-  assert.equal(result.state.pendingReplies.room, undefined);
+  assert.equal(result.state.pendingReplies.room.phase, 'cancelled');
+  assert.equal(result.state.pendingReplies.room.failureReason, 'source-message-deleted');
   assert.deepEqual(result.cancelledJobRoomIds, ['room']);
   assert.deepEqual(result.state.meetingEventSessions.map(item => item.id), ['meeting-ended']);
   assert.equal(result.state.activeMeetingEventId, undefined);
@@ -182,7 +183,7 @@ test('deleting the latest user message cancels its pending reply and pending mee
 test('deleting an older message preserves the current pending reply job', () => {
   const state = baseState({
     messages: { room: [message('old-user', undefined, 'user'), message('latest-user', undefined, 'user')] },
-    pendingReplies: { room: { jobId: 'job', startedAt: 1 } },
+    pendingReplies: { room: { jobId: 'job', sourceMessageId: 'latest-user', startedAt: 1, updatedAt: 1, phase: 'delay' } },
   });
   const result = deleteMessageCascade(state, 'room', 'old-user');
   assert.equal(result.state.pendingReplies.room.jobId, 'job');

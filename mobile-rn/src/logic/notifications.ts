@@ -81,6 +81,7 @@ export function notifyRoomMessage(state: SNSGodState, input: {
   visibleRoomId?: string;
 }): SNSGodState {
   if (input.visibleRoomId === input.roomId) return markRoomRead(state, input.roomId);
+  const app = input.app === 'randomchat' ? 'randomchat' : 'messenger';
   const next = {
     ...state,
     unreadCounts: {
@@ -89,13 +90,13 @@ export function notifyRoomMessage(state: SNSGodState, input: {
     }
   };
   return pushNotification(next, {
-    type: input.app === 'randomchat' ? 'randomchat' : 'chat',
+    type: app === 'randomchat' ? 'randomchat' : 'chat',
     title: input.title,
     body: input.body,
-    app: input.app || 'messenger',
+    app,
     roomId: input.roomId,
     characterId: input.characterId,
-    target: { app: input.app || 'messenger', roomId: input.roomId, characterId: input.characterId },
+    target: { app, roomId: input.roomId, characterId: input.characterId },
     collapseKey: `room:${input.roomId}`
   });
 }

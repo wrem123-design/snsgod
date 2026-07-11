@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -87,8 +88,7 @@ class AutomationKeepAliveService : Service() {
   }
 
   private fun buildNotification(): Notification {
-    val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-      ?: Intent(this, MainActivity::class.java)
+    val launchIntent = Intent(Intent.ACTION_VIEW, Uri.parse("snsgod://notifications"), this, MainActivity::class.java)
     launchIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
     val contentIntent = PendingIntent.getActivity(
       this,

@@ -902,6 +902,27 @@ export type GroupRoom = {
   disabledAt?: number;
 };
 
+type NotificationTargetFields = {
+  roomId?: string;
+  characterId?: string;
+  postId?: string;
+  threadId?: string;
+  entryId?: string;
+  sessionId?: string;
+  sourceMessageId?: string;
+};
+
+export type NotificationTarget = NotificationTargetFields & (
+  | { app: 'messenger' | 'randomchat'; roomId: string }
+  | { app: 'social'; postId: string }
+  | { app: 'snsdm'; threadId: string }
+  | { app: 'sumgod' }
+  | { app: 'call'; characterId: string }
+  | { app: 'meeting'; sessionId: string }
+  | { app: 'system' }
+  | { app?: undefined }
+);
+
 export type NotificationItem = {
   id: string;
   type: 'chat' | 'sns' | 'system' | 'randomchat' | 'sumgod' | 'snsdm';
@@ -910,7 +931,7 @@ export type NotificationItem = {
   roomId?: string;
   characterId?: string;
   app?: 'messenger' | 'randomchat' | 'social' | 'snsdm' | 'sumgod' | 'system';
-  target?: { app?: string; roomId?: string; characterId?: string; postId?: string; threadId?: string };
+  target?: NotificationTarget;
   collapseKey?: string;
   count?: number;
   createdAt: number;

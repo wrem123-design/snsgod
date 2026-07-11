@@ -8,11 +8,11 @@ function timeText(value: number) {
   return `${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
-export function NotificationsScreen({ state, onChange, onBack, onOpenRoom }: {
+export function NotificationsScreen({ state, onChange, onBack, onOpenNotification }: {
   state: SNSGodState;
   onChange: (next: SNSGodState) => void;
   onBack: () => void;
-  onOpenRoom: (roomId: string) => void;
+  onOpenNotification: (item: NotificationItem) => void;
 }) {
   const notifications = [...(state.notifications || [])].sort((a, b) => b.createdAt - a.createdAt).slice(0, 10);
 
@@ -26,9 +26,7 @@ export function NotificationsScreen({ state, onChange, onBack, onOpenRoom }: {
   }
 
   function openItem(item: NotificationItem) {
-    const nextNotifications = (state.notifications || []).map(source => source.id === item.id ? { ...source, read: true } : source);
-    onChange({ ...state, notifications: nextNotifications });
-    if (item.roomId) onOpenRoom(item.roomId);
+    onOpenNotification(item);
   }
 
   return (

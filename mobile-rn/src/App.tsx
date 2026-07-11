@@ -48,6 +48,7 @@ import { createGroupMeetingEventSession, createManualGroupMeetingEventPrompt, cr
 import { forceUpdateRoomMemory } from './logic/memoryBridge';
 import { maybeCreateBackgroundAutoSNSPost } from './logic/sns';
 import { bootstrapServer, enqueueServerMessage, flushServerOutbox, isServerMessagingEnabled, registerServerDevice, syncServerMessages, withServerError } from './logic/serverMessaging';
+import { initializePushNotifications, PushNotificationRegistration, refreshPushNotificationRegistration } from './logic/pushNotifications';
 import {
   applyStateMediaUriReplacements,
   collectStateMediaReferences,
@@ -70,6 +71,7 @@ import { rootForRouteName, routeForRoot, shouldShowBottomNavigation } from './lo
 import { isRemoteServicesEnabled } from './logic/remoteServicePolicy';
 import { carryStateSecrets } from './storage/secureSecrets';
 
+const ORACLE_SYNC_INTERVAL_MS = 60 * 1000;
 const MEDIA_REPLACEMENT_CACHE_TTL_MS = 30_000;
 const MEDIA_REPLACEMENT_CACHE_SWEEP_MS = 5_000;
 const MEDIA_REPLACEMENT_CACHE_MAX_ENTRIES = 12;
@@ -82,6 +84,10 @@ function roomNotificationEventId(roomId: string, messageId: string): string {
 
 function snsDmNotificationEventId(threadId: string, messageId: string): string {
   return `snsdm:${threadId}:${messageId}`;
+}
+
+function shouldBootstrapOracleSync(reason: string, registeredNow: boolean): boolean {
+  return registeredNow || reason === 'startup' || reason === 'automation-settings-changed' || reason === 'push-token-changed';
 }
 
 type Route =
@@ -243,6 +249,29 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const current = stateRef.current;
+    if (!hydrated || !current || !isRemoteServicesEnabled(current) || !isServerMessagingEnabled(current)) return;
+    let active = true;
+    let removeTokenListener: () => void = () => undefined;
+    void initializePushNotifications(pushToken => {
+      if (active) void updateServerPushToken(pushToken);
+    }, true).then(push => {
+      if (!active) {
+        push.removeTokenListener();
+        return;
+      }
+      removeTokenListener = push.removeTokenListener;
+      void updateServerPushRegistration(push);
+    }).catch(error => {
+      void appendDebugLog('push', `FCM initialization failed: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+    });
+    return () => {
+      active = false;
+      removeTokenListener();
+    };
+  }, [hydrated, state?.config.dataBoundaryMode, state?.config.serverMessaging?.enabled]);
+
+  useEffect(() => {
     stateRef.current = state;
   }, [state]);
 
@@ -352,6 +381,11 @@ export default function App() {
             setState(snapshot);
             saveStateDebounced(snapshot, { important: true, reason: 'app foreground interaction resume' });
           }
+          if (isRemoteServicesEnabled(current) && isServerMessagingEnabled(current)) {
+            void refreshPushNotificationRegistration(false)
+              .then(registration => updateServerPushRegistration(registration))
+              .catch(error => appendDebugLog('push', `FCM refresh failed: ${error instanceof Error ? error.message : String(error)}`, 'warn'));
+          }
         }
         // Server mode receives messages that were generated while the app was closed.
         if (stateRef.current && isServerMessagingEnabled(stateRef.current)) {
@@ -375,9 +409,13 @@ export default function App() {
           onMediaExternalized: applyPersistedMediaUris,
         });
         // Keep process priority high so setInterval/reply delays continue after Home.
-        if (current.config.autoEnabled !== false && !isServerMessagingEnabled(current)) {
+        if (current.config.autoEnabled !== false) {
           void setAutomationKeepAliveRunning(true, { force: true });
-          void runAutomationTickOnce('app-background');
+          if (isServerMessagingEnabled(current)) {
+            void syncOracleMessages('app-background');
+          } else {
+            void runAutomationTickOnce('app-background');
+          }
         }
       }
     });
@@ -446,7 +484,7 @@ export default function App() {
 
   useEffect(() => {
     if (!hydrated) return;
-    const autoOn = Boolean(state && state.config.autoEnabled !== false && !isServerMessagingEnabled(state));
+    const autoOn = Boolean(state && state.config.autoEnabled !== false);
     // Defer native service start slightly so first paint/JS boot is stable.
     const timer = setTimeout(() => {
       void setAutomationKeepAliveRunning(autoOn);
@@ -455,7 +493,18 @@ export default function App() {
       clearTimeout(timer);
       void setAutomationKeepAliveRunning(false);
     };
-  }, [hydrated, state?.config.autoEnabled]);
+  }, [hydrated, state?.config.autoEnabled, state?.config.serverMessaging?.enabled]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const timer = setInterval(() => {
+      const current = stateRef.current;
+      if (current && isServerMessagingEnabled(current)) {
+        void syncOracleMessages('server-interval');
+      }
+    }, ORACLE_SYNC_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [hydrated]);
 
   useEffect(() => {
     if (!hydrated || (state && isServerMessagingEnabled(state))) return;
@@ -820,18 +869,29 @@ export default function App() {
       return;
     }
     oracleSyncInFlightRef.current = true;
+    console.info('[SNSGod Oracle] sync started reason=' + reason);
     try {
       let next = current;
+      let registeredNow = false;
       if (!next.config.serverMessaging?.deviceToken) {
-        if (!String(next.config.serverMessaging?.pairingSecret || '').trim()) return;
+        if (!String(next.config.serverMessaging?.pairingSecret || '').trim()) {
+          throw new Error('Oracle 서버 연결 정보가 없습니다. 설정에서 연결 키를 입력해 다시 연결하세요.');
+        }
         next = await registerServerDevice(next);
         if (!isRuntimeEpochCurrent(operationEpoch) || !stateRef.current || !isRemoteServicesEnabled(stateRef.current)) return;
+        registeredNow = true;
       }
-      next = (next.config.serverMessaging?.outbox || []).length ? await flushServerOutbox(next) : await bootstrapServer(next);
+      if ((next.config.serverMessaging?.outbox || []).length) {
+        next = await flushServerOutbox(next);
+      }
+      if (shouldBootstrapOracleSync(reason, registeredNow)) {
+        next = await bootstrapServer(next);
+      }
       next = await syncServerMessages(next);
       if (!isRuntimeEpochCurrent(operationEpoch) || !stateRef.current || !isRemoteServicesEnabled(stateRef.current)) return;
       const latest = stateRef.current || current;
       await commit(latest === current ? next : mergeServerSyncResult(latest, current, next));
+      if (reason === 'push-token-changed') console.info('[SNSGod push] server registration completed');
       void appendDebugLog('server.sync', 'sync completed reason=' + reason);
     } catch (error) {
       if (!isRuntimeEpochCurrent(operationEpoch)) return;
@@ -842,7 +902,9 @@ export default function App() {
       }
       const failed = withServerError(latest, error);
       await commit(failed);
-      void appendDebugLog('server.sync', reason + ': ' + String(error instanceof Error ? error.message : error), 'warn');
+      const message = String(error instanceof Error ? error.message : error);
+      console.warn('[SNSGod Oracle] sync failed reason=' + reason + ' error=' + message);
+      void appendDebugLog('server.sync', reason + ': ' + message, 'warn');
     } finally {
       oracleSyncInFlightRef.current = false;
       const pendingRequest = oracleSyncPendingReasonRef.current;
@@ -851,6 +913,54 @@ export default function App() {
         setTimeout(() => void syncOracleMessages(pendingRequest.reason), 0);
       }
     }
+  }
+
+  function withPushRegistration(current: SNSGodState, registration: PushNotificationRegistration): SNSGodState {
+    const existing = current.config.serverMessaging || {};
+    return {
+      ...current,
+      config: {
+        ...current.config,
+        serverMessaging: {
+          ...existing,
+          pushToken: registration.pushToken || existing.pushToken,
+          pushPermissionGranted: registration.permissionGranted,
+          pushRegistrationError: registration.registrationError
+        }
+      }
+    };
+  }
+
+  async function updateServerPushRegistration(registration: PushNotificationRegistration) {
+    const operationEpoch = runtimeEpochRef.current;
+    const current = stateRef.current;
+    if (!isRuntimeEpochCurrent(operationEpoch) || !current) return;
+    const previous = current.config.serverMessaging || {};
+    const nextToken = registration.pushToken || previous.pushToken;
+    if (
+      previous.pushToken === nextToken
+      && previous.pushPermissionGranted === registration.permissionGranted
+      && String(previous.pushRegistrationError || '') === registration.registrationError
+    ) return;
+    const next = withPushRegistration(current, registration);
+    await commit(next, { save: { important: true, reason: 'FCM registration changed' } });
+    if (!isRuntimeEpochCurrent(operationEpoch)) return;
+    if (nextToken && stateRef.current && isServerMessagingEnabled(stateRef.current)) {
+      console.info('[SNSGod push] server registration requested');
+      void syncOracleMessages('push-token-changed');
+    }
+  }
+
+  async function updateServerPushToken(pushToken: string) {
+    const current = stateRef.current;
+    if (!current || current.config.serverMessaging?.pushToken === pushToken) return;
+    console.info('[SNSGod push] native registration changed');
+    await updateServerPushRegistration({
+      pushToken,
+      permissionGranted: current.config.serverMessaging?.pushPermissionGranted === true,
+      canAskAgain: true,
+      registrationError: ''
+    });
   }
 
   async function requestServerReply(roomId: string) {

@@ -157,6 +157,15 @@ test('encrypted API credentials can sync over the existing HTTP proxy route', ()
     app.service.bootstrap({ textGenerationEnvelope: encryptedProfileEnvelope(profile, publicKey) }, headers);
     assert.equal(app.service.health().textGeneration.provider, 'custom');
     assert.equal(app.service.health().textGeneration.model, 'model-x');
+    app.service.bootstrap({
+      textGenerationEnvelope: encryptedProfileEnvelope({
+        provider: 'custom',
+        apiEndpoint: 'https://example.com/v1/chat/completions',
+        apiModel: 'model-x'
+      }, publicKey)
+    }, headers);
+    const savedProfile = JSON.parse(app.db.prepare("SELECT payload FROM runtime_settings WHERE key = 'text_generation'").get().payload);
+    assert.equal(savedProfile.apiKey, 'secret-x');
   } finally {
     app.close();
   }

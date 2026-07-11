@@ -96,7 +96,9 @@ test('settings explains the local network boundary and disables server actions',
   assert.match(settingsSource, /disabled=\{saving \|\| !remoteServicesEnabled\}/);
 });
 
-test('the local build has no implicit FCM initialization surface', () => {
-  assert.doesNotMatch(packageSource, /expo-notifications|firebase|react-native-firebase/i);
-  assert.doesNotMatch(appConfigSource, /googleServicesFile|google-services/i);
+test('local-only mode keeps the optional FCM runtime behind the remote-service gate', () => {
+  assert.match(packageSource, /expo-notifications/);
+  assert.match(appSource, /!isRemoteServicesEnabled\(current\) \|\| !isServerMessagingEnabled\(current\)/);
+  assert.match(appSource, /initializePushNotifications/);
+  assert.doesNotMatch(appConfigSource, /googleServicesFile/);
 });

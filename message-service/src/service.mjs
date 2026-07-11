@@ -550,9 +550,15 @@ export function createMessageService({ db, config, now = () => Date.now(), rando
     const encryptedProfile = body.textGenerationEnvelope === undefined
       ? undefined
       : decryptTextGenerationEnvelope(body.textGenerationEnvelope, config.profilePrivateKeyPath);
+    const incomingProfile = encryptedProfile !== undefined ? encryptedProfile : body.textGeneration;
+    const currentProfile = activeTextGeneration();
+    const profileFallback = incomingProfile
+      && String(incomingProfile.provider || '').toLowerCase() === String(currentProfile.provider || '').toLowerCase()
+      ? currentProfile
+      : {};
     const textGeneration = encryptedProfile !== undefined
-      ? normalizeTextGeneration(encryptedProfile)
-      : body.textGeneration === undefined ? undefined : normalizeTextGeneration(body.textGeneration);
+      ? normalizeTextGeneration(encryptedProfile, profileFallback)
+      : body.textGeneration === undefined ? undefined : normalizeTextGeneration(body.textGeneration, profileFallback);
     assert(characters.length <= 200 && rooms.length <= 500 && messages.length <= MAX_SYNC_MESSAGES, 400, 'Bootstrap payload is too large');
     if (!encryptedProfile && textGeneration && textGenerationHasSecret(textGeneration)) {
       const forwardedProto = text(headers['x-forwarded-proto'], 40).toLowerCase();

@@ -2,7 +2,7 @@
   "expo": {
     "name": "SNSGod",
     "slug": "snsgod-mobile-rn",
-    "version": "0.3.2",
+    "version": "0.3.5",
     "orientation": "portrait",
     "scheme": "snsgod",
     "assetBundlePatterns": [
@@ -17,6 +17,12 @@
         "expo-secure-store",
         {
           "configureAndroidBackup": true
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "snsgod_messages"
         }
       ],
       "expo-sharing",

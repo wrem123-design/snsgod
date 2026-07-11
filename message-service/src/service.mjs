@@ -37,6 +37,14 @@ function text(value, max = 4000) {
   return String(value ?? '').trim().slice(0, max);
 }
 
+/** Accepts only finite, non-negative integer synchronization epochs. */
+function normalizeEpoch(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 && numeric <= Number.MAX_SAFE_INTEGER
+    ? Math.trunc(numeric)
+    : 0;
+}
+
 function isLikelySceneMemory(value) {
   const raw = String(value || '').trim();
   if (!raw) return false;
@@ -223,6 +231,7 @@ function normalizeRoom(value) {
     characterId: characterId || undefined,
     participantIds: type === 'direct' ? [characterId] : participantIds,
     enabled: room.enabled !== false && room.disabled !== true,
+    conversationResetAt: normalizeEpoch(room.conversationResetAt),
     automation: {
       ...normalizeAutomation(room.automation),
       relationshipContext: text(room.relationshipContext, 6000),
@@ -616,10 +625,24 @@ export function createMessageService({ db, config, now = () => Date.now(), rando
           .run(character.id, JSON.stringify(character), timestamp);
       }
       for (const room of rooms) {
+        const existingRoom = db.prepare('SELECT automation FROM rooms WHERE id = ?').get(room.id);
+        const previousResetAt = normalizeEpoch(json(existingRoom?.automation).conversationResetAt);
+        const conversationResetAt = Math.max(previousResetAt, room.conversationResetAt);
+        if (conversationResetAt > previousResetAt) {
+          const removedMessageIds = db.prepare('SELECT id FROM messages WHERE room_id = ?').all(room.id).map(row => row.id);
+          db.prepare('DELETE FROM message_jobs WHERE room_id = ?').run(room.id);
+          if (removedMessageIds.length) {
+            const placeholders = removedMessageIds.map(() => '?').join(',');
+            db.prepare(`DELETE FROM push_outbox WHERE message_id IN (${placeholders})`).run(...removedMessageIds);
+            db.prepare(`DELETE FROM sync_events WHERE entity_type = 'message' AND entity_id IN (${placeholders})`).run(...removedMessageIds);
+          }
+          db.prepare('DELETE FROM messages WHERE room_id = ?').run(room.id);
+        }
+        const automation = { ...room.automation, conversationResetAt };
         db.prepare(`INSERT INTO rooms (id, type, name, character_id, enabled, automation, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET type = excluded.type, name = excluded.name, character_id = excluded.character_id,
           enabled = excluded.enabled, automation = excluded.automation, updated_at = excluded.updated_at`)
-          .run(room.id, room.type, room.name, room.characterId || null, room.enabled ? 1 : 0, JSON.stringify(room.automation), timestamp);
+          .run(room.id, room.type, room.name, room.characterId || null, room.enabled ? 1 : 0, JSON.stringify(automation), timestamp);
         db.prepare('DELETE FROM room_participants WHERE room_id = ?').run(room.id);
         for (const characterId of room.participantIds) {
           db.prepare('INSERT INTO room_participants (room_id, character_id, enabled) VALUES (?, ?, 1)').run(room.id, characterId);

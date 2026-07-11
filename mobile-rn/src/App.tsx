@@ -153,6 +153,7 @@ export default function App() {
   const serverPolicyFingerprintRef = useRef('');
   const oracleSyncInFlightRef = useRef(false);
   const oracleSyncPendingReasonRef = useRef<{ reason: string; epoch: number } | null>(null);
+  const serverSnsTickInFlightRef = useRef(false);
   const meetingEventWorkRef = useRef(new Map<string, Promise<boolean>>());
   const pendingNotificationRequestRef = useRef<NotificationRouteRequest | null>(null);
 
@@ -331,7 +332,14 @@ export default function App() {
       proactivePatience: character.proactivePatience,
       notificationImage: character.avatar || character.profileImage || ''
     })),
-    directRooms: Object.values(state.chatRooms || {}).flat().map(room => ({ id: room.id, disabled: room.disabled === true })),
+    directRooms: Object.values(state.chatRooms || {}).flat().map(room => ({
+      id: room.id,
+      disabled: room.disabled === true,
+      relationshipNote: room.relationshipNote || '',
+      roomPrompt: room.roomPrompt || '',
+      userAlias: room.userAlias || '',
+      conversationResetAt: Number(room.conversationResetAt || 0),
+    })),
     groupRooms: (state.groupRooms || []).map(room => ({ id: room.id, disabled: room.disabled === true, participantIds: room.participantIds }))
   }) : '';
 
@@ -898,6 +906,7 @@ export default function App() {
       await commit(latest === current ? next : mergeServerSyncResult(latest, current, next));
       if (reason === 'push-token-changed') console.info('[SNSGod push] server registration completed');
       void appendDebugLog('server.sync', 'sync completed reason=' + reason);
+      void runServerAssistedSnsTick(reason);
     } catch (error) {
       if (!isRuntimeEpochCurrent(operationEpoch)) return;
       const latest = stateRef.current || current;
@@ -917,6 +926,37 @@ export default function App() {
       if (pendingRequest && isRuntimeEpochCurrent(pendingRequest.epoch)) {
         setTimeout(() => void syncOracleMessages(pendingRequest.reason), 0);
       }
+    }
+  }
+
+  /** Uses a successful Oracle synchronization as the remote-mode SNS automation signal. */
+  async function runServerAssistedSnsTick(reason: string): Promise<void> {
+    const operationEpoch = runtimeEpochRef.current;
+    const current = stateRef.current;
+    if (
+      serverSnsTickInFlightRef.current
+      || !isRuntimeEpochCurrent(operationEpoch)
+      || !current
+      || !isServerMessagingEnabled(current)
+      || current.config.snsAutoPostEnabled === false
+    ) return;
+    const profile = current.config.apiProfiles[current.config.apiType] || {};
+    const hasKey = current.config.apiType === 'vertex'
+      ? Boolean(String(profile.serviceAccountJson || '').trim())
+      : current.config.apiType === 'grok' || Boolean(profile.apiKey || profile.apiKeys?.some(Boolean));
+    if (!hasKey) return;
+    serverSnsTickInFlightRef.current = true;
+    try {
+      const next = await maybeCreateBackgroundAutoSNSPost(current);
+      void appendDebugLog('sns.auto', `server-sync tick evaluated reason=${reason} result=${next && next !== current ? 'changed' : 'no-change'}`);
+      if (!next || next === current || !isRuntimeEpochCurrent(operationEpoch)) return;
+      const latest = stateRef.current;
+      await commit(latest && latest !== current ? mergeAutomationResult(latest, current, next) : next);
+      void appendDebugLog('sns.auto', `server-sync tick applied reason=${reason}`);
+    } catch (error) {
+      void appendDebugLog('sns.auto', `server-sync tick failed reason=${reason}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+    } finally {
+      serverSnsTickInFlightRef.current = false;
     }
   }
 

@@ -1,4 +1,5 @@
 import * as FileSystem from 'expo-file-system/legacy';
+import { File as ExpoFile } from 'expo-file-system';
 import { KJUR } from 'jsrsasign';
 
 import { ApiProfile, ImageGenerationConfig, SNSGodCharacter, SNSGodState } from '../types';
@@ -963,7 +964,7 @@ async function fetchImageAsDataUri(url: string): Promise<string> {
   return blobToDataUri(await response.blob());
 }
 
-async function dataUriToCacheFile(dataUri: string, name: string): Promise<{ uri: string; name: string; type: string }> {
+async function dataUriToCacheFile(dataUri: string, name: string): Promise<string> {
   const rawMime = dataUri.match(/^data:([^;]+);base64,/)?.[1] || '';
   const base64 = dataUri.replace(/^data:[^;]+;base64,/, '').replace(/\s/g, '');
   const mime = normalizeUploadImageMime(rawMime, base64);
@@ -971,22 +972,12 @@ async function dataUriToCacheFile(dataUri: string, name: string): Promise<{ uri:
   const safeName = name.replace(/\.[^.]+$/, '').replace(/[^a-z0-9_-]/gi, '_') || 'reference';
   const uri = `${FileSystem.cacheDirectory || ''}${safeName}-${Date.now()}.${extension}`;
   await FileSystem.writeAsStringAsync(uri, base64, { encoding: FileSystem.EncodingType.Base64 });
-  return { uri, name: `${safeName}.${extension}`, type: mime };
+  return uri;
 }
 
-type RnFormData = {
-  append: (name: string, value: unknown) => void;
-};
-
-function createFormData(): RnFormData {
-  const Ctor = (globalThis as { FormData?: new () => RnFormData }).FormData;
-  if (!Ctor) throw new Error('FormData is unavailable in this runtime');
-  return new Ctor();
-}
-
-async function appendDataUriImage(form: RnFormData, field: string, dataUri: string, name: string) {
-  const file = await dataUriToCacheFile(dataUri, name);
-  form.append(field, file as unknown as Blob);
+async function appendDataUriImage(form: FormData, field: string, dataUri: string, name: string): Promise<void> {
+  const uri = await dataUriToCacheFile(dataUri, name);
+  form.append(field, new ExpoFile(uri));
 }
 
 function normalizeUploadImageMime(rawMime: string, base64: string): string {
@@ -1005,15 +996,7 @@ function extensionForImageMime(mime: string): string {
   return 'png';
 }
 
-function mediaTypeForUri(uri: string): string {
-  const lower = uri.toLowerCase();
-  if (lower.includes('.png')) return 'image/png';
-  if (lower.includes('.webp')) return 'image/webp';
-  if (lower.includes('.gif')) return 'image/gif';
-  return 'image/jpeg';
-}
-
-async function appendReferenceImage(form: RnFormData, field: string, uri: string) {
+async function appendReferenceImage(form: FormData, field: string, uri: string): Promise<void> {
   if (uri.startsWith('data:')) {
     await appendDataUriImage(form, field, uri, 'reference.png');
     return;
@@ -1024,7 +1007,7 @@ async function appendReferenceImage(form: RnFormData, field: string, uri: string
     return;
   }
   if (/^(file:|content:|asset:)/i.test(uri)) {
-    form.append(field, { uri, name: 'reference.jpg', type: mediaTypeForUri(uri) } as unknown as Blob);
+    form.append(field, new ExpoFile(uri));
   }
 }
 
@@ -1043,22 +1026,22 @@ async function generateGrokLocalImage(state: SNSGodState, prompt: string, charac
   const resolution = String(config.grokResolution || config.quality || '1k').includes('1k') ? '1k' : String(config.grokResolution || '1k');
   const aspectRatio = String(config.grokAspectRatio || 'auto');
   if (usesReference) {
-    const form = createFormData();
+    const form = new FormData();
     form.append('prompt', finalPrompt);
     form.append('resolution', resolution);
     await appendReferenceImage(form, 'image', referenceImage);
-    const response = await fetch(`${baseUrl}/api/i2i`, { method: 'POST', body: form as unknown as RequestInit['body'] });
+    const response = await fetch(`${baseUrl}/api/i2i`, { method: 'POST', body: form });
     const payload = await response.json() as { ok?: boolean; error?: { message?: string }; result?: { url?: string } };
     if (!response.ok || payload?.ok === false) throw new Error(payload?.error?.message || `Grok i2i ${response.status}`);
     const url = payload?.result?.url;
     if (!url) throw new Error('Grok i2i 응답에 이미지 URL이 없습니다.');
     return fetchImageAsDataUri(absoluteGrokUrl(baseUrl, String(url)));
   }
-  const form = createFormData();
+  const form = new FormData();
   form.append('prompt', finalPrompt);
   form.append('resolution', resolution);
   form.append('aspect_ratio', aspectRatio === 'auto' ? '1:1' : aspectRatio);
-  const response = await fetch(`${baseUrl}/api/t2i`, { method: 'POST', body: form as unknown as RequestInit['body'] });
+  const response = await fetch(`${baseUrl}/api/t2i`, { method: 'POST', body: form });
   const payload = await response.json() as { ok?: boolean; error?: { message?: string }; result?: { url?: string } };
   if (!response.ok || payload?.ok === false) throw new Error(payload?.error?.message || `Grok t2i ${response.status}`);
   const url = payload?.result?.url;

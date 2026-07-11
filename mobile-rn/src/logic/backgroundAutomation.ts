@@ -10,6 +10,8 @@ type AutomationKeepAliveNative = {
   requestIgnoreBatteryOptimizations?: () => Promise<string>;
   openBatteryOptimizationSettings?: () => Promise<boolean>;
   openAppDetailsSettings?: () => Promise<boolean>;
+  areAutomationNotificationsEnabled?: () => Promise<boolean>;
+  openAutomationNotificationSettings?: () => Promise<boolean>;
 };
 
 const nativeModule = (NativeModules.AutomationKeepAlive || null) as AutomationKeepAliveNative | null;
@@ -33,6 +35,30 @@ async function ensureNotificationPermission(): Promise<void> {
 
 export function isAutomationKeepAliveAvailable(): boolean {
   return Platform.OS === 'android' && Boolean(nativeModule?.start && nativeModule?.stop);
+}
+
+export type AutomationNotificationChannelState = 'enabled' | 'disabled' | 'unavailable';
+
+/** Reads the actual Android foreground-service channel setting. */
+export async function getAutomationNotificationChannelState(): Promise<AutomationNotificationChannelState> {
+  if (Platform.OS !== 'android' || !nativeModule?.areAutomationNotificationsEnabled) return 'unavailable';
+  try {
+    return await nativeModule.areAutomationNotificationsEnabled() ? 'enabled' : 'disabled';
+  } catch (error) {
+    void appendDebugLog('keepalive.notification', String(error instanceof Error ? error.message : error), 'warn');
+    return 'unavailable';
+  }
+}
+
+/** Opens the exact Android channel used by the automation foreground service. */
+export async function openAutomationNotificationChannelSettings(): Promise<boolean> {
+  if (Platform.OS !== 'android' || !nativeModule?.openAutomationNotificationSettings) return false;
+  try {
+    return await nativeModule.openAutomationNotificationSettings();
+  } catch (error) {
+    void appendDebugLog('keepalive.notification', String(error instanceof Error ? error.message : error), 'warn');
+    return false;
+  }
 }
 
 export async function setAutomationKeepAliveRunning(enabled: boolean, options?: { force?: boolean }): Promise<void> {

@@ -133,6 +133,66 @@ test('bootstrap accepts existing conversation messages inside one transaction', 
   }
 });
 
+test('a newer room reset epoch removes server transcript and stale reply work', () => {
+  const app = harness();
+  try {
+    const registration = app.service.register({ deviceId: 'phone-room-reset', bootstrapSecret: 'pairing-secret' });
+    const headers = { 'x-device-id': 'phone-room-reset', 'x-device-token': registration.deviceToken };
+    const baseRoom = { id: 'room-reset', type: 'direct', name: '미카', characterId: 'mika', automation: { responseDelayMin: 30, responseDelayMax: 30 } };
+    app.service.bootstrap({
+      characters: [{ id: 'mika', name: '미카' }],
+      rooms: [baseRoom],
+      messages: [{ id: 'old-user', roomId: 'room-reset', role: 'user', content: '과거 대화', createdAt: 1_749_999_990_000 }]
+    }, headers);
+    app.service.receiveMessage({ id: 'pending-user', roomId: 'room-reset', content: '지워질 대기 메시지' }, headers);
+
+    app.service.bootstrap({
+      characters: [{ id: 'mika', name: '미카', structuredMemories: [] }],
+      rooms: [{ ...baseRoom, conversationResetAt: 1_750_000_000_000 }],
+      messages: []
+    }, headers);
+
+    assert.equal(app.db.prepare('SELECT COUNT(*) AS value FROM messages WHERE room_id = ?').get('room-reset').value, 0);
+    assert.equal(app.db.prepare("SELECT COUNT(*) AS value FROM message_jobs WHERE room_id = ? AND status IN ('pending', 'running', 'failed')").get('room-reset').value, 0);
+    const stored = JSON.parse(app.db.prepare('SELECT automation FROM rooms WHERE id = ?').get('room-reset').automation);
+    assert.equal(stored.conversationResetAt, 1_750_000_000_000);
+
+    app.service.receiveMessage({ id: 'fresh-user', roomId: 'room-reset', content: '새 대화' }, headers);
+    app.service.bootstrap({
+      characters: [{ id: 'mika', name: '미카', structuredMemories: [] }],
+      rooms: [{ ...baseRoom, conversationResetAt: 1_750_000_000_000 }],
+      messages: []
+    }, headers);
+    assert.equal(app.db.prepare('SELECT COUNT(*) AS value FROM messages WHERE room_id = ?').get('room-reset').value, 1);
+  } finally {
+    app.close();
+  }
+});
+
+test('an invalid room reset epoch cannot erase an existing server transcript', () => {
+  const app = harness();
+  try {
+    const registration = app.service.register({ deviceId: 'phone-invalid-reset', bootstrapSecret: 'pairing-secret' });
+    const headers = { 'x-device-id': 'phone-invalid-reset', 'x-device-token': registration.deviceToken };
+    const baseRoom = { id: 'room-invalid-reset', type: 'direct', name: '미카', characterId: 'mika' };
+    app.service.bootstrap({
+      characters: [{ id: 'mika', name: '미카' }],
+      rooms: [baseRoom],
+      messages: [{ id: 'kept-user', roomId: 'room-invalid-reset', role: 'user', content: '보존할 대화', createdAt: 1_749_999_990_000 }]
+    }, headers);
+
+    app.service.bootstrap({
+      characters: [{ id: 'mika', name: '미카' }],
+      rooms: [{ ...baseRoom, conversationResetAt: 'Infinity' }],
+      messages: []
+    }, headers);
+
+    assert.equal(app.db.prepare('SELECT COUNT(*) AS value FROM messages WHERE room_id = ?').get('room-invalid-reset').value, 1);
+  } finally {
+    app.close();
+  }
+});
+
 test('bootstrap recovers only the latest recent unanswered user message once', async () => {
   const app = harness();
   try {

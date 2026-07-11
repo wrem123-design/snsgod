@@ -6,6 +6,7 @@ import { cancelChatJob } from '../logic/chatJobs';
 import { deleteRoomCascade } from '../logic/deletionCascadePolicy';
 import { findCharacter, findRoom, updateRoom } from '../logic/stateHelpers';
 import { normalizeRoomPromptForSave, summarizePrivateRoomWithLlm } from '../logic/roomConversationSummary';
+import { clearDerivedRoomMemoryWhenEmpty, markRoomConversationReset } from '../logic/roomMemoryReset';
 import { applyPrivateRoomLlmSummary, replaceAutoSummaryBlock } from '../logic/memoryBridge';
 import { cancelPendingReplyJob } from '../logic/pendingReplyJobs';
 
@@ -43,6 +44,7 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange, onCommitCu
       disabledAt: draft.disabled === true ? Number(draft.disabledAt || Date.now()) : undefined
     };
     let next = updateRoom(state, roomId, roomPatch);
+    next = clearDerivedRoomMemoryWhenEmpty(next, roomId, roomPatch);
     if (roomPatch.disabled) {
       cancelChatJob(roomId);
       next = cancelPendingReplyJob(next, roomId, 'room-disabled');
@@ -96,7 +98,7 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange, onCommitCu
         style: 'destructive',
         onPress: async () => {
           cancelChatJob(roomId);
-          await onChange(cleanRoomConversation(state, roomId));
+          await onChange(cancelPendingReplyJob(markRoomConversationReset(state, roomId), roomId, 'room-cleaned'));
           setStatus('방 대화내역을 비웠습니다.');
         }
       }
@@ -188,19 +190,6 @@ export function RoomSettingsScreen({ state, roomId, onBack, onChange, onCommitCu
       </ScrollView>
     </View>
   );
-}
-
-function cleanRoomConversation(state: SNSGodState, roomId: string): SNSGodState {
-  const messages = { ...state.messages, [roomId]: [] };
-  const unreadCounts = { ...state.unreadCounts };
-  delete unreadCounts[roomId];
-  const cancelled = cancelPendingReplyJob(state, roomId, 'room-cleaned');
-  return {
-    ...cancelled,
-    messages,
-    unreadCounts,
-    notifications: (state.notifications || []).filter(item => item.roomId !== roomId && item.target?.roomId !== roomId)
-  };
 }
 
 function Field({ label, value, onChangeText, help, multiline }: { label: string; value: string; onChangeText: (value: string) => void; help?: string; multiline?: boolean }) {

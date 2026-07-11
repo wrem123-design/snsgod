@@ -71,11 +71,11 @@ Oracle Ubuntu 배포 절차는 [`docs/ORACLE_SERVER_DEPLOYMENT_GUIDE.md`](docs/O
 
 개인톡·단톡·선톡·통화가 공유하는 캐릭터 정체성·언어·기억 경계는 [`docs/CANONICAL_PERSONA_POLICY.md`](docs/CANONICAL_PERSONA_POLICY.md)를 참고하십시오.
 
-Oracle 메시지 서버를 연결한 모바일 앱은 실행 중이거나 백그라운드 유지 서비스가 살아 있는 동안 1분마다 서버 메시지를 동기화합니다. API가 일시적으로 끊기면 서버가 1분, 5분, 15분, 30분 간격으로 답장을 재시도하고 이후 API 복구를 확인해 실패 작업을 다시 대기열에 넣습니다. Android 앱은 FCM 토큰을 발급받아 등록·부트스트랩 요청에 포함하고, 실행 중 토큰이 바뀌면 서버에 즉시 갱신합니다.
+Oracle 메시지 서버를 연결한 모바일 앱은 실행 중이거나 백그라운드 유지 서비스가 살아 있는 동안 1분마다 서버 메시지를 동기화합니다. 성공한 동기화는 기기에서 캐릭터별 SNS 자동 게시 조건도 평가합니다. API가 일시적으로 끊기면 서버가 1분, 5분, 15분, 30분 간격으로 답장을 재시도하고 이후 API 복구를 확인해 실패 작업을 다시 대기열에 넣습니다. Android 앱은 FCM 토큰을 발급받아 등록·부트스트랩 요청에 포함하고, 실행 중 토큰이 바뀌면 서버에 즉시 갱신합니다.
 
 사용 방법은 **설정 → API → Oracle 메시지 서버**에서 서버 주소와 연결 키를 입력한 뒤 **연결 및 동기화**를 누르는 것입니다. `마지막 동기화` 시각이 표시되면 연결된 상태입니다. 기기 인증 정보가 없거나 서버가 응답하지 않으면 최근 오류에 재연결 또는 시간 초과 안내가 표시되며, 요청은 20초 뒤 해제되어 다음 1분 동기화가 다시 시도할 수 있습니다.
 
-실제 원격 알림을 켜려면 Firebase에 Android 패키지 `com.snsgod.rn`을 등록한 뒤 받은 `google-services.json`을 `mobile-rn/android/app/google-services.json`에 두고 APK를 다시 빌드합니다. 같은 Firebase 프로젝트의 서비스 계정 JSON은 Oracle 서버의 Git 외부 경로에 저장한 뒤 `PUSH_PROVIDER=fcm`, `FIREBASE_SERVICE_ACCOUNT_PATH=/절대/경로/서비스계정.json`으로 설정합니다. 알림 권한이 꺼져 있어도 앱은 FCM 토큰 등록과 서버 메시지 보관·동기화를 계속하며, **설정 → 기본 설정 → 알림**에서 답장과 선톡의 휴대폰 표시를 각각 선택할 수 있습니다. Android 설정 화면에서 앱을 직접 **강제 종료**한 상태는 운영체제가 FCM도 차단하므로 앱을 한 번 다시 실행해야 합니다.
+실제 원격 알림을 켜려면 Firebase에 Android 패키지 `com.snsgod.rn`을 등록한 뒤 받은 `google-services.json`을 `mobile-rn/android/app/google-services.json`에 두고 APK를 다시 빌드합니다. 같은 Firebase 프로젝트의 서비스 계정 JSON은 Oracle 서버의 Git 외부 경로에 저장한 뒤 `PUSH_PROVIDER=fcm`, `FIREBASE_SERVICE_ACCOUNT_PATH=/절대/경로/서비스계정.json`으로 설정합니다. 알림 권한이 꺼져 있어도 앱은 FCM 토큰 등록과 서버 메시지 보관·동기화를 계속하며, **설정 → 기본 설정 → 알림**에서 답장·선톡 표시와 Android 자동화 상태 채널을 관리할 수 있습니다. Android 설정 화면에서 앱을 직접 **강제 종료**한 상태는 운영체제가 FCM과 기기 SNS 자동평가도 차단하므로 앱을 한 번 다시 실행해야 합니다.
 
 ## 검증 명령
 

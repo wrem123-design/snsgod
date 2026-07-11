@@ -84,6 +84,7 @@ paths:
                   type: direct
                   name: 미카
                   characterId: character_mika
+                  conversationResetAt: 0
                   automation: { replyEnabled: true, proactiveEnabled: true }
               messages: []
       responses:
@@ -250,6 +251,11 @@ components:
         name: { type: string, maxLength: 160 }
         characterId: { type: string }
         participantIds: { type: array, items: { type: string } }
+        conversationResetAt:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 이 값이 서버에 저장된 epoch보다 새로우면 해당 방의 기존 서버 transcript와 대기 작업을 제거합니다.
         automation: { type: object, additionalProperties: true }
     ClientMessage:
       type: object

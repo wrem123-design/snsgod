@@ -42,10 +42,10 @@ test('release metadata identifies the updated mobile build', () => {
   const packageConfig = JSON.parse(read('package.json'));
   const gradle = read('android/app/build.gradle');
   const rootGradle = read('android/build.gradle');
-  assert.equal(appConfig.expo.version, '0.3.6');
-  assert.equal(packageConfig.version, '0.3.6');
-  assert.match(gradle, /versionCode 15/);
-  assert.match(gradle, /versionName "0\.3\.6"/);
+  assert.equal(appConfig.expo.version, '0.3.7');
+  assert.equal(packageConfig.version, '0.3.7');
+  assert.match(gradle, /versionCode 16/);
+  assert.match(gradle, /versionName "0\.3\.7"/);
   assert.match(rootGradle, /com\.google\.gms:google-services/);
   assert.match(gradle, /google-services\.json/);
   assert.match(gradle, /apply plugin: "com\.google\.gms\.google-services"/);
@@ -93,6 +93,14 @@ test('Oracle settings expose notification delivery state and system recovery act
   assert.match(settings, /알림 설정 열기/);
 });
 
+test('Grok reference uploads use Expo File blobs accepted by the SDK 57 FormData implementation', () => {
+  const api = read('src/logic/api.ts');
+  assert.match(api, /import \{ File as ExpoFile \} from 'expo-file-system'/);
+  assert.match(api, /new ExpoFile\(uri\)/);
+  assert.doesNotMatch(api, /\{\s*uri,\s*name:\s*'reference\.jpg'/);
+  assert.doesNotMatch(api, /file as unknown as Blob/);
+});
+
 test('basic settings expose system notification categories without gating message sync', () => {
   const types = read('src/types.ts');
   const navigation = read('src/screens/settings/SettingsNavigation.tsx');
@@ -112,6 +120,41 @@ test('basic settings expose system notification categories without gating messag
   assert.match(server, /pushPreferences: notificationPreferencesForServer\(state\)/);
   assert.match(server, /notificationImage: notificationImageForServer\(character\)/);
   assert.doesNotMatch(server, /notificationPreferences[\s\S]{0,120}isServerMessagingEnabled/);
+});
+
+test('Oracle synchronization signals fair SNS automation without replacing server message handling', () => {
+  const app = read('src/App.tsx');
+  const sns = read('src/logic/sns.ts');
+
+  assert.match(app, /runServerAssistedSnsTick/);
+  assert.match(app, /sync completed reason=[^\n]+[\s\S]{0,300}runServerAssistedSnsTick/);
+  assert.match(app, /server-sync tick evaluated reason=/);
+  assert.doesNotMatch(sns, /pairs\.slice\(0,\s*6\)/);
+  assert.match(sns, /evaluateSnsAutomationCandidates/);
+});
+
+test('room reset epochs prevent Oracle history from reappearing before bootstrap cleanup', () => {
+  const server = read('src/logic/serverMessaging.ts');
+  const roomSettings = read('src/screens/RoomSettingsScreen.tsx');
+
+  assert.match(roomSettings, /markRoomConversationReset\(state, roomId\)/);
+  assert.match(server, /conversationResetAt: Number\(room\.conversationResetAt \|\| 0\)/);
+  assert.match(server, /Number\(remote\.createdAt \|\| 0\) <= resetAt/);
+  assert.match(server, /Number\(message\.createdAt \|\| 0\) > resetAt/);
+});
+
+test('notification settings include the Android foreground-service channel without stopping automation', () => {
+  const settings = read('src/screens/settings/NotificationSettingsSection.tsx');
+  const background = read('src/logic/backgroundAutomation.ts');
+  const nativeModule = read('android/app/src/main/java/com/snsgod/rn/AutomationKeepAliveModule.kt');
+
+  assert.match(settings, /백그라운드 자동화 상태/);
+  assert.match(settings, /Android 필수 알림/);
+  assert.match(background, /getAutomationNotificationChannelState/);
+  assert.match(background, /openAutomationNotificationChannelSettings/);
+  assert.match(nativeModule, /areAutomationNotificationsEnabled/);
+  assert.match(nativeModule, /openAutomationNotificationSettings/);
+  assert.doesNotMatch(settings, /setAutomationKeepAliveRunning\(false/);
 });
 
 test('returning to the foreground refreshes both push registration and Oracle messages', () => {

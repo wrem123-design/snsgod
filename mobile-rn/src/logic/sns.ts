@@ -1,5 +1,6 @@
 import { callLLMText, generateImageDataUri, imagePromptWithoutCharacterName, parseJsonObject } from './api';
 import { appendDebugLog } from './debugLog';
+import { evaluateSnsAutomationCandidates, oneSnsRoomPerCharacter } from './snsAutomationEvaluation';
 import { characterReferenceImageForSns } from './imageReference';
 import { makeId } from './ids';
 import { MAX_SNS_CONTEXT_MESSAGES, MAX_SNS_DM_CONTEXT_MESSAGES } from './limits';
@@ -715,15 +716,21 @@ export async function maybeCreateBackgroundAutoSNSPost(state: SNSGodState): Prom
       return priority || Number(b.messages[b.messages.length - 1]?.createdAt || 0) - Number(a.messages[a.messages.length - 1]?.createdAt || 0);
     });
 
-  for (const item of pairs.slice(0, 6)) {
-    if (autoPostingRooms.has(item.room.id)) continue;
-    const next = await maybeCreateAutoSNSPost(state, item.character, item.room.id);
-    if (next !== state) {
-      await logAutoSns(`background applied room=${item.room.id} character=${item.character.id}`);
-      return next;
+  const candidates = oneSnsRoomPerCharacter(pairs.map(item => ({
+    characterId: item.character.id,
+    roomId: item.room.id,
+    priority: contactBudgetDecision(state, item.character, 'sns').channelPriority,
+  })));
+  return evaluateSnsAutomationCandidates(state, candidates, async (current, candidate) => {
+    if (autoPostingRooms.has(candidate.roomId)) return current;
+    const character = current.characters.find(item => item.id === candidate.characterId);
+    if (!character) return current;
+    const next = await maybeCreateAutoSNSPost(current, character, candidate.roomId);
+    if (next !== current) {
+      await logAutoSns(`background applied room=${candidate.roomId} character=${candidate.characterId}`);
     }
-  }
-  return undefined;
+    return next;
+  });
 }
 
 export async function generateSnsDmReply(state: SNSGodState, threadId: string, userText: string): Promise<SNSGodState> {

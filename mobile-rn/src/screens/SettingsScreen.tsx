@@ -18,7 +18,12 @@ import { MAX_CONTEXT_MESSAGES } from '../logic/limits';
 import { editableForbiddenPromptRules } from '../logic/imagePromptRules';
 import { getRecommendedOptimizationStatus, maybePromptBatteryOptimizationExemption, RecommendedOptimizationStatus } from '../logic/backgroundAutomation';
 import { bootstrapServer, registerServerDevice, syncServerMessages } from '../logic/serverMessaging';
-import { withServerConnectionSettings } from '../logic/serverConnectionPolicy';
+import {
+  invalidateServerRegistrationForRequest,
+  requiresServerRegistration,
+  ServerAuthenticationError,
+  withServerConnectionSettings,
+} from '../logic/serverConnectionPolicy';
 import { mergeServerConnectionResult } from '../logic/staleStateMergePolicy';
 import { isRemoteServicesEnabled, withDataBoundaryMode } from '../logic/remoteServicePolicy';
 import { AdvancedSettingsNotice, defaultSectionForSettingsMode, SettingsMode, SettingsNavigation, SettingsSection } from './settings/SettingsNavigation';
@@ -364,6 +369,7 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
   const [saving, setSaving] = useState(false);
   const [testingApi, setTestingApi] = useState(false);
   const [status, setStatus] = useState('');
+  const [serverStatus, setServerStatus] = useState('');
   const [showKeys, setShowKeys] = useState(false);
   const [userStickerDrafts, setUserStickerDrafts] = useState<Record<string, { name: string; description: string }>>({});
   const userEvents = Array.isArray(state.config.userCalendarEvents) ? state.config.userCalendarEvents as CalendarEvent[] : [];
@@ -846,24 +852,32 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
   async function saveServerMessaging(connect = false) {
     if (saving) return;
     if (!remoteServicesEnabled) {
-      setStatus('로컬 전용 모드에서는 Oracle 서버에 연결하지 않습니다. 원격 보조 모드를 먼저 켜세요.');
+      setServerStatus('로컬 전용 모드에서는 Oracle 서버에 연결하지 않습니다. 원격 보조 모드를 먼저 켜세요.');
       return;
     }
+    setStatus('');
+    setServerStatus(connect ? 'Oracle 메시지 서버에 동기화하는 중입니다.' : 'Oracle 메시지 서버 설정을 저장하는 중입니다.');
     setSaving(true);
+    const requestId = makeId('server-connection');
+    const requested = withServerConnectionSettings(state, {
+      baseUrl: serverBaseUrl,
+      pairingSecret: serverPairingSecret,
+      requestId,
+    });
     try {
-      const requestId = makeId('server-connection');
-      const requested = withServerConnectionSettings(state, {
-        baseUrl: serverBaseUrl,
-        pairingSecret: serverPairingSecret,
-        requestId,
-      });
+      let registeredThisRequest = false;
       await onChange(requested);
       if (connect) {
-        let next = await registerServerDevice(requested);
-        const registered = await onCommitCurrent(current => (
-          mergeServerConnectionResult(current, requested, next, requestId)
-        ));
-        if (registered?.config.serverMessaging?.connectionRequestId !== requestId) return;
+        const requiresRegistration = requiresServerRegistration(requested);
+        registeredThisRequest = requiresRegistration;
+        let next = requested;
+        if (requiresRegistration) {
+          next = await registerServerDevice(requested);
+          const registered = await onCommitCurrent(current => (
+            mergeServerConnectionResult(current, requested, next, requestId)
+          ));
+          if (registered?.config.serverMessaging?.connectionRequestId !== requestId) return;
+        }
         next = await bootstrapServer(next);
         next = await syncServerMessages(next);
         const synchronized = await onCommitCurrent(current => (
@@ -872,9 +886,17 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
         if (synchronized?.config.serverMessaging?.connectionRequestId !== requestId) return;
         setServerPairingSecret('');
       }
-      setStatus(connect ? 'Oracle 메시지 서버 연결 및 초기 동기화 완료' : 'Oracle 메시지 서버 설정 저장 완료');
+      setServerStatus(connect
+        ? registeredThisRequest ? 'Oracle 메시지 서버 연결 및 초기 동기화 완료' : 'Oracle 메시지 서버 동기화 완료'
+        : 'Oracle 메시지 서버 설정 저장 완료');
     } catch (error) {
-      setStatus('Oracle 메시지 서버 설정 실패: ' + String(error instanceof Error ? error.message : error));
+      if (error instanceof ServerAuthenticationError) {
+        setServerPairingSecret('');
+        await onCommitCurrent(current => (
+          invalidateServerRegistrationForRequest(current, requested, requestId)
+        ));
+      }
+      setServerStatus('Oracle 메시지 서버 설정 실패: ' + String(error instanceof Error ? error.message : error));
     } finally {
       setSaving(false);
     }
@@ -1615,6 +1637,7 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
 
         <View style={[styles.card, activeSection !== 'api' && styles.hidden]}>
           <Text style={styles.cardTitle}>Oracle 메시지 서버</Text>
+          {serverStatus ? <View style={styles.statusBox}><Text style={styles.statusText}>{serverStatus}</Text></View> : null}
           {!remoteServicesEnabled ? <Text style={styles.help}>현재 차단됨 · 위의 원격 보조 모드를 켠 뒤에만 서버 설정과 연결을 사용할 수 있습니다.</Text> : null}
           <Text style={styles.help}>앱이 완전히 종료되어도 1:1·단톡방 답장과 선톡을 서버에서 생성합니다. 처음 연결할 때만 서버 연결 키가 필요하며, 연결 후에는 기기 토큰으로 동기화합니다.</Text>
           <Text style={styles.label}>서버 주소</Text>
@@ -1627,7 +1650,7 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
           {state.config.serverMessaging?.lastError ? <Text style={styles.help}>최근 오류: {state.config.serverMessaging.lastError}</Text> : null}
           <View style={styles.buttonRow}>
             <Pressable onPress={() => void saveServerMessaging(false)} disabled={saving || !remoteServicesEnabled} style={[styles.secondaryInline, styles.rowButton, (saving || !remoteServicesEnabled) && styles.disabled]}><Text style={styles.secondaryText}>설정 저장</Text></Pressable>
-            <Pressable onPress={() => void saveServerMessaging(true)} disabled={saving || !remoteServicesEnabled} style={[styles.primary, styles.rowButton, (saving || !remoteServicesEnabled) && styles.disabled]}><Text style={styles.primaryText}>{state.config.serverMessaging?.deviceToken ? '다시 동기화' : '연결 및 동기화'}</Text></Pressable>
+            <Pressable onPress={() => void saveServerMessaging(true)} disabled={saving || !remoteServicesEnabled} style={[styles.primary, styles.rowButton, (saving || !remoteServicesEnabled) && styles.disabled]}><Text style={styles.primaryText}>{state.config.serverMessaging?.deviceToken ? '다시 동기화' : state.config.serverMessaging?.deviceId ? '기기 다시 등록' : '연결 및 동기화'}</Text></Pressable>
           </View>
         </View>
         <View style={[styles.card, activeSection !== 'screen' && styles.hidden]}>

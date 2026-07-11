@@ -453,6 +453,12 @@ export function createMessageService({ db, config, now = () => Date.now(), rando
       .find(job => job.id !== excludeJobId && sourceMessageIdForJob(job) === sourceMessageId);
   }
 
+  function replyJobWasRecorded(roomId, sourceMessageId) {
+    if (!sourceMessageId) return false;
+    return db.prepare("SELECT * FROM message_jobs WHERE room_id = ? AND kind = 'reply' ORDER BY created_at DESC").all(roomId)
+      .some(job => sourceMessageIdForJob(job) === sourceMessageId);
+  }
+
   function ensureLatestReplyJob(roomId, dueAt = now() + 1000, excludeJobId = '') {
     const room = roomById(roomId);
     if (!room.enabled || !room.automation.enabled || !room.automation.replyEnabled) return undefined;
@@ -463,6 +469,22 @@ export function createMessageService({ db, config, now = () => Date.now(), rando
     db.prepare("UPDATE message_jobs SET status = 'cancelled', updated_at = ?, error = 'Superseded by a newer user message' WHERE room_id = ? AND kind = 'reply' AND status IN ('pending', 'failed') AND id <> ?")
       .run(now(), roomId, excludeJobId || '');
     return queueJob('reply', roomId, dueAt, { sourceMessageId: latest.id });
+  }
+
+  function recoverBootstrappedReply(roomId, timestamp = now()) {
+    const latest = db.prepare('SELECT * FROM messages WHERE room_id = ? ORDER BY created_at DESC, server_created_at DESC, id DESC LIMIT 1').get(roomId);
+    if (!latest || latest.role !== 'user' || Number(latest.created_at || 0) < timestamp - replyJobRetentionMs) return undefined;
+    if (replyAlreadyGenerated(latest.id) || replyJobWasRecorded(roomId, latest.id)) return undefined;
+    return ensureLatestReplyJob(roomId, timestamp + 1000);
+  }
+
+  function recoverMissingReplyJobs(timestamp = now()) {
+    const rooms = db.prepare('SELECT id FROM rooms WHERE enabled = 1 ORDER BY id').all();
+    let recovered = 0;
+    for (const room of rooms) {
+      if (recoverBootstrappedReply(room.id, timestamp)) recovered += 1;
+    }
+    return recovered;
   }
 
   function expireRecoverableJobs(timestamp = now()) {
@@ -550,9 +572,15 @@ export function createMessageService({ db, config, now = () => Date.now(), rando
     const encryptedProfile = body.textGenerationEnvelope === undefined
       ? undefined
       : decryptTextGenerationEnvelope(body.textGenerationEnvelope, config.profilePrivateKeyPath);
+    const incomingProfile = encryptedProfile !== undefined ? encryptedProfile : body.textGeneration;
+    const currentProfile = activeTextGeneration();
+    const profileFallback = incomingProfile
+      && String(incomingProfile.provider || '').toLowerCase() === String(currentProfile.provider || '').toLowerCase()
+      ? currentProfile
+      : {};
     const textGeneration = encryptedProfile !== undefined
-      ? normalizeTextGeneration(encryptedProfile)
-      : body.textGeneration === undefined ? undefined : normalizeTextGeneration(body.textGeneration);
+      ? normalizeTextGeneration(encryptedProfile, profileFallback)
+      : body.textGeneration === undefined ? undefined : normalizeTextGeneration(body.textGeneration, profileFallback);
     assert(characters.length <= 200 && rooms.length <= 500 && messages.length <= MAX_SYNC_MESSAGES, 400, 'Bootstrap payload is too large');
     if (!encryptedProfile && textGeneration && textGenerationHasSecret(textGeneration)) {
       const forwardedProto = text(headers['x-forwarded-proto'], 40).toLowerCase();
@@ -582,7 +610,10 @@ export function createMessageService({ db, config, now = () => Date.now(), rando
         db.prepare('UPDATE devices SET push_token = ?, updated_at = ? WHERE id = ?').run(text(body.pushToken, 4096) || null, timestamp, device.id);
       }
     });
-    for (const room of rooms) scheduleProactive(room.id, timestamp);
+    for (const room of rooms) {
+      const recoveredReplyJob = recoverBootstrappedReply(room.id, timestamp);
+      if (!recoveredReplyJob) scheduleProactive(room.id, timestamp);
+    }
     return { accepted: true, serverTime: timestamp, cursor: currentCursor(), textGeneration: textGenerationSummary() };
   }
 
@@ -1080,6 +1111,7 @@ export function createMessageService({ db, config, now = () => Date.now(), rando
   }
 
   async function runScheduler(limit = 20) {
+    const recoveredMissingReplies = recoverMissingReplyJobs(now());
     const probe = await probeApiRecoveryIfDue(now());
     let processed = 0;
     const failures = [];
@@ -1114,7 +1146,7 @@ export function createMessageService({ db, config, now = () => Date.now(), rando
       }
       processed += 1;
     }
-    return { processed, failures, probe };
+    return { processed, failures, probe, recoveredMissingReplies };
   }
 
   function fcmServiceAccount() {

@@ -51,6 +51,9 @@ export type ServerMessagingConfig = {
   pairingSecret?: string;
   deviceId?: string;
   deviceToken?: string;
+  pushToken?: string;
+  pushPermissionGranted?: boolean;
+  pushRegistrationError?: string;
   syncCursor?: number;
   lastSyncAt?: number;
   lastError?: string;

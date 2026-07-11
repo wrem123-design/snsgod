@@ -87,6 +87,81 @@ test('bootstrap accepts existing conversation messages inside one transaction', 
   }
 });
 
+test('bootstrap recovers only the latest recent unanswered user message once', async () => {
+  const app = harness();
+  try {
+    const registration = app.service.register({ deviceId: 'phone-recovery', bootstrapSecret: 'pairing-secret' });
+    const headers = { 'x-device-id': 'phone-recovery', 'x-device-token': registration.deviceToken };
+    const payload = {
+      characters: [{ id: 'mika', name: '미카', responseDelayMin: 0, responseDelayMax: 0 }],
+      rooms: [{ id: 'room-recovery', type: 'direct', name: '미카', characterId: 'mika', automation: { responseDelayMin: 0, responseDelayMax: 0 } }],
+      messages: [
+        { id: 'missed-user-1', roomId: 'room-recovery', role: 'user', content: '첫 메시지', createdAt: 1_749_999_990_000 },
+        { id: 'missed-user-2', roomId: 'room-recovery', role: 'user', content: '아직 있어?', createdAt: 1_749_999_995_000 }
+      ]
+    };
+    app.service.bootstrap(payload, headers);
+    app.service.bootstrap(payload, headers);
+    assert.equal(app.service.health().jobs.pending, 1);
+    app.advance(1_000);
+    await app.service.runScheduler();
+    const replies = app.service.sync({ cursor: 0 }, headers).messages.filter(message => message.role === 'character');
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].sourceMessageId, 'missed-user-2');
+  } finally {
+    app.close();
+  }
+});
+
+test('bootstrap does not revive answered or expired conversation history', () => {
+  const app = harness({ config: { replyJobRetentionMs: 60_000 } });
+  try {
+    const registration = app.service.register({ deviceId: 'phone-old-history', bootstrapSecret: 'pairing-secret' });
+    const headers = { 'x-device-id': 'phone-old-history', 'x-device-token': registration.deviceToken };
+    app.service.bootstrap({
+      characters: [{ id: 'mika', name: '미카' }],
+      rooms: [
+        { id: 'room-answered', type: 'direct', name: '미카', characterId: 'mika' },
+        { id: 'room-expired', type: 'direct', name: '미카', characterId: 'mika' }
+      ],
+      messages: [
+        { id: 'answered-user', roomId: 'room-answered', role: 'user', content: '안녕', createdAt: 1_749_999_990_000 },
+        { id: 'answered-character', roomId: 'room-answered', role: 'character', characterId: 'mika', content: '응', createdAt: 1_749_999_995_000 },
+        { id: 'expired-user', roomId: 'room-expired', role: 'user', content: '오래된 메시지', createdAt: 1_749_999_000_000 }
+      ]
+    }, headers);
+    assert.equal(app.service.health().jobs.pending, 0);
+  } finally {
+    app.close();
+  }
+});
+
+test('scheduler repairs an existing recent user message that never received a reply job', async () => {
+  const app = harness();
+  try {
+    const registration = app.service.register({ deviceId: 'phone-scheduler-repair', bootstrapSecret: 'pairing-secret' });
+    const headers = { 'x-device-id': 'phone-scheduler-repair', 'x-device-token': registration.deviceToken };
+    app.service.bootstrap({
+      characters: [{ id: 'mika', name: '미카', responseDelayMin: 0, responseDelayMax: 0 }],
+      rooms: [{ id: 'room-scheduler-repair', type: 'direct', name: '미카', characterId: 'mika', automation: { responseDelayMin: 0, responseDelayMax: 0 } }]
+    }, headers);
+    app.db.prepare(`INSERT INTO messages
+      (id, room_id, role, content, created_at, server_created_at, origin, metadata)
+      VALUES (?, ?, 'user', ?, ?, ?, 'client', '{}')`)
+      .run('orphan-user', 'room-scheduler-repair', '답장이 누락됐어', 1_749_999_995_000, 1_750_000_000_000);
+
+    const repair = await app.service.runScheduler();
+    assert.equal(repair.recoveredMissingReplies, 1);
+    app.advance(1_000);
+    await app.service.runScheduler();
+    const replies = app.service.sync({ cursor: 0 }, headers).messages.filter(message => message.role === 'character');
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].sourceMessageId, 'orphan-user');
+  } finally {
+    app.close();
+  }
+});
+
 test('app-selected Grok model is persisted and used for server replies', async () => {
   const calls = [];
   const app = harness({
@@ -157,6 +232,15 @@ test('encrypted API credentials can sync over the existing HTTP proxy route', ()
     app.service.bootstrap({ textGenerationEnvelope: encryptedProfileEnvelope(profile, publicKey) }, headers);
     assert.equal(app.service.health().textGeneration.provider, 'custom');
     assert.equal(app.service.health().textGeneration.model, 'model-x');
+    app.service.bootstrap({
+      textGenerationEnvelope: encryptedProfileEnvelope({
+        provider: 'custom',
+        apiEndpoint: 'https://example.com/v1/chat/completions',
+        apiModel: 'model-x'
+      }, publicKey)
+    }, headers);
+    const savedProfile = JSON.parse(app.db.prepare("SELECT payload FROM runtime_settings WHERE key = 'text_generation'").get().payload);
+    assert.equal(savedProfile.apiKey, 'secret-x');
   } finally {
     app.close();
   }

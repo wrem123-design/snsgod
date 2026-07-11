@@ -9,6 +9,8 @@ import { serverRequestError } from './serverConnectionPolicy';
 
 type ServerMessagingConfig = NonNullable<SNSGodState['config']['serverMessaging']>;
 
+const ORACLE_REQUEST_TIMEOUT_MS = 20_000;
+
 type ServerMessage = {
   id: string;
   roomId: string;
@@ -49,21 +51,37 @@ function headers(state: SNSGodState): Record<string, string> {
   };
 }
 
+async function withOracleRequestTimeout<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), ORACLE_REQUEST_TIMEOUT_MS);
+  try {
+    return await operation(controller.signal);
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('Oracle 서버 응답 시간 초과');
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function request<T>(state: SNSGodState, path: string, options: { method?: 'GET' | 'POST'; body?: unknown } = {}): Promise<T> {
   const config = serverConfig(state);
   if (!config) throw new Error('Oracle 메시지 서버가 활성화되지 않았습니다.');
-  const response = await fetch(`${trimUrl(config.baseUrl)}${path}`, {
-    method: options.method || 'GET',
-    headers: headers(state),
-    body: options.body === undefined ? undefined : JSON.stringify(options.body)
+  return withOracleRequestTimeout(async signal => {
+    const response = await fetch(`${trimUrl(config.baseUrl)}${path}`, {
+      method: options.method || 'GET',
+      headers: headers(state),
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal
+    });
+    const raw = await response.text();
+    let payload: unknown;
+    try { payload = raw ? JSON.parse(raw) : {}; } catch { throw new Error(`서버 응답 형식 오류 (${response.status})`); }
+    if (!response.ok) {
+      throw serverRequestError(response.status, payload);
+    }
+    return payload as T;
   });
-  const raw = await response.text();
-  let payload: unknown;
-  try { payload = raw ? JSON.parse(raw) : {}; } catch { throw new Error(`서버 응답 형식 오류 (${response.status})`); }
-  if (!response.ok) {
-    throw serverRequestError(response.status, payload);
-  }
-  return payload as T;
 }
 
 function directRooms(state: SNSGodState) {
@@ -203,6 +221,7 @@ function textGenerationForServer(state: SNSGodState) {
 
 function bootstrapPayload(state: SNSGodState, excludeMessageIds: string[] = []) {
   return {
+    pushToken: state.config.serverMessaging?.pushToken,
     characters: state.characters.filter(character => character.randomTemporary !== true).map(character => safeCharacter(state, character)),
     rooms: [...directRooms(state), ...groupRooms(state)],
     messages: recentMessages(state, excludeMessageIds),
@@ -225,15 +244,20 @@ export async function registerServerDevice(state: SNSGodState, deviceName = 'SNS
   const pairingSecret = String(config.pairingSecret || '').trim();
   if (!pairingSecret) throw new Error('서버 연결 키를 입력하세요.');
   const deviceId = config.deviceId || newServerDeviceId();
-  const response = await fetch(`${trimUrl(config.baseUrl)}/v1/device/register`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ deviceId, deviceName, bootstrapSecret: pairingSecret })
+  const payload = await withOracleRequestTimeout(async signal => {
+    const response = await fetch(`${trimUrl(config.baseUrl)}/v1/device/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ deviceId, deviceName, bootstrapSecret: pairingSecret, pushToken: config.pushToken }),
+      signal
+    });
+    const raw = await response.text();
+    let parsed: { deviceId?: string; deviceToken?: string; error?: string };
+    try { parsed = raw ? JSON.parse(raw) as typeof parsed : {}; } catch { throw new Error(`서버 응답 형식 오류 (${response.status})`); }
+    if (!response.ok) throw serverRequestError(response.status, parsed);
+    if (!parsed.deviceToken) throw new Error(`기기 등록 실패 (${response.status})`);
+    return parsed;
   });
-  const raw = await response.text();
-  const payload = raw ? JSON.parse(raw) as { deviceId?: string; deviceToken?: string; error?: string } : {};
-  if (!response.ok) throw serverRequestError(response.status, payload);
-  if (!payload.deviceToken) throw new Error(`기기 등록 실패 (${response.status})`);
   return {
     ...state,
     config: {
@@ -252,8 +276,10 @@ export async function registerServerDevice(state: SNSGodState, deviceName = 'SNS
 
 export async function bootstrapServer(state: SNSGodState, excludeMessageIds: string[] = []): Promise<SNSGodState> {
   if (!isServerMessagingEnabled(state)) return state;
-  const response = await request<{ cursor?: number }>(state, '/v1/sync/bootstrap', { method: 'POST', body: bootstrapPayload(state, excludeMessageIds) });
-  return setServerStatus(state, { syncCursor: Number(response.cursor || state.config.serverMessaging?.syncCursor || 0), lastSyncAt: Date.now(), lastError: '' });
+  await request<{ cursor?: number }>(state, '/v1/sync/bootstrap', { method: 'POST', body: bootstrapPayload(state, excludeMessageIds) });
+  // Only /v1/sync/changes owns the client cursor. Advancing it from a bootstrap
+  // response would skip server messages created while this device was offline.
+  return setServerStatus(state, { lastSyncAt: Date.now(), lastError: '' });
 }
 
 export function enqueueServerMessage(state: SNSGodState, message: SNSGodMessage, roomId: string): SNSGodState {

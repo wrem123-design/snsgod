@@ -1647,6 +1647,14 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
           <Text style={styles.help}>답장과 선톡은 Oracle 서버에서 실행됩니다. 별도 서버 시간은 사용하지 않으며 자동화 화면의 개인톡/단톡 선톡 설정과 캐릭터별 답장시간·빈도·주도성 설정을 그대로 사용합니다.</Text>
           <Text style={styles.help}>텍스트 생성은 위에서 선택하고 저장한 Provider·Endpoint·모델·키 설정을 앱 채팅과 서버 답장/선톡이 함께 사용합니다. 인증정보는 서버 전용 공개키로 암호화해서 동기화합니다.</Text>
           <Text style={styles.help}>{state.config.serverMessaging?.deviceToken ? ('마지막 동기화: ' + (state.config.serverMessaging.lastSyncAt ? new Date(state.config.serverMessaging.lastSyncAt).toLocaleString() : '아직 없음')) : '아직 기기 등록 전입니다. 서버 주소와 연결 키를 입력한 뒤 연결하세요.'}</Text>
+          {state.config.serverMessaging?.pushPermissionGranted === false ? (
+            <View>
+              <Text style={styles.dangerText}>백그라운드 답장 알림이 꺼져 있습니다.</Text>
+              <Text style={styles.help}>서버 답장은 계속 저장되지만 앱을 열기 전에는 알림이 표시되지 않습니다. 시스템 설정에서 SNSGod 알림을 허용하세요.</Text>
+              <Pressable onPress={() => void Linking.openSettings()} style={styles.secondaryInline}><Text style={styles.secondaryText}>알림 설정 열기</Text></Pressable>
+            </View>
+          ) : null}
+          {state.config.serverMessaging?.pushRegistrationError ? <Text style={styles.help}>푸시 등록 오류: {state.config.serverMessaging.pushRegistrationError}</Text> : null}
           {state.config.serverMessaging?.lastError ? <Text style={styles.help}>최근 오류: {state.config.serverMessaging.lastError}</Text> : null}
           <View style={styles.buttonRow}>
             <Pressable onPress={() => void saveServerMessaging(false)} disabled={saving || !remoteServicesEnabled} style={[styles.secondaryInline, styles.rowButton, (saving || !remoteServicesEnabled) && styles.disabled]}><Text style={styles.secondaryText}>설정 저장</Text></Pressable>

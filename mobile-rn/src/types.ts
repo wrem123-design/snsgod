@@ -384,6 +384,26 @@ export type SNSGodMessage = {
   [key: string]: unknown;
 };
 
+export type PendingReplyPhase = 'delay' | 'typing' | 'generating' | 'delivered' | 'failed' | 'cancelled';
+
+export type PendingReplyJob = {
+  jobId: string;
+  roomId: string;
+  characterId: string;
+  sourceMessageId: string;
+  sourceMessageCreatedAt: number;
+  latestUserInput: string;
+  latestUserImageData?: string;
+  scheduledAt: number;
+  startedAt: number;
+  updatedAt: number;
+  stateImportedAt?: number;
+  phase: PendingReplyPhase;
+  attempt: number;
+  creationMode: 'direct' | 'random';
+  failureReason?: string;
+};
+
 export type MeetingEventLine = {
   id: string;
   speaker: 'user' | 'character' | 'system';
@@ -1015,7 +1035,7 @@ export type SNSGodState = {
   notificationEvents?: Record<string, NotificationEventReceipt>;
   randomChats?: RandomChatRoom[];
   randomCharacters?: SNSGodCharacter[];
-  pendingReplies?: Record<string, { jobId: string; startedAt: number; phase?: 'delay' | 'typing' | 'generating' }>;
+  pendingReplies?: Record<string, PendingReplyJob>;
   meetingEventSessions?: MeetingEventSession[];
   activeMeetingEventId?: string;
   blindDate?: BlindDateProgress;

@@ -32,7 +32,7 @@ import { Avatar } from './components/Avatar';
 import { MenuHubScreen } from './screens/MenuHubScreen';
 import { flushSaveState, getStoragePaths, importState, loadState, recordSkippedSaveBeforeHydration, saveStateDebounced, SaveStateOptions } from './storage/persist';
 import { colors } from './theme';
-import { NotificationItem, SNSGodCharacter, SNSGodState, SNSPost } from './types';
+import { NotificationItem, PendingReplyJob, SNSGodCharacter, SNSGodState, SNSPost } from './types';
 import { isAutomationQueueBusy, runAutomationQueueTick } from './logic/automationQueue';
 import { cancelAllChatJobs, cancelChatJob } from './logic/chatJobs';
 import { maybePromptBatteryOptimizationExemption, setAutomationKeepAliveRunning } from './logic/backgroundAutomation';
@@ -61,8 +61,8 @@ import { getSumGodProgress, invalidateSumGodBackupWrites, replaceSumGodBackup } 
 import { resetDatingImageQueue } from './logic/datingApp';
 import { importFullBackupZip, type PreparedFullBackupRestore } from './logic/backup';
 import { notificationRouteRequestFromUrl, openNotificationRequest, type NotificationRoute, type NotificationRouteRequest } from './logic/notificationRouting';
+import { cancelAllPendingReplyJobs, reconcilePendingReplyJobs } from './logic/pendingReplyJobs';
 
-const INTERRUPTED_REPLY_RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MEDIA_REPLACEMENT_CACHE_TTL_MS = 30_000;
 const MEDIA_REPLACEMENT_CACHE_SWEEP_MS = 5_000;
 const MEDIA_REPLACEMENT_CACHE_MAX_ENTRIES = 12;
@@ -112,6 +112,7 @@ type CommitOptions = {
   conflict?: 'incoming' | 'latest';
   persist?: boolean;
   save?: SaveStateOptions;
+  flush?: boolean;
 };
 
 export default function App() {
@@ -141,8 +142,8 @@ export default function App() {
   const meetingEventWorkRef = useRef(new Map<string, Promise<boolean>>());
   const pendingNotificationRequestRef = useRef<NotificationRouteRequest | null>(null);
 
-  function clearRuntimeOnlyState(next: SNSGodState): SNSGodState {
-    return { ...next, pendingReplies: {} };
+  function reconcileLoadedState(next: SNSGodState): { state: SNSGodState; resumable: PendingReplyJob[] } {
+    return reconcilePendingReplyJobs(next);
   }
 
   function sameRoute(a: Route, b: Route): boolean {
@@ -202,7 +203,13 @@ export default function App() {
         void appendDebugLog('media.gc', `startup recovery failed: ${error instanceof Error ? error.message : String(error)}`, 'warn');
       });
     loadState().then(next => {
-      const ready = clearRuntimeOnlyState(next);
+      const recoveredReplies = reconcileLoadedState(next);
+      const ready = isServerMessagingEnabled(recoveredReplies.state)
+        ? cancelAllPendingReplyJobs(recoveredReplies.state, 'server-messaging-enabled')
+        : recoveredReplies.state;
+      if (ready !== next) {
+        saveStateDebounced(ready, { important: true, reason: 'pending reply startup reconciliation' });
+      }
       setState(ready);
       stateRef.current = ready;
       hydratedRef.current = true;
@@ -214,7 +221,7 @@ export default function App() {
       if (isServerMessagingEnabled(ready)) {
         void syncOracleMessages('startup');
       } else {
-        setTimeout(() => resumeInterruptedReplies(ready), 0);
+        setTimeout(() => resumeInterruptedReplies(ready, recoveredReplies.resumable), 0);
       }
       // Only after real device battery-opt check; skips when already excluded.
       setTimeout(() => {
@@ -620,6 +627,15 @@ export default function App() {
       ...options.save,
       onMediaExternalized: applyPersistedMediaUris,
     });
+    if (options.flush) {
+      await flushSaveState(committed, {
+        backup: 'skip',
+        verify: 'sqlite',
+        defer: false,
+        reason: options.save?.reason || 'critical state transition',
+        onMediaExternalized: applyPersistedMediaUris,
+      });
+    }
   }
 
   async function commitCurrent(patch: (current: SNSGodState) => SNSGodState, options?: CommitOptions) {
@@ -749,7 +765,7 @@ export default function App() {
       return true;
     }
   }
-  function requestReply(roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean; userMessageCreatedAt?: number; latestUserImageData?: string }) {
+  function requestReply(roomId: string, characterId: string, latestUserInput: string, options?: { randomMode?: boolean; sourceMessageId?: string; userMessageCreatedAt?: number; latestUserImageData?: string }) {
     const operationEpoch = runtimeEpochRef.current;
     const current = stateRef.current || state;
     if (!isRuntimeEpochCurrent(operationEpoch) || !current || isRoomDisabled(current, roomId)) return;
@@ -761,6 +777,7 @@ export default function App() {
       roomId,
       characterId,
       latestUserInput,
+      sourceMessageId: options?.sourceMessageId,
       latestUserImageData: options?.latestUserImageData,
       userMessageCreatedAt: options?.userMessageCreatedAt,
       randomMode: options?.randomMode,
@@ -879,32 +896,24 @@ export default function App() {
     });
   }
 
-  function resumeInterruptedReplies(snapshot: SNSGodState) {
+  function resumeInterruptedReplies(snapshot: SNSGodState, jobs: PendingReplyJob[]) {
     if (isServerMessagingEnabled(snapshot)) return;
-    const now = Date.now();
-    for (const room of allRooms(snapshot)) {
-      if (snapshot.pendingReplies?.[room.id]) continue;
-      if (isRoomDisabled(snapshot, room.id)) continue;
-      const messages = snapshot.messages[room.id] || [];
-      const userIndex = [...messages].map((message, index) => ({ message, index })).reverse().find(item => item.message.role === 'user')?.index ?? -1;
-      if (userIndex < 0) continue;
-      const userMessage = messages[userIndex];
-      if (userMessage.readAt || now - Number(userMessage.createdAt || 0) > INTERRUPTED_REPLY_RECOVERY_WINDOW_MS) continue;
-      const newerMessages = messages.slice(userIndex + 1);
-      if (newerMessages.some(message => message.role === 'character' || (message.role === 'system' && message.failed))) continue;
-      const character = findCharacter(snapshot, room.characterId);
-      if (!character || character.enabled === false) continue;
-      const promptText = [
-        userMessage.content || (userMessage.mediaData ? '사진을 보냈습니다.' : ''),
-        userMessage.mediaData ? '[사용자가 사진을 보냈습니다.]' : '',
-        userMessage.sticker ? `[스티커: ${userMessage.sticker}]` : ''
-      ].filter(Boolean).join('\n');
-      if (!promptText) continue;
-      void appendDebugLog('reply.recover', `resume room=${room.id} character=${character.id} message=${userMessage.id}`);
-      requestReply(room.id, character.id, promptText, {
-        randomMode: room.type === 'random',
-        userMessageCreatedAt: userMessage.createdAt,
-        latestUserImageData: typeof userMessage.mediaData === 'string' ? userMessage.mediaData : undefined
+    const operationEpoch = runtimeEpochRef.current;
+    for (const job of jobs) {
+      const sourceMessage = (snapshot.messages[job.roomId] || []).find(message => message.id === job.sourceMessageId);
+      void appendDebugLog('reply.recover', `resume room=${job.roomId} character=${job.characterId} message=${job.sourceMessageId} attempt=${job.attempt}`);
+      void startReplyJob({
+        roomId: job.roomId,
+        characterId: job.characterId,
+        sourceMessageId: job.sourceMessageId,
+        latestUserInput: job.latestUserInput,
+        latestUserImageData: job.latestUserImageData
+          || (typeof sourceMessage?.mediaData === 'string' ? sourceMessage.mediaData : undefined),
+        userMessageCreatedAt: job.sourceMessageCreatedAt,
+        randomMode: job.creationMode === 'random',
+        resumeJob: job,
+        getState: () => isRuntimeEpochCurrent(operationEpoch) ? stateRef.current : null,
+        commitCurrent: (patch, commitOptions) => commitCurrentAtEpoch(operationEpoch, patch, commitOptions),
       });
     }
   }
@@ -941,7 +950,8 @@ export default function App() {
         : prepared.state;
       stateImportStarted = true;
       await importState(candidate, JSON.stringify(candidate));
-      const next = clearRuntimeOnlyState(await loadState());
+      const next = reconcileLoadedState(await loadState()).state;
+      await flushSaveState(next, { important: true, reason: 'pending reply restore reconciliation' });
       await replaceSumGodBackup(
         getSumGodProgress(next),
         next.__importedAt,
@@ -976,7 +986,7 @@ export default function App() {
         }
       }
       if (currentBeforeRestore) {
-        const recovered = clearRuntimeOnlyState(currentBeforeRestore);
+        const recovered = cancelAllPendingReplyJobs(currentBeforeRestore, 'restore-runtime-reset');
         stateRef.current = recovered;
         setState(recovered);
       }
@@ -1009,7 +1019,7 @@ export default function App() {
       reason: 'reload saved state',
       onMediaExternalized: applyPersistedMediaUris,
     });
-    const next = clearRuntimeOnlyState(await loadState());
+    const next = reconcileLoadedState(await loadState()).state;
     setState(next);
     stateRef.current = next;
     void appendDebugLog('debug', `saved state reloaded: characters=${next.characters.length}`);
@@ -1029,7 +1039,7 @@ export default function App() {
     } catch (error) {
       void appendDebugLog('debug', `DevSettings reload unavailable: ${error instanceof Error ? error.message : String(error)}`, 'warn');
     }
-    const next = clearRuntimeOnlyState(await loadState());
+    const next = reconcileLoadedState(await loadState()).state;
     routeHistoryRef.current = [];
     routeEpochRef.current += 1;
     setIncomingCall(null);

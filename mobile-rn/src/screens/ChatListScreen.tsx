@@ -4,6 +4,7 @@ import { Avatar } from '../components/Avatar';
 import { colors } from '../theme';
 import { GroupRoom, SNSGodCharacter, SNSGodRoom, SNSGodState } from '../types';
 import { cancelChatJob } from '../logic/chatJobs';
+import { cancelPendingReplyJob } from '../logic/pendingReplyJobs';
 import { deleteRoomCascade } from '../logic/deletionCascadePolicy';
 import { updateRoom } from '../logic/stateHelpers';
 
@@ -107,19 +108,16 @@ export function ChatListScreen({ state, onOpenSettings, onOpenRoom, onNewRoom, o
     setMenu(null);
     const disabled = row.room.disabled !== true;
     cancelChatJob(row.room.id);
-    const pendingReplies = { ...(state.pendingReplies || {}) };
-    delete pendingReplies[row.room.id];
+    const jobState = disabled ? cancelPendingReplyJob(state, row.room.id, 'room-disabled') : state;
     if (row.kind === 'group') {
       await onChange({
-        ...state,
-        pendingReplies,
+        ...jobState,
         groupRooms: (state.groupRooms || []).map(room => room.id === row.room.id ? { ...room, disabled, disabledAt: disabled ? Date.now() : undefined } : room)
       });
       return;
     }
     await onChange({
-      ...updateRoom(state, row.room.id, { disabled, disabledAt: disabled ? Date.now() : undefined }),
-      pendingReplies
+      ...updateRoom(jobState, row.room.id, { disabled, disabledAt: disabled ? Date.now() : undefined }),
     });
   }
 

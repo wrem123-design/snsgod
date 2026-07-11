@@ -1,4 +1,4 @@
-import { SNSGodCharacter, SNSGodMessage, SNSGodState } from '../types';
+import { NotificationDisplayPreferences, SNSGodCharacter, SNSGodMessage, SNSGodState } from '../types';
 import { appendMessage } from './stateHelpers';
 import { makeId } from './ids';
 import { encryptOracleTextGenerationProfile } from './oracleProfileCrypto';
@@ -161,6 +161,7 @@ function safeCharacter(state: SNSGodState, character: SNSGodCharacter) {
   return {
     id: character.id,
     name: character.name,
+    notificationImage: notificationImageForServer(character),
     prompt: character.prompt || '',
     proactiveEnabled: character.proactiveEnabled !== false,
     enabled: character.enabled !== false,
@@ -176,6 +177,18 @@ function safeCharacter(state: SNSGodState, character: SNSGodCharacter) {
     imageContinuity: character.imageContinuity,
     memories: compactLegacyMemoryFacts(character.memories || [], 20),
     structuredMemories
+  };
+}
+
+function notificationImageForServer(character: SNSGodCharacter): string | undefined {
+  const image = String(character.avatar || character.profileImage || '').trim();
+  return /^(?:file|https?):\/\//i.test(image) ? image.slice(0, 4096) : undefined;
+}
+
+function notificationPreferencesForServer(state: SNSGodState): Required<NotificationDisplayPreferences> {
+  return {
+    replies: state.config.notificationPreferences?.replies !== false,
+    proactive: state.config.notificationPreferences?.proactive !== false,
   };
 }
 
@@ -222,6 +235,7 @@ function textGenerationForServer(state: SNSGodState) {
 function bootstrapPayload(state: SNSGodState, excludeMessageIds: string[] = []) {
   return {
     pushToken: state.config.serverMessaging?.pushToken,
+    pushPreferences: notificationPreferencesForServer(state),
     characters: state.characters.filter(character => character.randomTemporary !== true).map(character => safeCharacter(state, character)),
     rooms: [...directRooms(state), ...groupRooms(state)],
     messages: recentMessages(state, excludeMessageIds),

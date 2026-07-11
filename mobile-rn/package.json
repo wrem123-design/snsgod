@@ -1,6 +1,6 @@
 {
   "name": "snsgod-mobile-rn",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "private": true,
   "main": "index.js",
   "scripts": {

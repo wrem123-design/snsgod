@@ -72,6 +72,14 @@ export type ServerMessagingConfig = {
   quietHours?: { enabled?: boolean; startHour?: number; endHour?: number };
   outbox?: Array<{ id: string; roomId: string; content: string; createdAt: number; sticker?: string; hasMedia?: boolean }>;
 };
+
+/** Controls Android system-alert display without changing app message storage. */
+export type NotificationDisplayPreferences = {
+  /** Show remote notifications for replies to user messages. Defaults to true. */
+  replies?: boolean;
+  /** Show remote notifications for character-initiated messages. Defaults to true. */
+  proactive?: boolean;
+};
 export type PromptSet = {
   systemRules: string;
   roleObjective: string;
@@ -115,7 +123,7 @@ export type SNSGodConfig = {
   roomName: string;
   language: string;
   snsTheme?: 'default' | 'kakao';
-  lastSettingsSection?: 'user' | 'characters' | 'stickers' | 'prompts' | 'lorebook' | 'screen' | 'api' | 'image';
+  lastSettingsSection?: 'user' | 'characters' | 'stickers' | 'notifications' | 'prompts' | 'lorebook' | 'screen' | 'api' | 'image';
   prompts?: Partial<PromptSet>;
   autoEnabled?: boolean;
   snsAutoChance?: number;
@@ -136,6 +144,7 @@ export type SNSGodConfig = {
   datingAppAgeRange?: string;
   imageGeneration?: ImageGenerationConfig;
   serverMessaging?: ServerMessagingConfig;
+  notificationPreferences?: NotificationDisplayPreferences;
   sns?: {
     platform?: 'instagram' | 'twitter';
     anonymous?: boolean;

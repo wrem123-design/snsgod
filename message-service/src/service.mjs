@@ -182,6 +182,7 @@ function normalizeCharacter(value) {
   const payload = {
     id: characterId,
     name: text(character.name, 120),
+    notificationImage: text(character.notificationImage, 4096),
     prompt: text(character.prompt, 12000),
     proactiveEnabled: character.proactiveEnabled !== false,
     enabled: character.enabled !== false,
@@ -356,6 +357,25 @@ export function createMessageService({ db, config, now = () => Date.now(), rando
     db.prepare(`INSERT INTO runtime_settings (key, payload, updated_at) VALUES ('text_generation', ?, ?)
       ON CONFLICT(key) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at`)
       .run(JSON.stringify(profile), timestamp);
+  }
+
+  function normalizePushPreferences(value) {
+    const source = value && typeof value === 'object' ? value : {};
+    return {
+      replies: source.replies !== false,
+      proactive: source.proactive !== false
+    };
+  }
+
+  function savePushPreferences(deviceId, preferences, timestamp = now()) {
+    db.prepare(`INSERT INTO runtime_settings (key, payload, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at`)
+      .run(`push_preferences:${deviceId}`, JSON.stringify(normalizePushPreferences(preferences)), timestamp);
+  }
+
+  function pushPreferencesForDevice(deviceId) {
+    const row = db.prepare('SELECT payload FROM runtime_settings WHERE key = ?').get(`push_preferences:${deviceId}`);
+    return normalizePushPreferences(json(row?.payload));
   }
 
   function textGenerationSummary() {
@@ -589,6 +609,7 @@ export function createMessageService({ db, config, now = () => Date.now(), rando
     const timestamp = now();
     transaction(db, () => {
       if (textGeneration) saveTextGeneration(textGeneration, timestamp);
+      if (body.pushPreferences !== undefined) savePushPreferences(device.id, body.pushPreferences, timestamp);
       for (const character of characters) {
         db.prepare(`INSERT INTO characters (id, payload, updated_at) VALUES (?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at`)
@@ -1180,10 +1201,24 @@ export function createMessageService({ db, config, now = () => Date.now(), rando
 
   async function queuePushes(message) {
     const devices = db.prepare('SELECT id, push_token FROM devices WHERE push_token IS NOT NULL AND push_token <> \'\'').all();
+    const notificationKind = message.sourceMode === 'server_proactive' ? 'proactive' : 'reply';
+    const characterRow = message.characterId ? db.prepare('SELECT payload FROM characters WHERE id = ?').get(message.characterId) : undefined;
+    const character = json(characterRow?.payload);
+    const room = db.prepare('SELECT name FROM rooms WHERE id = ?').get(message.roomId);
+    const title = text(character.name || room?.name || 'SNSGod', 120) || 'SNSGod';
+    const image = /^(?:file|https?):\/\//i.test(String(character.notificationImage || ''))
+      ? text(character.notificationImage, 4096)
+      : '';
     for (const device of devices) {
       const outboxId = id('push');
       db.prepare("INSERT INTO push_outbox (id, device_id, message_id, status, created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, ?)")
         .run(outboxId, device.id, message.id, now(), now());
+      const preferences = pushPreferencesForDevice(device.id);
+      const displayAllowed = notificationKind === 'reply' ? preferences.replies : preferences.proactive;
+      if (!displayAllowed) {
+        db.prepare("UPDATE push_outbox SET status = 'skipped', updated_at = ? WHERE id = ?").run(now(), outboxId);
+        continue;
+      }
       if (config.pushProvider === 'none') {
         db.prepare("UPDATE push_outbox SET status = 'skipped', updated_at = ? WHERE id = ?").run(now(), outboxId);
         continue;
@@ -1197,8 +1232,8 @@ export function createMessageService({ db, config, now = () => Date.now(), rando
           body: JSON.stringify({
             message: {
               token: device.push_token,
-              notification: { title: message.characterId || 'SNSGod', body: message.content.slice(0, 140) },
-              data: { roomId: message.roomId, messageId: message.id },
+              notification: { title, body: message.content.slice(0, 140), ...(image ? { image } : {}) },
+              data: { roomId: message.roomId, messageId: message.id, notificationKind },
               android: { priority: 'high', notification: { channel_id: 'snsgod_messages' } }
             }
           })

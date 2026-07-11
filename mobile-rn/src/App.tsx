@@ -319,6 +319,7 @@ export default function App() {
       provider: state.config.apiType,
       profile: state.config.apiProfiles[state.config.apiType] || {}
     },
+    notificationPreferences: state.config.notificationPreferences,
     characters: state.characters.map(character => ({
       id: character.id,
       enabled: character.enabled !== false,
@@ -327,7 +328,8 @@ export default function App() {
       responseDelayMax: character.responseDelayMax,
       frequencyMinutes: character.frequencyMinutes,
       initiative: character.initiative,
-      proactivePatience: character.proactivePatience
+      proactivePatience: character.proactivePatience,
+      notificationImage: character.avatar || character.profileImage || ''
     })),
     directRooms: Object.values(state.chatRooms || {}).flat().map(room => ({ id: room.id, disabled: room.disabled === true })),
     groupRooms: (state.groupRooms || []).map(room => ({ id: room.id, disabled: room.disabled === true, participantIds: room.participantIds }))

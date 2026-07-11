@@ -27,6 +27,52 @@ function harness(options = {}) {
   };
 }
 
+function fcmHarness() {
+  const dir = mkdtempSync(join(tmpdir(), 'snsgod-message-fcm-'));
+  let clock = 1_750_000_000_000;
+  const db = openDatabase(dir);
+  const { privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' }
+  });
+  const accountPath = join(dir, 'firebase-service-account.json');
+  writeFileSync(accountPath, JSON.stringify({
+    project_id: 'snsgod-test',
+    client_email: 'fcm-test@snsgod-test.iam.gserviceaccount.com',
+    private_key: privateKey,
+    token_uri: 'https://oauth.example.test/token'
+  }));
+  const fcmRequests = [];
+  const service = createMessageService({
+    db,
+    config: {
+      bootstrapSecret: 'pairing-secret',
+      llmProvider: 'mock',
+      pushProvider: 'fcm',
+      firebaseServiceAccountPath: accountPath
+    },
+    now: () => clock,
+    random: () => 0,
+    fetchImpl: async (url, options) => {
+      if (String(url).includes('oauth.example.test')) {
+        return new Response(JSON.stringify({ access_token: 'test-access-token', expires_in: 3600 }), { status: 200 });
+      }
+      fcmRequests.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ name: 'projects/snsgod-test/messages/test-message' }), { status: 200 });
+    }
+  });
+  return {
+    dir,
+    db,
+    service,
+    fcmRequests,
+    now() { return clock; },
+    advance(ms) { clock += ms; },
+    close() { db.close(); rmSync(dir, { recursive: true, force: true }); }
+  };
+}
+
 test('a scheduled server reply is persisted and emitted through sync once', async () => {
   const app = harness();
   try {
@@ -157,6 +203,72 @@ test('scheduler repairs an existing recent user message that never received a re
     const replies = app.service.sync({ cursor: 0 }, headers).messages.filter(message => message.role === 'character');
     assert.equal(replies.length, 1);
     assert.equal(replies[0].sourceMessageId, 'orphan-user');
+  } finally {
+    app.close();
+  }
+});
+
+test('FCM uses the character display name and profile image for reply alerts', async () => {
+  const app = fcmHarness();
+  try {
+    const registration = app.service.register({ deviceId: 'phone-fcm-display', bootstrapSecret: 'pairing-secret', pushToken: 'fcm-device-token' });
+    const headers = { 'x-device-id': 'phone-fcm-display', 'x-device-token': registration.deviceToken };
+    app.service.bootstrap({
+      pushPreferences: { replies: true, proactive: true },
+      characters: [{ id: 'mika-id', name: '미카', notificationImage: 'https://images.example.test/mika.png' }],
+      rooms: [{ id: 'room-fcm-display', type: 'direct', name: '미카 방', characterId: 'mika-id', automation: { responseDelayMin: 0, responseDelayMax: 0 } }]
+    }, headers);
+    app.service.receiveMessage({ id: 'fcm-user-message', roomId: 'room-fcm-display', content: '안녕' }, headers);
+    await app.service.runScheduler();
+
+    assert.equal(app.fcmRequests.length, 1);
+    assert.equal(app.fcmRequests[0].message.notification.title, '미카');
+    assert.equal(app.fcmRequests[0].message.notification.image, 'https://images.example.test/mika.png');
+    assert.equal(app.fcmRequests[0].message.data.notificationKind, 'reply');
+  } finally {
+    app.close();
+  }
+});
+
+test('disabled reply alerts skip FCM but preserve generated messages for sync', async () => {
+  const app = fcmHarness();
+  try {
+    const registration = app.service.register({ deviceId: 'phone-fcm-disabled', bootstrapSecret: 'pairing-secret', pushToken: 'fcm-device-token' });
+    const headers = { 'x-device-id': 'phone-fcm-disabled', 'x-device-token': registration.deviceToken };
+    app.service.bootstrap({
+      pushPreferences: { replies: false, proactive: true },
+      characters: [{ id: 'mika-id', name: '미카' }],
+      rooms: [{ id: 'room-fcm-disabled', type: 'direct', name: '미카 방', characterId: 'mika-id', automation: { responseDelayMin: 0, responseDelayMax: 0 } }]
+    }, headers);
+    app.service.receiveMessage({ id: 'fcm-disabled-user', roomId: 'room-fcm-disabled', content: '앱에는 남겨줘' }, headers);
+    await app.service.runScheduler();
+
+    assert.equal(app.fcmRequests.length, 0);
+    assert.equal(app.service.sync({ cursor: 0 }, headers).messages.filter(message => message.role === 'character').length, 1);
+    assert.equal(app.db.prepare('SELECT status FROM push_outbox ORDER BY created_at DESC LIMIT 1').get().status, 'skipped');
+  } finally {
+    app.close();
+  }
+});
+
+test('disabled proactive alerts skip FCM while keeping proactive messages for sync', async () => {
+  const app = fcmHarness();
+  try {
+    const registration = app.service.register({ deviceId: 'phone-proactive-disabled', bootstrapSecret: 'pairing-secret', pushToken: 'fcm-device-token' });
+    const headers = { 'x-device-id': 'phone-proactive-disabled', 'x-device-token': registration.deviceToken };
+    app.service.bootstrap({
+      pushPreferences: { replies: true, proactive: false },
+      characters: [{ id: 'mika-id', name: '미카', initiative: 100, frequencyMinutes: 1, timeZone: 'UTC' }],
+      rooms: [{ id: 'room-proactive-disabled', type: 'direct', name: '미카 방', characterId: 'mika-id', automation: { proactiveEnabled: true, frequencyMinutes: 1, initiative: 100 } }]
+    }, headers);
+    const dueAt = Number(app.db.prepare("SELECT due_at FROM message_jobs WHERE kind = 'proactive' AND status = 'pending'").get().due_at);
+    app.advance(Math.max(0, dueAt - app.now()) + 1);
+    const schedulerResult = await app.service.runScheduler();
+
+    assert.equal(app.fcmRequests.length, 0);
+    const synchronized = app.service.sync({ cursor: 0 }, headers).messages;
+    assert.ok(synchronized.some(message => message.sourceMode === 'server_proactive'), JSON.stringify({ schedulerResult, synchronized }));
+    assert.equal(app.db.prepare('SELECT status FROM push_outbox ORDER BY created_at DESC LIMIT 1').get().status, 'skipped');
   } finally {
     app.close();
   }

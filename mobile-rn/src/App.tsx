@@ -66,7 +66,7 @@ import { importFullBackupZip, type PreparedFullBackupRestore } from './logic/bac
 import { notificationRouteRequestFromUrl, openNotificationRequest, type NotificationRoute, type NotificationRouteRequest } from './logic/notificationRouting';
 import { cancelAllPendingReplyJobs, reconcilePendingReplyJobs } from './logic/pendingReplyJobs';
 import { normalizePersistedInteractionLifecycles, pauseActiveInteractions, resumePointedInteractions } from './logic/interactionLifecycle';
-import { rootForRouteName, routeForRoot } from './logic/rootNavigation';
+import { rootForRouteName, routeForRoot, shouldShowBottomNavigation } from './logic/rootNavigation';
 import { isRemoteServicesEnabled } from './logic/remoteServicePolicy';
 import { carryStateSecrets } from './storage/secureSecrets';
 
@@ -1180,7 +1180,7 @@ export default function App() {
     return rootForRouteName(route.name);
   }
 
-  const showBottomNav = route.name === 'chatList' || route.name === 'notifications' || route.name === 'feedHub' || route.name === 'sns' || route.name === 'discoverHub' || route.name === 'random' || route.name === 'streetEncounter' || route.name === 'blindDate' || route.name === 'datingApp' || route.name === 'idealWorldcup' || route.name === 'archiveHub' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'references';
+  const showBottomNav = shouldShowBottomNavigation(route.name);
 
   async function leaveRandomRoom(roomId: string) {
     const operationEpoch = runtimeEpochRef.current;

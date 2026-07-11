@@ -22,7 +22,10 @@ const { applyStateMediaUriReplacements } = await importPureTypeScript('src/logic
 const backupSource = readFileSync(new URL('../src/logic/backup.ts', import.meta.url), 'utf8');
 const mediaSource = readFileSync(new URL('../src/logic/media.ts', import.meta.url), 'utf8');
 const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
-const settingsSource = readFileSync(new URL('../src/screens/SettingsScreen.tsx', import.meta.url), 'utf8');
+const settingsSource = [
+  readFileSync(new URL('../src/screens/SettingsScreen.tsx', import.meta.url), 'utf8'),
+  readFileSync(new URL('../src/screens/settings/BackupSettingsSection.tsx', import.meta.url), 'utf8'),
+].join('\n');
 const debugSource = readFileSync(new URL('../src/screens/DebugScreen.tsx', import.meta.url), 'utf8');
 const persistSource = readFileSync(new URL('../src/storage/persist.ts', import.meta.url), 'utf8');
 

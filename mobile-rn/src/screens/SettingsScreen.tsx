@@ -53,23 +53,23 @@ const PROVIDER_PRESETS: Partial<Record<ApiProvider, { endpoint: string; model: s
 
 type ImageProvider = 'grok-local' | 'grok-cloud' | 'openai';
 
-type SettingsSection = 'user' | 'characters' | 'stickers' | 'prompts' | 'lorebook' | 'screen' | 'api' | 'image';
+type SettingsMode = 'basic' | 'advanced';
+type SettingsSection = 'user' | 'characters' | 'stickers' | 'screen' | 'backup' | 'api' | 'image' | 'prompts' | 'lorebook';
 
-const SECTION_TABS: { key: SettingsSection; label: string }[] = [
-  { key: 'user', label: '유저 설정' },
-  { key: 'characters', label: '캐릭터별 설정' },
+const BASIC_SECTION_TABS: { key: SettingsSection; label: string }[] = [
+  { key: 'user', label: '기본' },
+  { key: 'characters', label: '캐릭터' },
   { key: 'stickers', label: '스티커' },
-  { key: 'prompts', label: '프롬프트' },
-  { key: 'lorebook', label: '공통 로어북' },
   { key: 'screen', label: '화면' },
-  { key: 'api', label: 'API' },
-  { key: 'image', label: '이미지' }
+  { key: 'backup', label: '백업' },
 ];
 
-function getSettingsSection(value: unknown): SettingsSection {
-  if (value === 'prompts') return 'user';
-  return SECTION_TABS.some(tab => tab.key === value) ? value as SettingsSection : 'user';
-}
+const ADVANCED_SECTION_TABS: { key: SettingsSection; label: string }[] = [
+  { key: 'api', label: 'AI·서버' },
+  { key: 'image', label: '이미지 생성' },
+  { key: 'prompts', label: '원문 프롬프트' },
+  { key: 'lorebook', label: '로어북' },
+];
 
 type SnsSettingsPlatform = 'instagram' | 'twitter';
 
@@ -246,7 +246,8 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
   onOpenPrompts?: () => void;
   onOpenCharacterSettings?: (characterId: string) => void;
 }) {
-  const [activeSection, setActiveSection] = useState<SettingsSection>(() => getSettingsSection(state.config.lastSettingsSection));
+  const [activeSection, setActiveSection] = useState<SettingsSection>('user');
+  const [settingsMode, setSettingsMode] = useState<SettingsMode>('basic');
   const [contentReady, setContentReady] = useState(false);
   const [optimizationStatus, setOptimizationStatus] = useState<RecommendedOptimizationStatus | null>(null);
   const [optimizationChecking, setOptimizationChecking] = useState(false);
@@ -420,6 +421,11 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
       return;
     }
     setActiveSection(section);
+  }
+
+  function openSettingsMode(mode: SettingsMode) {
+    setSettingsMode(mode);
+    setActiveSection(mode === 'basic' ? 'user' : 'api');
   }
 
   function applyEventPreset(preset: typeof EVENT_PRESETS[number]) {
@@ -1364,9 +1370,17 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
         <Pressable onPress={onBack} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable>
         <Text style={styles.title}>설정</Text>
       </View>
+      <View style={styles.modeBar} accessibilityLabel="설정 범위 선택">
+        <Pressable onPress={() => openSettingsMode('basic')} style={[styles.modeButton, settingsMode === 'basic' && styles.modeButtonActive]} accessibilityRole="tab" accessibilityState={{ selected: settingsMode === 'basic' }}>
+          <Text style={[styles.modeButtonText, settingsMode === 'basic' && styles.modeButtonTextActive]}>기본 설정</Text>
+        </Pressable>
+        <Pressable onPress={() => openSettingsMode('advanced')} style={[styles.modeButton, settingsMode === 'advanced' && styles.modeButtonActive]} accessibilityRole="tab" accessibilityState={{ selected: settingsMode === 'advanced' }}>
+          <Text style={[styles.modeButtonText, settingsMode === 'advanced' && styles.modeButtonTextActive]}>고급 설정</Text>
+        </Pressable>
+      </View>
       <View style={styles.sectionBar}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sectionBarContent}>
-          {SECTION_TABS.map(tab => (
+          {(settingsMode === 'basic' ? BASIC_SECTION_TABS : ADVANCED_SECTION_TABS).map(tab => (
             <Pressable key={tab.key} onPress={() => { void openSection(tab.key); }} style={[styles.sectionTab, activeSection === tab.key && styles.sectionTabActive]}>
               <Text style={[styles.sectionTabText, activeSection === tab.key && styles.sectionTabTextActive]}>{tab.label}</Text>
             </Pressable>
@@ -1376,6 +1390,12 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
       <ScrollView contentContainerStyle={styles.content}>
         {contentReady ? (
           <>
+        {settingsMode === 'advanced' ? (
+          <View style={styles.advancedNotice} accessibilityLabel="고급 설정 안내">
+            <Text style={styles.advancedNoticeTitle}>직접 연결과 원문 편집</Text>
+            <Text style={styles.advancedNoticeText}>Provider 주소·키, Oracle 서버, 이미지 규칙과 원문 프롬프트는 동작을 이해할 때만 수정하세요. 기존 값은 그대로 유지됩니다.</Text>
+          </View>
+        ) : null}
         {status ? <View style={styles.statusBox}><Text style={styles.statusText}>{status}</Text></View> : null}
         <View style={[styles.card, activeSection !== 'characters' && styles.hidden]}>
           <Text style={styles.cardTitle}>캐릭터별 설정</Text>
@@ -1430,6 +1450,15 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
             </Pressable>
           ))}
         </View>
+        <View style={[styles.card, activeSection !== 'user' && styles.hidden]}>
+          <Text style={styles.cardTitle}>로컬 데이터 기준</Text>
+          <Text style={styles.help}>{remoteServicesEnabled ? 'Oracle 원격 보조 모드' : '로컬 전용 모드'} · 앱 데이터와 미디어는 이 기기를 기준으로 관리합니다.</Text>
+          <SwitchLine label="Oracle 원격 보조 모드" value={remoteServicesEnabled} onChange={value => void changeDataBoundaryMode(value)} />
+          <Text style={styles.help}>기본 로컬 전용 모드에서는 시작·복귀·설정 저장만으로 서버 등록, 메시지 동기화, 외부 푸시 초기화를 수행하지 않습니다.</Text>
+          <Text style={styles.help}>AI 답장이나 이미지 생성을 직접 실행하면 선택한 Provider로 요청할 수 있습니다. Provider·서버 주소와 원문 프롬프트는 고급 설정에 있습니다.</Text>
+          <Text style={styles.help}>API 키와 서버 토큰은 Android 보안 저장소에 분리하며 일반 앱 상태·전체 백업·진단 로그에는 넣지 않습니다.</Text>
+        </View>
+
         <View style={[styles.card, activeSection !== 'user' && styles.hidden]}>
           <Text style={styles.cardTitle}>내 기본 프로필</Text>
           <Text style={styles.label}>프로필 프리셋</Text>
@@ -1521,16 +1550,8 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
         </View>
 
         <View style={[styles.card, activeSection !== 'api' && styles.hidden]}>
-          <Text style={styles.cardTitle}>데이터 연결 방식</Text>
-          <Text style={styles.help}>{remoteServicesEnabled ? '원격 보조 모드' : '로컬 전용 모드'} · 앱 데이터와 미디어는 이 기기를 기준으로 관리합니다.</Text>
-          <SwitchLine label="Oracle 원격 보조 모드" value={remoteServicesEnabled} onChange={value => void changeDataBoundaryMode(value)} />
-          <Text style={styles.help}>로컬 전용 모드에서는 앱 시작·복귀·설정 저장 시 Oracle 기기 등록, 서버 메시지 동기화, 외부 푸시 초기화를 수행하지 않습니다.</Text>
-          <Text style={styles.help}>AI 답장이나 이미지 생성을 직접 실행하면 선택한 Provider로 요청할 수 있습니다. 이 동작은 Oracle 원격 보조 모드와 별개입니다.</Text>
-          <Text style={styles.help}>API 키, 서비스 계정, Proxy 토큰과 서버 기기 토큰은 Android 보안 저장소에 분리하며 일반 앱 상태·전체 백업·진단 로그에는 넣지 않습니다.</Text>
-        </View>
-
-        <View style={[styles.card, activeSection !== 'api' && styles.hidden]}>
-          <Text style={styles.cardTitle}>API 설정</Text>
+          <Text style={styles.cardTitle}>AI Provider 직접 설정</Text>
+          <Text style={styles.help}>Endpoint, 모델, 키와 생성값은 고급 항목입니다. 프리셋을 선택하면 주소와 모델을 함께 채우며, 현재 저장값은 이 화면을 열어도 바뀌지 않습니다.</Text>
           <Text style={styles.label}>Provider</Text>
           <View style={styles.segmentRow}>
             {PROVIDERS.map(item => (
@@ -1843,12 +1864,6 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
           <Pressable onPress={saveImageGeneration} style={styles.primary}><Text style={styles.primaryText}>이미지 설정 저장</Text></Pressable>
         </View>
 
-        <View style={[styles.card, activeSection !== 'prompts' && styles.hidden]}>
-          <Text style={styles.cardTitle}>SNS 생성 설정</Text>
-          <Text style={styles.help}>SNS 생성 세부값은 캐릭터마다 다르게 적용됩니다. Instagram/X별 무드, 소재, 댓글, DM, 이미지 옵션은 SNS 화면에서 캐릭터를 선택한 뒤 저장하세요.</Text>
-          <Text style={styles.help}>이 화면에는 전역 자동화와 프롬프트만 남겨 캐릭터별 고유 SNS 옵션과 섞이지 않게 했습니다.</Text>
-        </View>
-
         <View style={[styles.card, activeSection !== 'user' && styles.hidden]}>
           <Text style={styles.cardTitle}>자동화</Text>
           <Text style={styles.help}>전체 자동화가 켜져 있으면 약 60초마다 조건을 확인합니다. 홈으로 나가 백그라운드에 둔 상태에서도 알림 표시(자동화 실행 중)로 프로세스를 유지해 선톡·SNS 등을 계속 돌립니다. 최근 앱에서 스와이프해 완전 종료하면 멈춥니다. API 설정이 비어 있으면 자동 생성은 실행되지 않습니다.</Text>
@@ -1948,7 +1963,7 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
           <Pressable onPress={saveAutomation} style={styles.primary}><Text style={styles.primaryText}>자동화 저장</Text></Pressable>
         </View>
 
-        <View style={[styles.card, activeSection !== 'user' && styles.hidden]}>
+        <View style={[styles.card, activeSection !== 'backup' && styles.hidden]}>
           <Text style={styles.cardTitle}>백업</Text>
           <Text style={styles.label}>사진 포함 전체 백업</Text>
           <Text style={styles.help}>캐릭터·대화·설정과 앱이 관리하는 사진을 함께 저장합니다. 일반 ZIP은 호환성이 높고, 암호화 .sgbackup은 파일을 다른 곳에 보관할 때 내용을 보호합니다.</Text>
@@ -1973,11 +1988,6 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
           <Pressable onPress={importBackupFile} disabled={saving} style={[styles.secondary, saving && styles.disabled]}><Text style={styles.secondaryText}>JSON 파일 선택 임포트</Text></Pressable>
           <Pressable onPress={importPastedBackup} disabled={saving} style={[styles.secondary, saving && styles.disabled]}><Text style={styles.secondaryText}>붙여넣은 JSON 임포트</Text></Pressable>
           <Pressable onPress={exportBackup} style={styles.secondary}><Text style={styles.secondaryText}>상태만 JSON 내보내기/공유</Text></Pressable>
-        </View>
-        <View style={[styles.card, activeSection !== 'prompts' && styles.hidden]}>
-          <Text style={styles.cardTitle}>프롬프트</Text>
-          <Text style={styles.help}>대화, SNS, 프로필 생성 지시문을 원본 PC 버전처럼 별도 화면에서 편집합니다.</Text>
-          <Pressable onPress={onOpenPrompts} style={styles.secondary}><Text style={styles.secondaryText}>프롬프트 관리</Text></Pressable>
         </View>
         <View style={[styles.card, activeSection !== 'lorebook' && styles.hidden]}>
           <Text style={styles.cardTitle}>공통 로어북</Text>
@@ -2029,6 +2039,11 @@ const styles = StyleSheet.create({
   back: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 20, backgroundColor: '#eee8dc' },
   backText: { fontSize: 32, color: colors.text, lineHeight: 34 },
   title: { fontSize: 21, fontWeight: '900', color: colors.text },
+  modeBar: { flexDirection: 'row', gap: 8, paddingHorizontal: 12, paddingTop: 10, backgroundColor: colors.panel },
+  modeButton: { flex: 1, minHeight: 42, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
+  modeButtonActive: { backgroundColor: colors.text, borderColor: colors.text },
+  modeButtonText: { color: colors.sub, fontSize: 13, fontWeight: '900' },
+  modeButtonTextActive: { color: '#ffffff' },
   sectionBar: { backgroundColor: colors.panel, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   sectionBarContent: { paddingHorizontal: 12, paddingVertical: 10, gap: 8 },
   sectionTab: { minHeight: 36, paddingHorizontal: 12, borderRadius: 18, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa', alignItems: 'center', justifyContent: 'center' },
@@ -2036,6 +2051,9 @@ const styles = StyleSheet.create({
   sectionTabText: { color: colors.sub, fontWeight: '900', fontSize: 12 },
   sectionTabTextActive: { color: '#241a00' },
   content: { padding: 16, gap: 14 },
+  advancedNotice: { borderWidth: 1, borderColor: '#d6c48f', borderRadius: 8, backgroundColor: '#fff8dd', padding: 14 },
+  advancedNoticeTitle: { color: colors.text, fontSize: 15, fontWeight: '900' },
+  advancedNoticeText: { marginTop: 5, color: colors.sub, fontSize: 12, fontWeight: '700', lineHeight: 18 },
   card: { backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 14 },
   loadingCard: { minHeight: 96, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panel, alignItems: 'center', justifyContent: 'center', padding: 14 },
   loadingText: { color: colors.sub, fontWeight: '900' },

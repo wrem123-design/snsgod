@@ -4,6 +4,7 @@ import { makeId } from './ids';
 import { encryptOracleTextGenerationProfile } from './oracleProfileCrypto';
 import { compactLegacyMemoryFacts } from './memoryBridge';
 import { applyMessageToCharacterWorld, resolveCharacterRuntimeState } from './characterWorld';
+import { isRemoteServicesEnabled } from './remoteServicePolicy';
 
 type ServerMessagingConfig = NonNullable<SNSGodState['config']['serverMessaging']>;
 
@@ -32,6 +33,7 @@ function trimUrl(value: unknown): string {
 }
 
 function serverConfig(state: SNSGodState): ServerMessagingConfig | undefined {
+  if (!isRemoteServicesEnabled(state)) return undefined;
   const config = state.config.serverMessaging;
   return config?.enabled && trimUrl(config.baseUrl) ? config : undefined;
 }
@@ -217,6 +219,7 @@ export function newServerDeviceId(): string {
 }
 
 export async function registerServerDevice(state: SNSGodState, deviceName = 'SNSGod Android'): Promise<SNSGodState> {
+  if (!isRemoteServicesEnabled(state)) throw new Error('로컬 전용 모드에서는 서버에 기기를 등록하지 않습니다. 원격 보조 모드를 먼저 켜세요.');
   const config = state.config.serverMessaging;
   if (!config?.enabled || !trimUrl(config.baseUrl)) throw new Error('서버 주소를 먼저 입력하세요.');
   const pairingSecret = String(config.pairingSecret || '').trim();

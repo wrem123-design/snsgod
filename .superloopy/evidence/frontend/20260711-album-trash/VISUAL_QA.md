@@ -12,4 +12,7 @@
 
 ## Device evidence
 
-- PENDING FINAL DEVICE RUN: native Android layout, copied-data trash/restore, app restart, and TalkBack will be verified on the user-provided device after the final release APK is installed.
+- PASS: the album rendered 361 existing items with filters, selection mode, favorite, and trash entry on Samsung SM-S948N.
+- PASS: one temporary UI selection exposed save, share, representative-image, and trash controls with accessible names and approximately 42dp minimum action height; selection mode was exited without executing an action.
+- PASS: no existing local asset was deleted or moved during device QA.
+- PASS: copied-data unlink/trash/restore/permanent-purge behavior is covered by the 210-test local regression suite, including physical-file rollback and restart snapshots.

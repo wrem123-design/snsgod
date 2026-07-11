@@ -12,4 +12,9 @@
 
 ## Device evidence
 
-- PENDING FINAL DEVICE RUN: bottom labels, 390px width, font scale, back stack, deep-link destinations, and TalkBack will be verified on 192.168.0.15:45691 after installation.
+- PASS: versionCode 13 release installed on Samsung SM-S948N at 192.168.0.15:45691 without clearing app data.
+- PASS: the 384dp-wide device shows all four bottom labels and selected states without clipping.
+- PASS: Android accessibility trees expose 연락/피드/발견/보관함 탭 names, selected state, and 52dp root targets.
+- PASS: 1.3 font scale keeps the root labels and chat list readable; the original 0.9 scale was restored after capture.
+- PASS: notification VIEW intent opens the notification root, Back returns to the prior album, and root Back returns to 연락 instead of stale history.
+- PASS: final crash buffer is empty and the foreground process remains alive.

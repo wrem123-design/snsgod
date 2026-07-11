@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme';
-import { SNSGodState } from '../types';
+import { MediaAlbumTrashRecord, SNSGodState } from '../types';
 import { type MediaGarbageCollectionResult } from '../logic/media';
 import {
   collectMediaAlbumAssets,
@@ -86,6 +86,10 @@ export function GalleryScreen({
   onCommitCurrent,
   onPreviewMediaCleanup,
   onTrashMediaCleanup,
+  onUnlinkAlbumReference,
+  onTrashAlbumAssets,
+  onRestoreAlbumTrash,
+  onPurgeAlbumTrash,
 }: {
   state: SNSGodState;
   onBack: () => void;
@@ -93,6 +97,10 @@ export function GalleryScreen({
   onCommitCurrent?: (patch: (current: SNSGodState) => SNSGodState) => unknown;
   onPreviewMediaCleanup: () => Promise<MediaGarbageCollectionResult>;
   onTrashMediaCleanup: () => Promise<MediaGarbageCollectionResult>;
+  onUnlinkAlbumReference: (asset: MediaAlbumAsset, referenceId: string) => Promise<{ removedReferences: MediaAlbumAsset['references']; missingReferenceIds: string[] }>;
+  onTrashAlbumAssets: (assets: readonly MediaAlbumAsset[]) => Promise<{ records: MediaAlbumTrashRecord[]; missingReferenceIds: string[] }>;
+  onRestoreAlbumTrash: (recordId: string) => Promise<{ restoredReferenceIds: string[]; skippedReferenceIds: string[] }>;
+  onPurgeAlbumTrash: (recordId: string) => Promise<{ managedFileDeleted: boolean }>;
 }) {
   const assets = useMemo(() => collectMediaAlbumAssets(state), [
     state.characters,
@@ -115,7 +123,8 @@ export function GalleryScreen({
   const [cleanupBusy, setCleanupBusy] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [actionBusy, setActionBusy] = useState<'save' | 'share' | 'representative' | null>(null);
+  const [actionBusy, setActionBusy] = useState<'save' | 'share' | 'representative' | 'trash' | 'restore' | 'purge' | null>(null);
+  const [trashView, setTrashView] = useState(false);
   const [representativeAsset, setRepresentativeAsset] = useState<MediaAlbumAsset | null>(null);
   const [representativeCharacterId, setRepresentativeCharacterId] = useState(state.characters[0]?.id || '');
   const [representativeTarget, setRepresentativeTarget] = useState<AlbumRepresentativeTarget>('profile');
@@ -133,6 +142,7 @@ export function GalleryScreen({
   const allFilteredSelected = Boolean(
     filteredItems.length && filteredItems.every(asset => availableSelectedIds.includes(asset.id)),
   );
+  const trashRecords = state.mediaAlbumTrash || [];
   const characterOptions = useMemo(() => {
     const available = new Set(assets.flatMap(asset => asset.characterIds));
     return [
@@ -243,6 +253,113 @@ export function GalleryScreen({
     } finally {
       setActionBusy(null);
     }
+  }
+
+  function confirmUnlinkReference(asset: MediaAlbumAsset, referenceId: string) {
+    const reference = asset.references.find(item => item.id === referenceId);
+    if (!reference) return;
+    Alert.alert(
+      '이 사용처에서만 제거',
+      `${reference.sourceLabel} 연결 1개만 해제합니다. 같은 사진을 쓰는 나머지 ${Math.max(0, asset.references.length - 1)}개 사용처와 원본 파일은 유지됩니다.`,
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '연결 해제',
+          style: 'destructive',
+          onPress: () => {
+            setActionBusy('trash');
+            void onUnlinkAlbumReference(asset, referenceId)
+              .then(result => Alert.alert('연결 해제 완료', `해제 ${result.removedReferences.length}개 · 건너뜀 ${result.missingReferenceIds.length}개`))
+              .catch(error => Alert.alert('연결 해제 실패', error instanceof Error ? error.message : String(error)))
+              .finally(() => { setActionBusy(null); setSelectedId(null); });
+          },
+        },
+      ],
+    );
+  }
+
+  function confirmTrashSelectedAssets() {
+    if (!selectedAssets.length || actionBusy) return;
+    const referenceCount = selectedAssets.reduce((total, asset) => total + asset.references.length, 0);
+    const characterCount = new Set(selectedAssets.flatMap(asset => asset.characterIds)).size;
+    const roomCount = new Set(selectedAssets.flatMap(asset => asset.roomIds)).size;
+    Alert.alert(
+      '앨범 휴지통으로 이동',
+      `${selectedAssets.length}장과 연결 ${referenceCount}개를 해제합니다. 영향 범위는 캐릭터 ${characterCount}명, 방 ${roomCount}개입니다. 공유 파일은 한 번만 처리하며 휴지통에서 복원할 수 있습니다.`,
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '휴지통으로 이동',
+          style: 'destructive',
+          onPress: () => {
+            setActionBusy('trash');
+            void onTrashAlbumAssets(selectedAssets)
+              .then(result => {
+                const message = `이동 ${result.records.length}장 · 건너뜀 ${result.missingReferenceIds.length}개`;
+                Alert.alert('휴지통 이동 완료', message, result.records.length ? [
+                  { text: '확인' },
+                  { text: '모두 되돌리기', onPress: () => { void restoreTrashRecords(result.records); } },
+                ] : [{ text: '확인' }]);
+              })
+              .catch(error => Alert.alert('휴지통 이동 실패', error instanceof Error ? error.message : String(error)))
+              .finally(() => setActionBusy(null));
+          },
+        },
+      ],
+    );
+  }
+
+  async function restoreTrashRecords(records: readonly MediaAlbumTrashRecord[]) {
+    if (actionBusy) return;
+    setActionBusy('restore');
+    try {
+      let restored = 0;
+      let skipped = 0;
+      let failed = 0;
+      for (const record of records) {
+        try {
+          const result = await onRestoreAlbumTrash(record.id);
+          restored += result.restoredReferenceIds.length;
+          skipped += result.skippedReferenceIds.length;
+        } catch {
+          failed += 1;
+        }
+      }
+      Alert.alert('복원 결과', `복원 ${restored}개 · 충돌/누락 ${skipped}개 · 실패 ${failed}장${skipped ? '\n새 값이 있는 사용처는 덮어쓰지 않고 휴지통 기록에 남겼습니다.' : ''}`);
+    } catch (error) {
+      Alert.alert('복원 실패', error instanceof Error ? error.message : String(error));
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function restoreTrashRecord(record: MediaAlbumTrashRecord) {
+    await restoreTrashRecords([record]);
+  }
+
+  function confirmPurgeTrashRecord(record: MediaAlbumTrashRecord) {
+    if (actionBusy) return;
+    Alert.alert('영구 삭제', '이 작업은 되돌릴 수 없습니다. 앱이 관리하는 원본 파일만 삭제하며 외부 파일은 건드리지 않습니다.', [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '계속',
+        style: 'destructive',
+        onPress: () => Alert.alert('정말 영구 삭제할까요?', `${record.title}의 휴지통 기록과 복원 가능한 원본을 삭제합니다.`, [
+          { text: '취소', style: 'cancel' },
+          {
+            text: '영구 삭제',
+            style: 'destructive',
+            onPress: () => {
+              setActionBusy('purge');
+              void onPurgeAlbumTrash(record.id)
+                .then(result => Alert.alert('영구 삭제 완료', result.managedFileDeleted ? '관리 원본과 휴지통 기록을 삭제했습니다.' : '외부 원본은 건드리지 않고 휴지통 기록만 삭제했습니다.'))
+                .catch(error => Alert.alert('영구 삭제 실패', error instanceof Error ? error.message : String(error)))
+                .finally(() => setActionBusy(null));
+            },
+          },
+        ]),
+      },
+    ]);
   }
 
   function openRepresentativeAssignment() {
@@ -363,7 +480,18 @@ export function GalleryScreen({
             <Text style={styles.promptLabel}>정보</Text>
             <Text style={styles.viewerPrompt}>{selected.prompt || '프롬프트 정보가 없는 직접 추가 이미지입니다.'}</Text>
             {selected.caption ? <Text style={styles.viewerCaption}>{selected.caption}</Text> : null}
-            <Text style={styles.referenceSummary}>{selected.references.map(reference => reference.sourceLabel).join(' · ')}</Text>
+            <Text style={styles.referenceSummary}>사용처 {selected.references.length}개</Text>
+            {selected.references.map(reference => (
+              <View key={reference.id} style={styles.referenceRow}>
+                <View style={styles.referenceTextBlock}>
+                  <Text style={styles.referenceTitle}>{reference.sourceLabel}</Text>
+                  <Text style={styles.referenceDetail}>{reference.title}{reference.roomId ? ' · 대화방 연결' : ''}</Text>
+                </View>
+                <Pressable disabled={Boolean(actionBusy)} onPress={() => confirmUnlinkReference(selected, reference.id)} style={[styles.referenceUnlink, actionBusy && styles.disabled]}>
+                  <Text style={styles.referenceUnlinkText}>이곳에서 제거</Text>
+                </Pressable>
+              </View>
+            ))}
           </ScrollView>
         </View>
       ) : null}
@@ -407,28 +535,33 @@ export function GalleryScreen({
       <View style={styles.header}>
         <Pressable accessibilityLabel={selectionMode ? '선택 모드 종료' : '뒤로'} onPress={selectionMode ? exitSelection : onBack} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable>
         <View style={styles.titleBlock}>
-          <Text style={styles.title}>{selectionMode ? `${selectedAssets.length}개 선택` : '앨범'}</Text>
-          <Text style={styles.subtitle}>{selectionMode ? `현재 조건 ${filteredItems.length}개` : `${filteredItems.length}개 / 전체 ${assets.length}개`}</Text>
+          <Text style={styles.title}>{selectionMode ? `${selectedAssets.length}개 선택` : trashView ? '앨범 휴지통' : '앨범'}</Text>
+          <Text style={styles.subtitle}>{selectionMode ? `현재 조건 ${filteredItems.length}개` : trashView ? `${trashRecords.length}개 · 30일 후 원본 정리` : `${filteredItems.length}개 / 전체 ${assets.length}개`}</Text>
         </View>
         {selectionMode ? (
           <Pressable disabled={!filteredItems.length} onPress={toggleFilteredSelection} style={[styles.headerAction, !filteredItems.length && styles.disabled]}>
             <Text style={styles.headerActionText}>{allFilteredSelected ? '선택 해제' : '전체 선택'}</Text>
           </Pressable>
-        ) : (
+        ) : trashView ? null : (
           <Pressable disabled={!assets.length} onPress={() => enterSelection()} style={[styles.headerAction, !assets.length && styles.disabled]}>
             <Text style={styles.headerActionText}>선택</Text>
           </Pressable>
         )}
         <Pressable
-          disabled={selectionMode ? false : cleanupBusy}
-          onPress={selectionMode ? exitSelection : () => { void moveUnusedMediaToTrash(); }}
+          disabled={selectionMode ? false : trashView ? false : cleanupBusy}
+          onPress={selectionMode ? exitSelection : trashView ? () => setTrashView(false) : () => { void moveUnusedMediaToTrash(); }}
           style={({ pressed }) => [styles.cleanupButton, pressed && styles.pressed, !selectionMode && cleanupBusy && styles.disabled]}
         >
-          <Text style={styles.cleanupButtonText}>{selectionMode ? '완료' : cleanupBusy ? '검사 중' : '미사용 정리'}</Text>
+          <Text style={styles.cleanupButtonText}>{selectionMode ? '완료' : trashView ? '앨범으로' : cleanupBusy ? '검사 중' : '미사용 정리'}</Text>
         </Pressable>
       </View>
 
       <View style={styles.filters}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+          <FilterChip label="앨범" active={!trashView} onPress={() => setTrashView(false)} />
+          <FilterChip label={`휴지통 ${trashRecords.length}`} active={trashView} onPress={() => { exitSelection(); setTrashView(true); }} />
+        </ScrollView>
+        {!trashView ? <>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
           <FilterChip label="전체" active={!mediaAlbumFilterActive(filter)} onPress={resetFilters} />
           <FilterChip label="즐겨찾기" active={filter.favoriteOnly === true} onPress={() => setFilter(current => ({ ...current, favoriteOnly: current.favoriteOnly ? undefined : true }))} />
@@ -451,9 +584,32 @@ export function GalleryScreen({
             {roomOptions.map(room => <FilterChip key={room.id} label={room.name} active={filter.roomId === room.id} onPress={() => setFilter(current => ({ ...current, roomId: current.roomId === room.id ? undefined : room.id }))} />)}
           </ScrollView>
         ) : null}
+        </> : null}
       </View>
 
-      <FlatList
+      {trashView ? (
+        <FlatList
+          data={trashRecords}
+          keyExtractor={item => item.id}
+          style={styles.list}
+          contentContainerStyle={styles.trashList}
+          ListEmptyComponent={<View style={styles.emptyWrap}><Text style={styles.empty}>휴지통이 비어 있습니다.</Text></View>}
+          renderItem={({ item }) => (
+            <View style={styles.trashCard}>
+              <View style={styles.trashPlaceholder}><Text style={styles.trashPlaceholderText}>보관됨</Text></View>
+              <View style={styles.trashInfo}>
+                <Text style={styles.trashTitle} numberOfLines={1}>{item.title}</Text>
+                <Text style={styles.trashDetail}>{item.sourceLabel} · 연결 {item.references.length}개</Text>
+                <Text style={styles.trashDate}>{new Date(item.trashedAt).toLocaleString()}</Text>
+              </View>
+              <View style={styles.trashActions}>
+                <Pressable disabled={Boolean(actionBusy)} onPress={() => { void restoreTrashRecord(item); }} style={[styles.trashAction, actionBusy && styles.disabled]}><Text style={styles.trashActionText}>복원</Text></Pressable>
+                <Pressable disabled={Boolean(actionBusy)} onPress={() => confirmPurgeTrashRecord(item)} style={[styles.trashAction, styles.trashPurge, actionBusy && styles.disabled]}><Text style={styles.trashPurgeText}>영구 삭제</Text></Pressable>
+              </View>
+            </View>
+          )}
+        />
+      ) : <FlatList
         data={filteredItems}
         keyExtractor={item => item.id}
         numColumns={3}
@@ -489,7 +645,7 @@ export function GalleryScreen({
             </View>
           </Pressable>
         )}
-      />
+      />}
       {selectionMode ? (
         <View style={styles.selectionBar}>
           <Text style={styles.selectionCount}>{selectedAssets.length}개</Text>
@@ -501,6 +657,9 @@ export function GalleryScreen({
           </Pressable>
           <Pressable disabled={selectedAssets.length !== 1 || Boolean(actionBusy)} onPress={openRepresentativeAssignment} style={[styles.selectionAction, (selectedAssets.length !== 1 || actionBusy) && styles.disabled]}>
             <Text style={styles.selectionActionText}>대표 이미지</Text>
+          </Pressable>
+          <Pressable disabled={!selectedAssets.length || Boolean(actionBusy)} onPress={confirmTrashSelectedAssets} style={[styles.selectionAction, styles.selectionTrash, (!selectedAssets.length || actionBusy) && styles.disabled]}>
+            <Text style={styles.selectionTrashText}>{actionBusy === 'trash' ? '이동 중' : '휴지통'}</Text>
           </Pressable>
         </View>
       ) : null}
@@ -552,6 +711,8 @@ const styles = StyleSheet.create({
   selectionCount: { minWidth: 28, color: colors.text, fontSize: 12, fontWeight: '900' },
   selectionAction: { flex: 1, minHeight: 42, paddingHorizontal: 4, borderRadius: 8, backgroundColor: colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
   selectionActionText: { color: colors.text, fontSize: 10, fontWeight: '900', textAlign: 'center' },
+  selectionTrash: { backgroundColor: colors.danger },
+  selectionTrashText: { color: colors.white, fontSize: 10, fontWeight: '900', textAlign: 'center' },
   viewer: { ...StyleSheet.absoluteFillObject, zIndex: 10, backgroundColor: colors.modalSurface, padding: 12 },
   viewerHeader: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 8 },
   viewerTitleBlock: { flex: 1 },
@@ -573,6 +734,25 @@ const styles = StyleSheet.create({
   viewerPrompt: { marginTop: 8, color: colors.text, fontSize: 13, lineHeight: 19, fontWeight: '700' },
   viewerCaption: { marginTop: 8, color: colors.sub, fontSize: 12, lineHeight: 18, fontWeight: '700' },
   referenceSummary: { marginTop: 8, color: colors.sub, fontSize: 11, lineHeight: 16, fontWeight: '800' },
+  referenceRow: { minHeight: 42, marginTop: 8, paddingTop: 8, flexDirection: 'row', alignItems: 'center', gap: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  referenceTextBlock: { flex: 1 },
+  referenceTitle: { color: colors.text, fontSize: 11, fontWeight: '900' },
+  referenceDetail: { marginTop: 2, color: colors.sub, fontSize: 10, fontWeight: '700' },
+  referenceUnlink: { minHeight: 42, paddingHorizontal: 10, borderRadius: 8, backgroundColor: colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
+  referenceUnlinkText: { color: colors.text, fontSize: 10, fontWeight: '900' },
+  trashList: { flexGrow: 1, padding: 12, gap: 8 },
+  trashCard: { padding: 12, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border },
+  trashPlaceholder: { width: 58, height: 58, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceAlt },
+  trashPlaceholderText: { color: colors.sub, fontSize: 10, fontWeight: '900' },
+  trashInfo: { flex: 1 },
+  trashTitle: { color: colors.text, fontSize: 13, fontWeight: '900' },
+  trashDetail: { marginTop: 3, color: colors.sub, fontSize: 10, fontWeight: '800' },
+  trashDate: { marginTop: 3, color: colors.sub, fontSize: 9, fontWeight: '700' },
+  trashActions: { gap: 8 },
+  trashAction: { minHeight: 42, paddingHorizontal: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceAlt },
+  trashActionText: { color: colors.text, fontSize: 10, fontWeight: '900' },
+  trashPurge: { backgroundColor: colors.danger },
+  trashPurgeText: { color: colors.white, fontSize: 10, fontWeight: '900' },
   representativeModal: { ...StyleSheet.absoluteFillObject, zIndex: 20, padding: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.modalSurface },
   representativeCard: { width: '100%', maxWidth: 520, maxHeight: '92%', borderRadius: 12, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border },
   representativeCardContent: { padding: 16 },

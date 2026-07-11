@@ -211,6 +211,45 @@ test('recovery commits prepared trash when the active manifest already removed t
   assert.equal(harness.trash[0].status, 'committed');
 });
 
+test('committed trash restores its file and manifest atomically and repeated restore is safe', async () => {
+  const entry = manifestEntry('restore', 'file:///media/restore.jpg');
+  const trashFileUri = 'file:///media/.trash/restore-200.jpg';
+  const harness = createHarness({
+    manifest: [],
+    trash: [{ entry, trashFileUri, trashedAt: 200, status: 'committed' }],
+    files: [trashFileUri],
+  });
+
+  const restored = await harness.collector.restore(['restore']);
+  const repeated = await harness.collector.restore(['restore']);
+
+  assert.deepEqual(restored.restoredEntries.map(item => item.entry.mediaId), ['restore']);
+  assert.deepEqual(restored.missingMediaIds, []);
+  assert.deepEqual(repeated.restoredEntries, []);
+  assert.deepEqual(repeated.missingMediaIds, ['restore']);
+  assert.deepEqual(harness.manifest.map(item => item.mediaId), ['restore']);
+  assert.deepEqual(harness.trash, []);
+  assert.equal(harness.files.has(entry.fileUri), true);
+  assert.equal(harness.files.has(trashFileUri), false);
+});
+
+test('a failed restore move keeps committed trash and the inactive manifest unchanged', async () => {
+  const entry = manifestEntry('restore-fail', 'file:///media/restore-fail.jpg');
+  const trashFileUri = 'file:///media/.trash/restore-fail-200.jpg';
+  const harness = createHarness({
+    manifest: [],
+    trash: [{ entry, trashFileUri, trashedAt: 200, status: 'committed' }],
+    files: [trashFileUri],
+    failMoveFrom: trashFileUri,
+  });
+
+  await assert.rejects(harness.collector.restore(['restore-fail']), /move failed/);
+  assert.deepEqual(harness.manifest, []);
+  assert.equal(harness.trash[0].status, 'committed');
+  assert.equal(harness.files.has(trashFileUri), true);
+  assert.equal(harness.files.has(entry.fileUri), false);
+});
+
 test('purge deletes only committed trash older than the retention boundary', async () => {
   const oldEntry = manifestEntry('old', 'file:///media/old.jpg');
   const recentEntry = manifestEntry('recent', 'file:///media/recent.jpg');
@@ -236,6 +275,27 @@ test('purge deletes only committed trash older than the retention boundary', asy
   assert.equal(harness.files.has(recentTrash), true);
   assert.equal(harness.files.has(preparedTrash), true);
   assert.deepEqual(harness.trash.map(item => item.entry.mediaId), ['recent', 'prepared']);
+});
+
+test('selected purge never deletes another committed trash asset', async () => {
+  const first = manifestEntry('first', 'file:///media/first.jpg');
+  const second = manifestEntry('second', 'file:///media/second.jpg');
+  const firstTrash = 'file:///media/.trash/first.jpg';
+  const secondTrash = 'file:///media/.trash/second.jpg';
+  const harness = createHarness({
+    manifest: [],
+    trash: [
+      { entry: first, trashFileUri: firstTrash, trashedAt: 100, status: 'committed' },
+      { entry: second, trashFileUri: secondTrash, trashedAt: 100, status: 'committed' },
+    ],
+    files: [firstTrash, secondTrash],
+  });
+
+  const result = await harness.collector.purge({ before: Number.MAX_SAFE_INTEGER, dryRun: false, mediaIds: ['first'] });
+  assert.equal(result.deletedCount, 1);
+  assert.equal(harness.files.has(firstTrash), false);
+  assert.equal(harness.files.has(secondTrash), true);
+  assert.deepEqual(harness.trash.map(item => item.entry.mediaId), ['second']);
 });
 
 test('manifest mutation and a parallel upsert share one lossless queue', async () => {

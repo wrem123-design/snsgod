@@ -1080,6 +1080,32 @@ export type SumGodProgress = {
   stateImportedAt?: number;
 };
 
+export type MediaAlbumTrashReference = {
+  id: string;
+  source: 'profile' | 'cover' | 'profile_history' | 'character_reference' | 'chat' | 'sns' | 'reference' | 'meeting' | 'blind_date' | 'dating_app';
+  sourceLabel: string;
+  ownerId: string;
+  title: string;
+  createdAt: number;
+  generated: boolean;
+  characterId?: string;
+  roomId?: string;
+  prompt?: string;
+  caption?: string;
+};
+
+export type MediaAlbumTrashRecord = {
+  id: string;
+  assetId: string;
+  uri: string;
+  title: string;
+  sourceLabel: string;
+  trashedAt: number;
+  favorite: boolean;
+  references: MediaAlbumTrashReference[];
+  managedMediaId?: string;
+};
+
 export type SNSGodState = {
   schemaVersion?: number;
   config: SNSGodConfig;
@@ -1105,6 +1131,7 @@ export type SNSGodState = {
   pendingReplies?: Record<string, PendingReplyJob>;
   contactLedger?: Record<string, ContactLedgerEntry>;
   mediaAlbumFavoriteUris?: string[];
+  mediaAlbumTrash?: MediaAlbumTrashRecord[];
   callSessions?: CallSession[];
   activeCallSessionId?: string;
   meetingEventSessions?: MeetingEventSession[];

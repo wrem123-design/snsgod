@@ -92,7 +92,11 @@ export type MediaGarbageCollector = {
     options: { dryRun: boolean; mediaRootUri: string; now: number },
   ): Promise<MediaGarbageCollectionResult>;
   recoverInterruptedCollection(): Promise<{ restoredCount: number; committedCount: number }>;
-  purge(options: { before: number; dryRun: boolean }): Promise<{
+  restore(mediaIds: readonly string[]): Promise<{
+    restoredEntries: MediaTrashEntry[];
+    missingMediaIds: string[];
+  }>;
+  purge(options: { before: number; dryRun: boolean; mediaIds?: readonly string[] }): Promise<{
     dryRun: boolean;
     candidateEntries: MediaTrashEntry[];
     deletedCount: number;
@@ -481,6 +485,22 @@ export function createMediaGarbageCollector(
     });
   }
 
+  async function rollbackRestore(
+    previousTrash: readonly MediaTrashEntry[],
+    moved: readonly MediaTrashEntry[],
+  ): Promise<void> {
+    for (const trashEntry of [...moved].reverse()) {
+      const originalExists = await adapter.fileExists(trashEntry.entry.fileUri);
+      const trashExists = await adapter.fileExists(trashEntry.trashFileUri);
+      if (!originalExists) continue;
+      if (trashExists) {
+        throw new Error(`Cannot roll restored media back over an existing trash file: ${trashEntry.entry.mediaId}`);
+      }
+      await adapter.moveFile(trashEntry.entry.fileUri, trashEntry.trashFileUri);
+    }
+    await adapter.replaceTrashManifest(previousTrash);
+  }
+
   return {
     collect(references, options) {
       return enqueue(async () => {
@@ -567,11 +587,77 @@ export function createMediaGarbageCollector(
     recoverInterruptedCollection() {
       return enqueue(recoverUnlocked);
     },
+    restore(mediaIds) {
+      return enqueue(async () => {
+        await recoverUnlocked();
+        const requestedIds = [...new Set(mediaIds.map(id => id.trim()).filter(Boolean))];
+        if (!requestedIds.length) return { restoredEntries: [], missingMediaIds: [] };
+        const requested = new Set(requestedIds);
+        const result = await adapter.manifestStore.mutate(async manifest => {
+          const previousTrash = await adapter.readTrashManifest();
+          const targets = previousTrash.filter(entry => (
+            entry.status === 'committed' && requested.has(entry.entry.mediaId)
+          ));
+          const foundIds = new Set(targets.map(entry => entry.entry.mediaId));
+          const missingMediaIds = requestedIds.filter(id => !foundIds.has(id));
+          if (!targets.length) return { result: { restoredEntries: [], missingMediaIds } };
+          const activeIds = new Set(manifest.map(entry => entry.mediaId));
+          const conflict = targets.find(entry => activeIds.has(entry.entry.mediaId));
+          if (conflict) throw new Error(`Cannot restore an already-active media asset: ${conflict.entry.mediaId}`);
+          for (const target of targets) {
+            if (!await adapter.fileExists(target.trashFileUri)) {
+              throw new Error(`Media trash file is missing: ${target.entry.mediaId}`);
+            }
+            if (await adapter.fileExists(target.entry.fileUri)) {
+              throw new Error(`Media restore destination already exists: ${target.entry.mediaId}`);
+            }
+          }
+          const targetKeys = new Set(targets.map(entry => `${entry.entry.mediaId}\u0000${entry.trashFileUri}`));
+          await adapter.replaceTrashManifest(previousTrash.map(entry => (
+            targetKeys.has(`${entry.entry.mediaId}\u0000${entry.trashFileUri}`)
+              ? { ...entry, status: 'prepared' }
+              : entry
+          )));
+          const moved: MediaTrashEntry[] = [];
+          try {
+            for (const target of targets) {
+              await adapter.moveFile(target.trashFileUri, target.entry.fileUri);
+              moved.push(target);
+            }
+          } catch (moveError) {
+            await rollbackRestore(previousTrash, moved);
+            throw moveError;
+          }
+          return {
+            entries: [...manifest, ...targets.map(target => target.entry)],
+            result: { restoredEntries: targets, missingMediaIds },
+            rollback: () => rollbackRestore(previousTrash, moved),
+          };
+        });
+        if (result.restoredEntries.length) {
+          const restoredKeys = new Set(result.restoredEntries.map(
+            entry => `${entry.entry.mediaId}\u0000${entry.trashFileUri}`,
+          ));
+          try {
+            const trash = await adapter.readTrashManifest();
+            await adapter.replaceTrashManifest(trash.filter(entry => (
+              !restoredKeys.has(`${entry.entry.mediaId}\u0000${entry.trashFileUri}`)
+            )));
+          } catch {
+            await recoverUnlocked();
+          }
+        }
+        return result;
+      });
+    },
     purge(options) {
       return enqueue(async () => {
         const trash = await adapter.readTrashManifest();
+        const selectedIds = options.mediaIds ? new Set(options.mediaIds) : undefined;
         const candidateEntries = trash.filter(
-          entry => entry.status === 'committed' && entry.trashedAt <= options.before,
+          entry => entry.status === 'committed'
+            && entry.trashedAt <= options.before
+            && (!selectedIds || selectedIds.has(entry.entry.mediaId)),
         );
         if (options.dryRun || candidateEntries.length === 0) {
           return {

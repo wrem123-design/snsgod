@@ -502,6 +502,27 @@ export async function purgeMediaTrash(before: number): Promise<{
   return { deletedCount: result.deletedCount, failedCount: result.failedEntries.length };
 }
 
+/** Restores selected committed app-owned media files to the active manifest. */
+export async function restoreMediaTrash(mediaIds: readonly string[]): Promise<{
+  restoredEntries: MediaTrashEntry[];
+  missingMediaIds: string[];
+}> {
+  return mediaGarbageCollector.restore(mediaIds);
+}
+
+/** Permanently removes only explicitly selected committed trash assets. */
+export async function purgeSelectedMediaTrash(mediaIds: readonly string[]): Promise<{
+  deletedCount: number;
+  failedCount: number;
+}> {
+  const result = await mediaGarbageCollector.purge({
+    before: Number.MAX_SAFE_INTEGER,
+    dryRun: false,
+    mediaIds,
+  });
+  return { deletedCount: result.deletedCount, failedCount: result.failedEntries.length };
+}
+
 /** Recovers a media move interrupted between trash preparation and manifest commit. */
 export async function recoverInterruptedMediaGarbageCollection(): Promise<{
   restoredCount: number;

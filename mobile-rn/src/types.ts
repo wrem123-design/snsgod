@@ -93,6 +93,7 @@ export type PromptSet = {
 };
 
 export type SNSGodConfig = {
+  dataBoundaryMode?: 'local-only' | 'remote-assisted';
   apiType: ApiProvider;
   apiProfiles: Partial<Record<ApiProvider, ApiProfile>>;
   userName: string;

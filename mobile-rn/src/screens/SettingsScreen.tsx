@@ -19,6 +19,7 @@ import { getRecommendedOptimizationStatus, maybePromptBatteryOptimizationExempti
 import { bootstrapServer, registerServerDevice, syncServerMessages } from '../logic/serverMessaging';
 import { withServerConnectionSettings } from '../logic/serverConnectionPolicy';
 import { mergeServerConnectionResult } from '../logic/staleStateMergePolicy';
+import { isRemoteServicesEnabled, withDataBoundaryMode } from '../logic/remoteServicePolicy';
 
 const PROVIDERS: ApiProvider[] = ['vertex', 'gemini', 'openai', 'anthropic', 'custom', 'grok'];
 const PROVIDER_PRESETS: Partial<Record<ApiProvider, { endpoint: string; model: string }[]>> = {
@@ -324,6 +325,7 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
   const [autoEnabled, setAutoEnabled] = useState(state.config.autoEnabled !== false);
   const [privateFirst, setPrivateFirst] = useState(state.config.privateFirst === true);
   const [groupFirst, setGroupFirst] = useState(state.config.groupFirst === true);  const serverMessagingConfig = state.config.serverMessaging || {};
+  const remoteServicesEnabled = isRemoteServicesEnabled(state);
   const [serverBaseUrl, setServerBaseUrl] = useState(String(serverMessagingConfig.baseUrl || 'http://168.110.122.66/snsgod-message'));
   const [serverPairingSecret, setServerPairingSecret] = useState('');
   const [randomDmEnabled, setRandomDmEnabled] = useState(state.config.randomDmEnabled !== false);
@@ -848,6 +850,10 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
 
   async function saveServerMessaging(connect = false) {
     if (saving) return;
+    if (!remoteServicesEnabled) {
+      setStatus('로컬 전용 모드에서는 Oracle 서버에 연결하지 않습니다. 원격 보조 모드를 먼저 켜세요.');
+      return;
+    }
     setSaving(true);
     try {
       const requestId = makeId('server-connection');
@@ -874,6 +880,21 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
       setStatus(connect ? 'Oracle 메시지 서버 연결 및 초기 동기화 완료' : 'Oracle 메시지 서버 설정 저장 완료');
     } catch (error) {
       setStatus('Oracle 메시지 서버 설정 실패: ' + String(error instanceof Error ? error.message : error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function changeDataBoundaryMode(enabled: boolean) {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await onChange(withDataBoundaryMode(state, enabled ? 'remote-assisted' : 'local-only'));
+      setStatus(enabled
+        ? '원격 보조 모드를 켰습니다. 서버 연결을 직접 실행하기 전에는 등록이나 동기화를 시작하지 않습니다.'
+        : '로컬 전용 모드로 전환했습니다. 대기 중인 서버 전송과 자동 동기화를 중단했습니다.');
+    } catch (error) {
+      setStatus(`데이터 경계 변경 실패: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setSaving(false);
     }
@@ -1477,6 +1498,14 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
         </View>
 
         <View style={[styles.card, activeSection !== 'api' && styles.hidden]}>
+          <Text style={styles.cardTitle}>데이터 연결 방식</Text>
+          <Text style={styles.help}>{remoteServicesEnabled ? '원격 보조 모드' : '로컬 전용 모드'} · 앱 데이터와 미디어는 이 기기를 기준으로 관리합니다.</Text>
+          <SwitchLine label="Oracle 원격 보조 모드" value={remoteServicesEnabled} onChange={value => void changeDataBoundaryMode(value)} />
+          <Text style={styles.help}>로컬 전용 모드에서는 앱 시작·복귀·설정 저장 시 Oracle 기기 등록, 서버 메시지 동기화, 외부 푸시 초기화를 수행하지 않습니다.</Text>
+          <Text style={styles.help}>AI 답장이나 이미지 생성을 직접 실행하면 선택한 Provider로 요청할 수 있습니다. 이 동작은 Oracle 원격 보조 모드와 별개입니다.</Text>
+        </View>
+
+        <View style={[styles.card, activeSection !== 'api' && styles.hidden]}>
           <Text style={styles.cardTitle}>API 설정</Text>
           <Text style={styles.label}>Provider</Text>
           <View style={styles.segmentRow}>
@@ -1578,6 +1607,7 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
 
         <View style={[styles.card, activeSection !== 'api' && styles.hidden]}>
           <Text style={styles.cardTitle}>Oracle 메시지 서버</Text>
+          {!remoteServicesEnabled ? <Text style={styles.help}>현재 차단됨 · 위의 원격 보조 모드를 켠 뒤에만 서버 설정과 연결을 사용할 수 있습니다.</Text> : null}
           <Text style={styles.help}>앱이 완전히 종료되어도 1:1·단톡방 답장과 선톡을 서버에서 생성합니다. 처음 연결할 때만 서버 연결 키가 필요하며, 연결 후에는 기기 토큰으로 동기화합니다.</Text>
           <Text style={styles.label}>서버 주소</Text>
           <TextInput value={serverBaseUrl} onChangeText={setServerBaseUrl} style={styles.input} autoCapitalize="none" placeholder="https://message.example.com" placeholderTextColor="#9a9387" />
@@ -1588,8 +1618,8 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
           <Text style={styles.help}>{state.config.serverMessaging?.deviceToken ? ('마지막 동기화: ' + (state.config.serverMessaging.lastSyncAt ? new Date(state.config.serverMessaging.lastSyncAt).toLocaleString() : '아직 없음')) : '아직 기기 등록 전입니다. 서버 주소와 연결 키를 입력한 뒤 연결하세요.'}</Text>
           {state.config.serverMessaging?.lastError ? <Text style={styles.help}>최근 오류: {state.config.serverMessaging.lastError}</Text> : null}
           <View style={styles.buttonRow}>
-            <Pressable onPress={() => void saveServerMessaging(false)} disabled={saving} style={[styles.secondaryInline, styles.rowButton, saving && styles.disabled]}><Text style={styles.secondaryText}>설정 저장</Text></Pressable>
-            <Pressable onPress={() => void saveServerMessaging(true)} disabled={saving} style={[styles.primary, styles.rowButton, saving && styles.disabled]}><Text style={styles.primaryText}>{state.config.serverMessaging?.deviceToken ? '다시 동기화' : '연결 및 동기화'}</Text></Pressable>
+            <Pressable onPress={() => void saveServerMessaging(false)} disabled={saving || !remoteServicesEnabled} style={[styles.secondaryInline, styles.rowButton, (saving || !remoteServicesEnabled) && styles.disabled]}><Text style={styles.secondaryText}>설정 저장</Text></Pressable>
+            <Pressable onPress={() => void saveServerMessaging(true)} disabled={saving || !remoteServicesEnabled} style={[styles.primary, styles.rowButton, (saving || !remoteServicesEnabled) && styles.disabled]}><Text style={styles.primaryText}>{state.config.serverMessaging?.deviceToken ? '다시 동기화' : '연결 및 동기화'}</Text></Pressable>
           </View>
         </View>
         <View style={[styles.card, activeSection !== 'screen' && styles.hidden]}>

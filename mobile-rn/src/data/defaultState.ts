@@ -9,6 +9,7 @@ export function createDefaultState(): SNSGodState {
   return {
     schemaVersion: STATE_SCHEMA_VERSION,
     config: {
+      dataBoundaryMode: 'local-only',
       apiType: 'vertex',
       apiProfiles: {
         vertex: {

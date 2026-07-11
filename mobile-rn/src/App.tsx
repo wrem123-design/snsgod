@@ -67,6 +67,7 @@ import { notificationRouteRequestFromUrl, openNotificationRequest, type Notifica
 import { cancelAllPendingReplyJobs, reconcilePendingReplyJobs } from './logic/pendingReplyJobs';
 import { normalizePersistedInteractionLifecycles, pauseActiveInteractions, resumePointedInteractions } from './logic/interactionLifecycle';
 import { rootForRouteName, routeForRoot } from './logic/rootNavigation';
+import { isRemoteServicesEnabled } from './logic/remoteServicePolicy';
 
 const MEDIA_REPLACEMENT_CACHE_TTL_MS = 30_000;
 const MEDIA_REPLACEMENT_CACHE_SWEEP_MS = 5_000;
@@ -823,10 +824,11 @@ export default function App() {
       if (!next.config.serverMessaging?.deviceToken) {
         if (!String(next.config.serverMessaging?.pairingSecret || '').trim()) return;
         next = await registerServerDevice(next);
+        if (!isRuntimeEpochCurrent(operationEpoch) || !stateRef.current || !isRemoteServicesEnabled(stateRef.current)) return;
       }
       next = (next.config.serverMessaging?.outbox || []).length ? await flushServerOutbox(next) : await bootstrapServer(next);
       next = await syncServerMessages(next);
-      if (!isRuntimeEpochCurrent(operationEpoch)) return;
+      if (!isRuntimeEpochCurrent(operationEpoch) || !stateRef.current || !isRemoteServicesEnabled(stateRef.current)) return;
       const latest = stateRef.current || current;
       await commit(latest === current ? next : mergeServerSyncResult(latest, current, next));
       void appendDebugLog('server.sync', 'sync completed reason=' + reason);

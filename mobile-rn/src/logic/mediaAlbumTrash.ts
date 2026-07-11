@@ -196,8 +196,11 @@ function restoreCharacterReferences(
   let profileReferenceImages = [...(character.profileReferenceImages || [])];
   for (const reference of record.references) {
     if (!reference.id.startsWith(`${prefix}:reference:`) || reference.id === `${prefix}:reference:primary`) continue;
-    if (!profileReferenceImages.includes(record.uri)) profileReferenceImages.push(record.uri);
-    restored.add(reference.id);
+    if (profileReferenceImages.includes(record.uri)) restored.add(reference.id);
+    else if (profileReferenceImages.length < 3) {
+      profileReferenceImages.push(record.uri);
+      restored.add(reference.id);
+    }
   }
   let profileImageHistory = [...(character.profileImageHistory || [])];
   for (const reference of record.references) {
@@ -211,7 +214,8 @@ function restoreCharacterReferences(
         kind: reference.sourceLabel.includes('커버') ? 'cover' : 'profile',
       });
     }
-    restored.add(reference.id);
+    profileImageHistory = profileImageHistory.sort((left, right) => right.createdAt - left.createdAt).slice(0, 60);
+    if (profileImageHistory.some(item => item.id === reference.ownerId)) restored.add(reference.id);
   }
   return {
     ...character,
@@ -220,7 +224,7 @@ function restoreCharacterReferences(
     coverImage: restoreScalar(`${prefix}:cover`, character.coverImage),
     profileReferenceImage: restoreScalar(`${prefix}:reference:primary`, character.profileReferenceImage),
     profileReferenceImages: profileReferenceImages.slice(0, 3),
-    profileImageHistory: profileImageHistory.sort((left, right) => right.createdAt - left.createdAt).slice(0, 60),
+    profileImageHistory,
   };
 }
 

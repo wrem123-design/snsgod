@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import ts from 'typescript';
 
+const gallerySource = readFileSync(new URL('../src/screens/GalleryScreen.tsx', import.meta.url), 'utf8');
+const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+
 async function importTrash() {
   const source = readFileSync(new URL('../src/logic/mediaAlbumTrash.ts', import.meta.url), 'utf8');
   const transpiled = ts.transpileModule(source, {
@@ -84,4 +87,39 @@ test('restore fills empty owners, preserves newer conflicts, and keeps only unre
   assert.equal(restored.state.snsPosts[0].image, 'file:///newer.jpg');
   assert.deepEqual(restored.skippedReferenceIds, ['sns:post-1']);
   assert.deepEqual(restored.state.mediaAlbumTrash[0].references.map(reference => reference.id), ['sns:post-1']);
+});
+
+test('reference restore never evicts three newer reference images', () => {
+  const referenceAsset = {
+    id: 'old-ref', uri: 'file:///old-ref.jpg', title: '하나', sourceLabel: '캐릭터 레퍼런스', createdAt: 1, favorite: false,
+    characterIds: ['character-1'], roomIds: [], sources: ['character_reference'],
+    references: [{ id: 'character-1:reference:0', source: 'character_reference', sourceLabel: '캐릭터 레퍼런스', ownerId: 'character-1', title: '하나', createdAt: 1, generated: false, characterId: 'character-1' }],
+  };
+  const state = baseState();
+  state.characters[0].profileReferenceImages = ['file:///old-ref.jpg'];
+  const trashed = trashMediaAlbumAssets(state, [referenceAsset], { now: 100 }).state;
+  trashed.characters[0].profileReferenceImages = ['file:///new-1.jpg', 'file:///new-2.jpg', 'file:///new-3.jpg'];
+  const restored = restoreMediaAlbumTrashRecord(trashed, trashed.mediaAlbumTrash[0].id);
+
+  assert.deepEqual(restored.state.characters[0].profileReferenceImages, ['file:///new-1.jpg', 'file:///new-2.jpg', 'file:///new-3.jpg']);
+  assert.deepEqual(restored.skippedReferenceIds, ['character-1:reference:0']);
+});
+
+test('gallery separates unlink, recoverable trash, restore, and confirmed permanent delete', () => {
+  for (const label of ['이 사용처에서만 제거', '앨범 휴지통으로 이동', '되돌리기', '복원', '영구 삭제', '정말 영구 삭제할까요?']) {
+    assert.match(gallerySource, new RegExp(label));
+  }
+  assert.match(gallerySource, /onTrashAlbumAssets\(selectedAssets\)/);
+  assert.match(gallerySource, /onRestoreAlbumTrash\(record\.id\)/);
+  assert.match(gallerySource, /onPurgeAlbumTrash\(record\.id\)/);
+  assert.match(gallerySource, /restoreTrashRecords\(result\.records\)/);
+  assert.match(gallerySource, /충돌\/누락/);
+});
+
+test('App flushes state before physical trash and restores the file before reference snapshots', () => {
+  assert.match(appSource, /async function trashCurrentAlbumAssets[\s\S]*flushSaveState[\s\S]*trashUnreachableMedia/);
+  assert.match(appSource, /async function restoreCurrentAlbumTrash[\s\S]*restoreMediaTrash[\s\S]*restoreMediaAlbumTrashRecord/);
+  assert.match(appSource, /async function purgeCurrentAlbumTrash[\s\S]*purgeSelectedMediaTrash/);
+  assert.match(appSource, /onUnlinkAlbumReference=\{unlinkCurrentAlbumReference\}/);
+  assert.match(appSource, /onTrashAlbumAssets=\{trashCurrentAlbumAssets\}/);
 });

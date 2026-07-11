@@ -54,7 +54,9 @@ import {
   createStateMediaReplacementCache,
   type StateMediaUriReplacement,
 } from './logic/stateMediaPolicy';
-import { previewMediaGarbageCollection, purgeMediaTrash, recoverInterruptedMediaGarbageCollection, trashUnreachableMedia } from './logic/media';
+import { previewMediaGarbageCollection, purgeMediaTrash, purgeSelectedMediaTrash, readMediaManifest, recoverInterruptedMediaGarbageCollection, restoreMediaTrash, trashUnreachableMedia } from './logic/media';
+import type { MediaAlbumAsset } from './logic/mediaAlbum';
+import { restoreMediaAlbumTrashRecord, trashMediaAlbumAssets, unlinkMediaAlbumReferences } from './logic/mediaAlbumTrash';
 import { hasSameServerIdentity, mergeStaleState } from './logic/staleStateMergePolicy';
 import { canCommitRuntimeEpoch } from './logic/runtimeEpochPolicy';
 import { getSumGodProgress, invalidateSumGodBackupWrites, replaceSumGodBackup } from './logic/sumgod';
@@ -723,6 +725,86 @@ export default function App() {
     return trashUnreachableMedia(references);
   }
 
+  async function unlinkCurrentAlbumReference(asset: MediaAlbumAsset, referenceId: string) {
+    const operationEpoch = runtimeEpochRef.current;
+    let result: ReturnType<typeof unlinkMediaAlbumReferences> | undefined;
+    await commitCurrentAtEpoch(operationEpoch, current => {
+      result = unlinkMediaAlbumReferences(current, asset, [referenceId]);
+      return result.state;
+    }, { save: { important: true, reason: 'album reference unlink' } });
+    if (!result) throw new Error('이미지 연결 해제 요청이 더 이상 현재 상태가 아닙니다.');
+    return result;
+  }
+
+  async function trashCurrentAlbumAssets(assets: readonly MediaAlbumAsset[]) {
+    const operationEpoch = runtimeEpochRef.current;
+    const manifest = await readMediaManifest();
+    const managedMediaIds = Object.fromEntries(manifest.map(entry => [entry.fileUri, entry.mediaId]));
+    let result: ReturnType<typeof trashMediaAlbumAssets> | undefined;
+    await commitCurrentAtEpoch(operationEpoch, current => {
+      result = trashMediaAlbumAssets(current, assets, { now: Date.now(), managedMediaIds });
+      return result.state;
+    }, { save: { important: true, reason: 'album assets moved to trash' } });
+    if (!result || !isRuntimeEpochCurrent(operationEpoch) || !stateRef.current) {
+      throw new Error('앨범 휴지통 요청이 더 이상 현재 상태가 아닙니다.');
+    }
+    await flushSaveState(stateRef.current, {
+      backup: 'force', verify: 'full', important: true, reason: 'before album media trash', onMediaExternalized: applyPersistedMediaUris,
+    });
+    const garbageCollection = await trashUnreachableMedia(collectStateMediaReferences(stateRef.current));
+    return { ...result, garbageCollection };
+  }
+
+  async function restoreCurrentAlbumTrash(recordId: string) {
+    const operationEpoch = runtimeEpochRef.current;
+    const current = stateRef.current;
+    const record = current?.mediaAlbumTrash?.find(item => item.id === recordId);
+    if (!current || !record || !isRuntimeEpochCurrent(operationEpoch)) {
+      throw new Error('복원할 앨범 휴지통 항목을 찾지 못했습니다.');
+    }
+    if (record.managedMediaId) {
+      const physical = await restoreMediaTrash([record.managedMediaId]);
+      if (physical.missingMediaIds.length) {
+        const manifest = await readMediaManifest();
+        if (!manifest.some(entry => entry.mediaId === record.managedMediaId)) {
+          throw new Error('보관 기간이 지났거나 원본 파일이 없어 복원할 수 없습니다.');
+        }
+      }
+    }
+    let result: ReturnType<typeof restoreMediaAlbumTrashRecord> | undefined;
+    await commitCurrentAtEpoch(operationEpoch, latest => {
+      result = restoreMediaAlbumTrashRecord(latest, recordId);
+      return result.state;
+    }, { save: { important: true, reason: 'album trash restore' } });
+    if (!result || !stateRef.current) throw new Error('앨범 휴지통 복원을 완료하지 못했습니다.');
+    await flushSaveState(stateRef.current, {
+      backup: 'force', verify: 'full', important: true, reason: 'after album trash restore', onMediaExternalized: applyPersistedMediaUris,
+    });
+    return result;
+  }
+
+  async function purgeCurrentAlbumTrash(recordId: string) {
+    const operationEpoch = runtimeEpochRef.current;
+    const current = stateRef.current;
+    const record = current?.mediaAlbumTrash?.find(item => item.id === recordId);
+    if (!current || !record || !isRuntimeEpochCurrent(operationEpoch)) {
+      throw new Error('영구 삭제할 앨범 휴지통 항목을 찾지 못했습니다.');
+    }
+    if (record.managedMediaId) {
+      await flushSaveState(current, {
+        backup: 'force', verify: 'full', important: true, reason: 'before album permanent delete', onMediaExternalized: applyPersistedMediaUris,
+      });
+      await trashUnreachableMedia(collectStateMediaReferences(stateRef.current || current));
+      const purge = await purgeSelectedMediaTrash([record.managedMediaId]);
+      if (purge.failedCount) throw new Error('관리 파일을 영구 삭제하지 못했습니다.');
+    }
+    await commitCurrentAtEpoch(operationEpoch, latest => ({
+      ...latest,
+      mediaAlbumTrash: (latest.mediaAlbumTrash || []).filter(item => item.id !== recordId),
+    }), { save: { important: true, reason: 'album trash record permanent delete' } });
+    return { managedFileDeleted: Boolean(record.managedMediaId) };
+  }
+
   async function syncOracleMessages(reason: string) {
     const operationEpoch = runtimeEpochRef.current;
     const current = stateRef.current;
@@ -1284,6 +1366,10 @@ export default function App() {
           onBack={goBackRendered}
           onPreviewMediaCleanup={previewCurrentMediaCleanup}
           onTrashMediaCleanup={trashCurrentUnreachableMedia}
+          onUnlinkAlbumReference={unlinkCurrentAlbumReference}
+          onTrashAlbumAssets={trashCurrentAlbumAssets}
+          onRestoreAlbumTrash={restoreCurrentAlbumTrash}
+          onPurgeAlbumTrash={purgeCurrentAlbumTrash}
         />
       ) : route.name === 'debug' ? (
         <DebugScreen state={state} onBack={goBackRendered} onRestoreFullBackup={restoreFullBackup} onReloadState={reloadSavedState} onReloadBundle={reloadBundle} onSaveNow={() => flushSaveState(stateRef.current || undefined, {

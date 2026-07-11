@@ -1,11 +1,13 @@
 import { SNSGodState } from '../types';
 import * as FileSystem from 'expo-file-system';
+import * as Crypto from 'expo-crypto';
 import JSZip from 'jszip';
 import { prepareArchivedMediaAssets, readMediaManifest } from './media';
 import { parseMediaManifestText, type MediaManifestEntry } from './mediaStoragePolicy';
 import { applyStateMediaUriReplacements, collectStateMediaReferences } from './stateMediaPolicy';
 import { buildFullBackupMediaPlan, type ArchivedMediaRecord } from './fullBackupPolicy';
 import { stateWithoutStoredSecrets } from '../storage/secureSecrets';
+import { decryptBackupBase64, encryptBackupBase64, isEncryptedBackupBase64 } from './backupEncryptionPolicy';
 
 type FullBackupMetadata = {
   version: 'snsgod-full-backup-v2';
@@ -83,7 +85,7 @@ export function createBackupPayload(state: SNSGodState, options: { includeMedia?
   };
 }
 
-export async function exportFullBackupZip(state: SNSGodState): Promise<string> {
+export async function exportFullBackupZip(state: SNSGodState, options: { password?: string } = {}): Promise<string> {
   const zip = new JSZip();
   const safeState = stateWithoutSecrets(state);
   const manifest = await readMediaManifest();
@@ -133,8 +135,16 @@ export async function exportFullBackupZip(state: SNSGodState): Promise<string> {
     throw new Error('생성된 전체 백업 ZIP이 512MB 제한을 넘었습니다. 앨범을 정리한 뒤 다시 시도해 주세요.');
   }
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const uri = `${FileSystem.cacheDirectory || FileSystem.documentDirectory || ''}snsgod-full-backup-${timestamp}.zip`;
-  await FileSystem.writeAsStringAsync(uri, base64Zip, { encoding: FileSystem.EncodingType.Base64 });
+  const password = String(options.password || '');
+  const encrypted = password
+    ? await encryptBackupBase64(base64Zip, password, {
+      salt: await Crypto.getRandomBytesAsync(16),
+      nonce: await Crypto.getRandomBytesAsync(24),
+    })
+    : base64Zip;
+  const extension = password ? 'sgbackup' : 'zip';
+  const uri = `${FileSystem.cacheDirectory || FileSystem.documentDirectory || ''}snsgod-full-backup-${timestamp}.${extension}`;
+  await FileSystem.writeAsStringAsync(uri, encrypted, { encoding: FileSystem.EncodingType.Base64 });
   return uri;
 }
 
@@ -221,16 +231,20 @@ function isSNSGodState(value: unknown): value is SNSGodState {
 }
 
 /** Prepares a validated full ZIP restore and a rollback for newly added media. */
-export async function importFullBackupZip(uri: string): Promise<PreparedFullBackupRestore> {
+export async function importFullBackupZip(uri: string, password = ''): Promise<PreparedFullBackupRestore> {
   const info = await FileSystem.getInfoAsync(uri);
   if (!info.exists) throw new Error('선택한 전체 백업 ZIP 파일을 찾을 수 없습니다.');
-  if ('size' in info && typeof info.size === 'number' && info.size > MAX_FULL_BACKUP_ZIP_BYTES) {
+  if ('size' in info && typeof info.size === 'number' && info.size > MAX_FULL_BACKUP_ZIP_BYTES + 4096) {
     throw new Error('전체 백업 ZIP은 최대 512MB까지 복원할 수 있습니다.');
   }
-  const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
-  if (Math.floor(base64.length * 3 / 4) > MAX_FULL_BACKUP_ZIP_BYTES) {
+  const fileBase64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+  if (Math.floor(fileBase64.length * 3 / 4) > MAX_FULL_BACKUP_ZIP_BYTES + 4096) {
     throw new Error('전체 백업 ZIP은 최대 512MB까지 복원할 수 있습니다.');
   }
+  const encrypted = isEncryptedBackupBase64(fileBase64);
+  if (encrypted && !password) throw new Error('암호화된 백업입니다. 복원 암호를 입력해 주세요.');
+  const base64 = encrypted ? await decryptBackupBase64(fileBase64, password) : fileBase64;
+  if (Math.floor(base64.length * 3 / 4) > MAX_FULL_BACKUP_ZIP_BYTES) throw new Error('복호화한 전체 백업 ZIP이 512MB 제한을 넘습니다.');
   const uncheckedZip = await JSZip.loadAsync(base64, { base64: true, checkCRC32: false });
   const uncheckedFiles = Object.values(uncheckedZip.files).filter(file => !file.dir);
   if (uncheckedFiles.length > MAX_FULL_BACKUP_ARCHIVE_FILES) {

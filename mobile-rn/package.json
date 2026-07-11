@@ -13,6 +13,8 @@
     "ios": "expo run:ios"
   },
   "dependencies": {
+    "@noble/ciphers": "2.2.0",
+    "@noble/hashes": "2.2.0",
     "@react-native-async-storage/async-storage": "^2.1.2",
     "@types/jsrsasign": "^10.5.15",
     "expo": "^53.0.0",

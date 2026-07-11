@@ -404,6 +404,27 @@ export type PendingReplyJob = {
   failureReason?: string;
 };
 
+export type ContactChannel = 'private' | 'group' | 'phone' | 'sns' | 'sns_dm' | 'calendar';
+
+export type ContactLedgerEvent = {
+  id: string;
+  eventId: string;
+  channel: ContactChannel;
+  createdAt: number;
+  roomId?: string;
+};
+
+export type ContactLedgerEntry = {
+  characterId: string;
+  dayKey: string;
+  used: number;
+  byChannel: Partial<Record<ContactChannel, number>>;
+  events: ContactLedgerEvent[];
+  unansweredCount: number;
+  lastUserReplyAt?: number;
+  updatedAt: number;
+};
+
 export type MeetingEventLine = {
   id: string;
   speaker: 'user' | 'character' | 'system';
@@ -1036,6 +1057,7 @@ export type SNSGodState = {
   randomChats?: RandomChatRoom[];
   randomCharacters?: SNSGodCharacter[];
   pendingReplies?: Record<string, PendingReplyJob>;
+  contactLedger?: Record<string, ContactLedgerEntry>;
   meetingEventSessions?: MeetingEventSession[];
   activeMeetingEventId?: string;
   blindDate?: BlindDateProgress;

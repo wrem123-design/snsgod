@@ -128,6 +128,10 @@ test('character deletion removes owned rooms and collapses undersized groups whi
     },
     unreadCounts: { 'room-1': 1, 'room-2': 1, 'group-small': 1, 'group-keep': 1, 'random-1': 1 },
     pendingReplies: { 'room-1': { jobId: 'one', startedAt: 1 }, 'group-small': { jobId: 'two', startedAt: 1 }, 'group-keep': { jobId: 'three', startedAt: 1 }, 'random-1': { jobId: 'four', startedAt: 1 } },
+    contactLedger: {
+      'character-1:2026-07-11': { characterId: 'character-1', dayKey: '2026-07-11', used: 1, events: [], byChannel: {}, unansweredCount: 1, updatedAt: 1 },
+      'character-2:2026-07-11': { characterId: 'character-2', dayKey: '2026-07-11', used: 1, events: [], byChannel: {}, unansweredCount: 1, updatedAt: 1 },
+    },
     characterEvents: [{ id: 'event-1', characterId: 'character-1' }, { id: 'event-2', characterId: 'character-2' }],
     loreEntries: [{ id: 'lore-1', title: '', keys: [], content: '', characterId: 'character-1' }, { id: 'lore-2', title: '', keys: [], content: '', characterId: 'character-2' }],
     snsPosts: [{ id: 'post-1', characterId: 'character-1', platform: 'instagram', content: '', createdAt: 1 }, { id: 'post-2', characterId: 'character-2', platform: 'instagram', content: '', createdAt: 1 }],
@@ -152,6 +156,7 @@ test('character deletion removes owned rooms and collapses undersized groups whi
   assert.deepEqual(next.groupRooms.map(item => [item.id, item.participantIds]), [['group-keep', ['character-2', 'character-3']]]);
   assert.deepEqual(next.messages['group-keep'].map(item => item.id), ['kept-author']);
   assert.equal(next.pendingReplies['group-keep'], undefined);
+  assert.deepEqual(Object.keys(next.contactLedger), ['character-2:2026-07-11']);
   assert.deepEqual(next.snsPosts.map(item => item.id), ['post-2']);
   assert.deepEqual(next.snsDmThreads.map(item => item.id), ['thread-2']);
   assert.deepEqual(next.meetingEventSessions.map(item => item.id), ['meeting-other']);

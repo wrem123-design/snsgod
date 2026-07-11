@@ -26,6 +26,7 @@ import { characterWithConversationRhythm } from '../logic/conversationRhythm';
 import { forceUpdateRoomMemory, groupMemoryPromptBlock, updateRoomMemoryAfterAppend } from '../logic/memoryBridge';
 import { dateGroundingInstruction, localTimeContext, resolvedPrompts, weatherContext } from '../logic/prompts';
 import { applyMessageToCharacterWorld, resolveCharacterRuntimeState, runtimeStatePromptBlock } from '../logic/characterWorld';
+import { recordContactUserReply } from '../logic/contactBudget';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const GROUP_REPLY_TIMEOUT_MS = 120000;
@@ -102,6 +103,8 @@ function appendGroupMessageIfActive(state: SNSGodState, roomId: string, message:
 }
 
 function appendGroupMessage(state: SNSGodState, roomId: string, message: SNSGodMessage) {
+  const participantIds = findGroup(state, roomId)?.participantIds || [];
+  if (message.role === 'user') state = recordContactUserReply(state, participantIds, message.createdAt);
   let next = updateRoomMemoryAfterAppend({
     ...state,
     messages: {
@@ -110,8 +113,8 @@ function appendGroupMessage(state: SNSGodState, roomId: string, message: SNSGodM
     },
     groupRooms: (state.groupRooms || []).map(item => item.id === roomId ? { ...item, lastActivity: message.createdAt } : item)
   }, roomId);
-  const participantIds = findGroup(next, roomId)?.participantIds || [];
-  const affected = message.role === 'user' ? participantIds : message.characterId ? [message.characterId] : [];
+  const nextParticipantIds = findGroup(next, roomId)?.participantIds || [];
+  const affected = message.role === 'user' ? nextParticipantIds : message.characterId ? [message.characterId] : [];
   for (const characterId of affected) next = applyMessageToCharacterWorld(next, characterId, roomId, message);
   return next;
 }

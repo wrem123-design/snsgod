@@ -7,6 +7,7 @@ import { generateSNSPost, generateSnsDmReply, snsOptionsFor } from '../logic/sns
 import { deleteSnsDmThreadCascade, deleteSnsPostCascade } from '../logic/deletionCascadePolicy';
 import { makeId } from '../logic/ids';
 import { isRenderableMediaUri, pickImageDataUri } from '../logic/media';
+import { recordContactUserReply } from '../logic/contactBudget';
 
 function finalImagePromptForRetry(post: SNSPost): string {
   let prompt = String(post.imagePrompt || '').trim();
@@ -331,9 +332,10 @@ export function SNSScreen({ state, platform, initialPostId, initialThreadId, onO
     const trimmed = dmText.trim();
     if (!thread || !trimmed || loading) return;
     const userMessage = { id: makeId('snsdmmsg'), from: 'user' as const, author: state.config.userName || '나', body: trimmed, createdAt: Date.now() };
+    const replyAware = recordContactUserReply(state, [thread.characterId], userMessage.createdAt);
     const withUser: SNSGodState = {
-      ...state,
-      snsDmThreads: (state.snsDmThreads || []).map(item => item.id === thread.id ? { ...item, messages: [...item.messages, userMessage], updatedAt: Date.now(), unread: 0 } : item)
+      ...replyAware,
+      snsDmThreads: (replyAware.snsDmThreads || []).map(item => item.id === thread.id ? { ...item, messages: [...item.messages, userMessage], updatedAt: Date.now(), unread: 0 } : item)
     };
     setDmText('');
     if (!ai) {

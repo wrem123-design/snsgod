@@ -4,6 +4,7 @@ import { appendMessageToHistory } from './messageHistoryPolicy';
 import { updateRoomMemoryAfterAppend } from './memoryBridge';
 import { applyMessageToCharacterWorld } from './characterWorld';
 import { deleteCharacterCascade, deleteRoomCascade } from './deletionCascadePolicy';
+import { recordContactUserReply } from './contactBudget';
 
 function randomRoomAsChatRoom(room: RandomChatRoom): SNSGodRoom {
   return {
@@ -75,6 +76,10 @@ export function createRoom(characterId: string, name = '기본 채팅'): SNSGodR
 }
 
 export function appendMessage(state: SNSGodState, roomId: string, message: SNSGodMessage): SNSGodState {
+  const replyAwareState = message.role === 'user'
+    ? recordContactUserReply(state, [findRoom(state, roomId)?.characterId || ''].filter(Boolean), message.createdAt)
+    : state;
+  state = replyAwareState;
   const room = findRoom(state, roomId);
   const messages = { ...state.messages, [roomId]: appendMessageToHistory(state.messages[roomId], message) };
   const chatRooms = { ...state.chatRooms };

@@ -4,6 +4,14 @@ import test from 'node:test';
 
 const read = relativePath => readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8');
 
+test('message copy relies on the Android clipboard toast without a duplicate success dialog', () => {
+  for (const screen of ['src/screens/ChatRoomScreen.tsx', 'src/screens/GroupChatRoomScreen.tsx']) {
+    const source = read(screen);
+    assert.doesNotMatch(source, /Alert\.alert\('복사 완료',\s*'말풍선 텍스트를 복사했습니다\.'/);
+    assert.match(source, /await .*copyText\(copyValue\)/);
+  }
+});
+
 test('Oracle messaging polls while the JS runtime is alive and keeps the foreground service enabled', () => {
   const app = read('src/App.tsx');
   assert.match(app, /ORACLE_SYNC_INTERVAL_MS/);

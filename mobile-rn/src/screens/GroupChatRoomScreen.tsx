@@ -741,7 +741,6 @@ function GroupBubble({ message, layout, participants, userName, userStickers, me
       const bridge = NativeModules.TermuxBridge as undefined | { copyText: (text: string) => Promise<string> };
       if (!bridge?.copyText) throw new Error('클립보드 브릿지가 준비되지 않았습니다.');
       await bridge.copyText(copyValue);
-      Alert.alert('복사 완료', '말풍선 텍스트를 복사했습니다.');
     } catch (error) {
       Alert.alert('복사 실패', error instanceof Error ? error.message : String(error));
     }

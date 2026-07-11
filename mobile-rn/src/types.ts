@@ -1104,6 +1104,7 @@ export type SNSGodState = {
   randomCharacters?: SNSGodCharacter[];
   pendingReplies?: Record<string, PendingReplyJob>;
   contactLedger?: Record<string, ContactLedgerEntry>;
+  mediaAlbumFavoriteUris?: string[];
   callSessions?: CallSession[];
   activeCallSessionId?: string;
   meetingEventSessions?: MeetingEventSession[];

@@ -1280,6 +1280,7 @@ export default function App() {
         <GalleryScreen
           state={state}
           onChange={commitRenderedState}
+          onCommitCurrent={commitRenderedCurrentForScreen}
           onBack={goBackRendered}
           onPreviewMediaCleanup={previewCurrentMediaCleanup}
           onTrashMediaCleanup={trashCurrentUnreachableMedia}

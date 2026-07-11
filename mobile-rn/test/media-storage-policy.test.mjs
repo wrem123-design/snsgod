@@ -460,6 +460,29 @@ test('runtime replacement patches only matching media values in the latest state
   assert.equal(latest.characters[0].avatar, originalDataUri);
 });
 
+test('album favorites follow canonical URI replacement without becoming ownership references', () => {
+  const originalDataUri = 'data:image/jpeg;base64,YWJj';
+  const canonicalUri = 'file:///media/assets/asset_a.jpg';
+  const latest = {
+    config: {},
+    characters: [{ id: 'character-1', name: 'A', avatar: originalDataUri }],
+    messages: {},
+    snsPosts: [],
+    snsDmThreads: [],
+    referenceFaceSlots: [],
+    userStickers: [],
+    meetingEventSessions: [],
+    mediaAlbumFavoriteUris: [originalDataUri],
+  };
+
+  const patched = applyStateMediaUriReplacements(latest, [
+    { dataUri: originalDataUri, fileUri: canonicalUri },
+  ]);
+
+  assert.deepEqual(patched.mediaAlbumFavoriteUris, [canonicalUri]);
+  assert.equal(collectStateMediaExternalizationTargets(latest).length, 1);
+});
+
 test('a stale runtime replacement never restores deleted or newly changed media', () => {
   const oldDataUri = 'data:image/jpeg;base64,b2xk';
   const latest = {

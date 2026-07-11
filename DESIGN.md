@@ -54,6 +54,9 @@ The app uses warm messenger surfaces with soft contrast, compact controls, and c
 - Chat bubbles use warm off-white for other speakers and yellow for the user.
 - System event cards stay centered and compact, with actions directly below the content.
 - Meeting visuals prioritize real generated images. If absent, use a structured visual placeholder with place, mood, and participant silhouettes rather than text alone.
+- Album header: 72px height; album grid uses 12px gutter, 8px gap, and 12px image radius.
+- Album filter: 42px minimum touch height, 8px radius, surfaceAlt default and accent selected state.
+- Album states: 26px favorite badge, 220px empty-state minimum, 170px detail information maximum, and 34/36px back glyph size/line-height.
 
 ## Motion
 - Meeting text fades in with opacity only.

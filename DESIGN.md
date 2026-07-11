@@ -59,6 +59,7 @@ The app uses warm messenger surfaces with soft contrast, compact controls, and c
 - Album states: 26px favorite badge, 220px empty-state minimum, 170px detail information maximum, and 34/36px back glyph size/line-height.
 - Album selection: 52px action bar minimum, 42px action touch height, 28px selected marker, and 12px action bar gap. Selection confirmation uses the existing panel, border, accent, and danger tokens without introducing another surface style.
 - Album trash: reuse the 42px action touch height, 12px image radius, 12px card padding, and 8px compact gap. Restore uses surfaceAlt; permanent delete uses danger only on the final action. Impact rows remain plain panel rows rather than a new card family.
+- Root navigation: four equal roots in a 68px bottom bar, each with a 24px system glyph and visible 11px Korean label. Selected state uses accent on panel; unselected state uses panelSoft and sub text. Root hub rows use 72px minimum height, 12px padding, 12px radius, and 8px gap.
 
 ## Motion
 - Meeting text fades in with opacity only.

@@ -28,13 +28,11 @@ function finalImagePromptForRetry(post: SNSPost): string {
   return prompt;
 }
 
-export function SNSScreen({ state, platform, initialPostId, initialThreadId, onOpenSettings, onOpenNotifications, onChange }: {
+export function SNSScreen({ state, platform, initialPostId, initialThreadId, onChange }: {
   state: SNSGodState;
   platform: SNSPost['platform'];
   initialPostId?: string;
   initialThreadId?: string;
-  onOpenSettings: () => void;
-  onOpenNotifications: () => void;
   onChange: (next: SNSGodState, options?: { conflict?: 'incoming' | 'latest' }) => Promise<void> | void;
 }) {
   const availableCharacters = useMemo(() => state.characters.filter(character => character.randomTemporary !== true), [state.characters]);
@@ -576,9 +574,6 @@ export function SNSScreen({ state, platform, initialPostId, initialThreadId, onO
           <Pressable accessibilityLabel="SNS DM" onPress={() => setShowDmList(value => !value)} style={[styles.roundIcon, platform === 'twitter' && styles.xRoundIcon, showDmList && styles.roundIconActive]}>
             <Text style={[styles.roundIconText, platform === 'twitter' && styles.xRoundIconText, showDmList && styles.roundIconTextActive]}>DM</Text>
             {dmThreads.some(thread => thread.unread) ? <Text style={styles.alertBadge}>{dmThreads.reduce((sum, thread) => sum + (thread.unread || 0), 0)}</Text> : null}
-          </Pressable>
-          <Pressable accessibilityLabel="설정" onPress={onOpenSettings} style={[styles.roundIcon, platform === 'twitter' && styles.xRoundIcon]}>
-            <Text style={[styles.roundIconText, platform === 'twitter' && styles.xRoundIconText]}>⚙</Text>
           </Pressable>
         </View>
       </View>

@@ -30,6 +30,7 @@ import { DebugScreen } from './screens/DebugScreen';
 import { BottomNav, BottomTab } from './components/BottomNav';
 import { Avatar } from './components/Avatar';
 import { MenuHubScreen } from './screens/MenuHubScreen';
+import { FeedHubScreen } from './screens/FeedHubScreen';
 import { flushSaveState, getStoragePaths, importState, loadState, recordSkippedSaveBeforeHydration, saveStateDebounced, SaveStateOptions } from './storage/persist';
 import { colors } from './theme';
 import { NotificationItem, PendingReplyJob, SNSGodCharacter, SNSGodState, SNSPost } from './types';
@@ -65,6 +66,7 @@ import { importFullBackupZip, type PreparedFullBackupRestore } from './logic/bac
 import { notificationRouteRequestFromUrl, openNotificationRequest, type NotificationRoute, type NotificationRouteRequest } from './logic/notificationRouting';
 import { cancelAllPendingReplyJobs, reconcilePendingReplyJobs } from './logic/pendingReplyJobs';
 import { normalizePersistedInteractionLifecycles, pauseActiveInteractions, resumePointedInteractions } from './logic/interactionLifecycle';
+import { rootForRouteName, routeForRoot } from './logic/rootNavigation';
 
 const MEDIA_REPLACEMENT_CACHE_TTL_MS = 30_000;
 const MEDIA_REPLACEMENT_CACHE_SWEEP_MS = 5_000;
@@ -94,8 +96,9 @@ type Route =
   | { name: 'lorebook' }
   | { name: 'prompts' }
   | { name: 'sns'; platform: SNSPost['platform']; postId?: string; threadId?: string }
-  | { name: 'randomHub' }
-  | { name: 'etc' }
+  | { name: 'feedHub' }
+  | { name: 'discoverHub' }
+  | { name: 'archiveHub' }
   | { name: 'gallery' }
   | { name: 'debug' }
   | { name: 'random' }
@@ -1165,21 +1168,15 @@ export default function App() {
   }
 
   function openBottomTab(tab: BottomTab) {
-    if (tab === 'friends') navigate({ name: 'chatList' });
-    if (tab === 'instagram') navigate({ name: 'sns', platform: 'instagram' });
-    if (tab === 'twitter') navigate({ name: 'sns', platform: 'twitter' });
-    if (tab === 'random') navigate({ name: 'random' });
-    if (tab === 'etc') navigate({ name: 'etc' });
+    routeHistoryRef.current = [];
+    navigate({ name: routeForRoot(tab) }, { replace: true });
   }
 
   function activeBottomTab(): BottomTab {
-    if (route.name === 'sns') return route.platform === 'twitter' ? 'twitter' : 'instagram';
-    if (route.name === 'random' || route.name === 'randomHub' || route.name === 'randomChatRoom') return 'random';
-    if (route.name === 'etc' || route.name === 'streetEncounter' || route.name === 'datingApp' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'notifications' || route.name === 'references') return 'etc';
-    return 'friends';
+    return rootForRouteName(route.name);
   }
 
-  const showBottomNav = route.name === 'chatList' || route.name === 'sns' || route.name === 'random' || route.name === 'etc' || route.name === 'streetEncounter' || route.name === 'datingApp' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'references';
+  const showBottomNav = route.name === 'chatList' || route.name === 'notifications' || route.name === 'feedHub' || route.name === 'sns' || route.name === 'discoverHub' || route.name === 'random' || route.name === 'streetEncounter' || route.name === 'blindDate' || route.name === 'datingApp' || route.name === 'idealWorldcup' || route.name === 'archiveHub' || route.name === 'sumgod' || route.name === 'gallery' || route.name === 'debug' || route.name === 'references';
 
   async function leaveRandomRoom(roomId: string) {
     const operationEpoch = runtimeEpochRef.current;
@@ -1334,6 +1331,11 @@ export default function App() {
         <LorebookScreen state={state} onChange={commitRenderedState} onBack={goBackRendered} />
       ) : route.name === 'prompts' ? (
         <PromptSettingsScreen state={state} onChange={commitRenderedState} onBack={goBackRendered} />
+      ) : route.name === 'feedHub' ? (
+        <FeedHubScreen
+          onOpenInstagram={() => navigateRendered({ name: 'sns', platform: 'instagram' })}
+          onOpenX={() => navigateRendered({ name: 'sns', platform: 'twitter' })}
+        />
       ) : route.name === 'sns' ? (
         <SNSScreen
           state={state}
@@ -1341,12 +1343,11 @@ export default function App() {
           initialPostId={route.postId}
           initialThreadId={route.threadId}
           onChange={commitRenderedState}
-          onOpenSettings={() => navigateRendered({ name: 'settings' })}
-          onOpenNotifications={() => navigateRendered({ name: 'notifications' })}
         />
-      ) : route.name === 'randomHub' || route.name === 'etc' ? (
+      ) : route.name === 'discoverHub' || route.name === 'archiveHub' ? (
         <MenuHubScreen
-          mode="etc"
+          mode={route.name === 'discoverHub' ? 'discover' : 'archive'}
+          onOpenRandom={() => navigateRendered({ name: 'random' })}
           onOpenEncounter={() => navigateRendered({ name: 'streetEncounter' })}
           onOpenBlindDate={() => navigateRendered({ name: 'blindDate' })}
           onOpenDatingApp={() => navigateRendered({ name: 'datingApp' })}
@@ -1354,7 +1355,6 @@ export default function App() {
           onOpenReferences={() => navigateRendered({ name: 'references' })}
           onOpenSumGod={() => navigateRendered({ name: 'sumgod' })}
           onOpenGallery={() => navigateRendered({ name: 'gallery' })}
-          onOpenNotifications={() => navigateRendered({ name: 'notifications' })}
           onOpenSettings={() => navigateRendered({ name: 'settings' })}
           onOpenDebug={() => navigateRendered({ name: 'debug' })}
         />
@@ -1476,7 +1476,6 @@ export default function App() {
       ) : (
         <ChatListScreen
           state={state}
-          onOpenSettings={() => navigateRendered({ name: 'settings' })}
           onOpenRoom={roomId => navigateRendered({ name: 'chatRoom', roomId })}
           onNewRoom={() => navigateRendered({ name: 'newRoom' })}
           onNewGroupRoom={() => navigateRendered({ name: 'newGroupRoom' })}

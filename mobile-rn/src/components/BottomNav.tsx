@@ -2,32 +2,36 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme';
 
-export type BottomTab = 'friends' | 'instagram' | 'twitter' | 'random' | 'etc';
+export type BottomTab = 'contacts' | 'feed' | 'discover' | 'archive';
 
-const TABS: { key: BottomTab; label: string; icon: string }[] = [
-  { key: 'friends', label: '친구', icon: '' },
-  { key: 'instagram', label: '인스타그램', icon: '◎' },
-  { key: 'twitter', label: '트위터', icon: 'X' },
-  { key: 'random', label: '랜덤', icon: '?' },
-  { key: 'etc', label: '기타', icon: '•••' }
+const TABS: Array<{ key: BottomTab; label: string; glyph: string }> = [
+  { key: 'contacts', label: '연락', glyph: '◉' },
+  { key: 'feed', label: '피드', glyph: '▤' },
+  { key: 'discover', label: '발견', glyph: '◇' },
+  { key: 'archive', label: '보관함', glyph: '▣' },
 ];
+
+export const BOTTOM_NAV_HEIGHT = 68;
 
 export function BottomNav({ active, onSelect }: {
   active: BottomTab;
   onSelect: (tab: BottomTab) => void;
 }) {
   return (
-    <View style={styles.wrap}>
+    <View accessibilityRole="tablist" style={styles.wrap}>
       {TABS.map(tab => {
         const selected = active === tab.key;
         return (
           <Pressable
             key={tab.key}
-            accessibilityLabel={tab.label}
+            accessibilityRole="tab"
+            accessibilityLabel={`${tab.label} 탭`}
+            accessibilityState={{ selected }}
             onPress={() => onSelect(tab.key)}
-            style={[styles.item, selected && styles.itemActive]}
+            style={({ pressed }) => [styles.item, selected && styles.itemActive, pressed && styles.pressed]}
           >
-            {tab.key === 'friends' ? <FriendIcon selected={selected} /> : <Text style={[styles.icon, tab.key === 'twitter' && styles.twitterIcon, selected && styles.iconActive, selected && tab.key === 'twitter' && styles.twitterIconActive]}>{tab.icon}</Text>}
+            <Text style={[styles.glyph, selected && styles.glyphActive]}>{tab.glyph}</Text>
+            <Text style={[styles.label, selected && styles.labelActive]}>{tab.label}</Text>
           </Pressable>
         );
       })}
@@ -35,83 +39,29 @@ export function BottomNav({ active, onSelect }: {
   );
 }
 
-export const BOTTOM_NAV_HEIGHT = 64;
-
-function FriendIcon({ selected }: { selected: boolean }) {
-  return (
-    <View style={styles.friendIcon}>
-      <View style={[styles.friendHead, selected && styles.friendActive]} />
-      <View style={[styles.friendBody, selected && styles.friendActive]} />
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   wrap: {
     height: BOTTOM_NAV_HEIGHT,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-around',
-    backgroundColor: '#eeeeee',
+    gap: 8,
+    backgroundColor: colors.panelSoft,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#d5d5d5'
+    borderTopColor: colors.border,
   },
   item: {
-    width: 54,
-    height: 46,
-    borderRadius: 18,
+    flex: 1,
+    minHeight: 52,
+    borderRadius: 8,
     alignItems: 'center',
-    justifyContent: 'center'
+    justifyContent: 'center',
   },
-  itemActive: {
-    backgroundColor: '#ffffff',
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 2
-  },
-  icon: {
-    color: '#2e3135',
-    fontSize: 23,
-    fontWeight: '900',
-    lineHeight: 28
-  },
-  twitterIcon: {
-    fontSize: 26,
-    lineHeight: 31,
-    color: '#111111'
-  },
-  iconActive: {
-    color: colors.danger
-  },
-  twitterIconActive: {
-    color: '#ff514d',
-    fontSize: 30,
-    lineHeight: 34
-  },
-  friendIcon: {
-    width: 28,
-    height: 30,
-    alignItems: 'center',
-    justifyContent: 'flex-end'
-  },
-  friendHead: {
-    width: 11,
-    height: 11,
-    borderRadius: 6,
-    backgroundColor: '#111',
-    marginBottom: 3
-  },
-  friendBody: {
-    width: 24,
-    height: 12,
-    borderTopLeftRadius: 12,
-    borderTopRightRadius: 12,
-    borderBottomLeftRadius: 4,
-    borderBottomRightRadius: 4,
-    backgroundColor: '#111'
-  },
-  friendActive: {
-    backgroundColor: colors.danger
-  }
+  itemActive: { backgroundColor: colors.accent },
+  pressed: { opacity: 0.78 },
+  glyph: { color: colors.sub, fontSize: 24, lineHeight: 25, fontWeight: '900' },
+  glyphActive: { color: colors.accentText },
+  label: { marginTop: 1, color: colors.sub, fontSize: 11, lineHeight: 14, fontWeight: '900' },
+  labelActive: { color: colors.accentText },
 });

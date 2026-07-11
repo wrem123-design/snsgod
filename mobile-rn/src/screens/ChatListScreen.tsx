@@ -63,9 +63,8 @@ function rowsFromState(state: SNSGodState): { activeRows: Array<Row | GroupRow>;
   };
 }
 
-export function ChatListScreen({ state, onOpenSettings, onOpenRoom, onNewRoom, onNewGroupRoom, onNewCharacter, onOpenProfile, onOpenNotifications, onOpenGroupRoom, onOpenGroupSettings, onOpenCall, onOpenCharacterSettings, onChange }: {
+export function ChatListScreen({ state, onOpenRoom, onNewRoom, onNewGroupRoom, onNewCharacter, onOpenProfile, onOpenNotifications, onOpenGroupRoom, onOpenGroupSettings, onOpenCall, onOpenCharacterSettings, onChange }: {
   state: SNSGodState;
-  onOpenSettings: () => void;
   onOpenRoom: (roomId: string) => void;
   onNewRoom: () => void;
   onNewGroupRoom: () => void;
@@ -92,7 +91,7 @@ export function ChatListScreen({ state, onOpenSettings, onOpenRoom, onNewRoom, o
     { label: '새 개인채팅', icon: '1:1', onPress: onNewRoom },
     { label: '새 그룹채팅', icon: 'G', onPress: onNewGroupRoom },
     { label: '새 캐릭터', icon: '+', onPress: onNewCharacter },
-    { label: '설정', icon: '⚙', onPress: onOpenSettings }
+    { label: '알림', icon: '!', onPress: onOpenNotifications }
   ];
 
   function openRoom(row: Row | GroupRow) {

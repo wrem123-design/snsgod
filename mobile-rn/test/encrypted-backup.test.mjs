@@ -81,7 +81,10 @@ test('production backup uses Expo CSPRNG, preserves plain ZIP, and decrypts befo
 });
 
 test('settings keeps passwords in component memory and offers explicit compatible or encrypted flows', () => {
-  const settingsSource = readFileSync(new URL('../src/screens/SettingsScreen.tsx', import.meta.url), 'utf8');
+  const settingsSource = [
+    readFileSync(new URL('../src/screens/SettingsScreen.tsx', import.meta.url), 'utf8'),
+    readFileSync(new URL('../src/screens/settings/BackupSettingsSection.tsx', import.meta.url), 'utf8'),
+  ].join('\n');
   assert.match(settingsSource, /useState\(false\)[\s\S]*backupPassword/);
   assert.match(settingsSource, /전체 백업 암호화/);
   assert.match(settingsSource, /새 백업 암호 확인/);

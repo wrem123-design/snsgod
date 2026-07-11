@@ -61,7 +61,7 @@ npm start
 
 실제 `.env`, API 키, 페어링 비밀값, Firebase 서비스 계정, SQLite 데이터와 SSH 개인 키는 Git에 저장하지 않습니다. 새 환경에서는 `.env.example`을 복사해 각자 설정해야 합니다.
 
-Oracle Ubuntu 배포 절차는 [`docs/ORACLE_SERVER_DEPLOYMENT_GUIDE.md`](docs/ORACLE_SERVER_DEPLOYMENT_GUIDE.md), 전체 구조와 개선 계획은 [`docs/ORACLE_MESSAGE_AND_MOBILE_REFACTOR_PLAN.md`](docs/ORACLE_MESSAGE_AND_MOBILE_REFACTOR_PLAN.md)를 참고하십시오.
+Oracle Ubuntu 배포 절차는 [`docs/ORACLE_SERVER_DEPLOYMENT_GUIDE.md`](docs/ORACLE_SERVER_DEPLOYMENT_GUIDE.md), 현재 모바일 책임 경계는 [`docs/MOBILE_ARCHITECTURE.md`](docs/MOBILE_ARCHITECTURE.md), 전체 구조와 개선 계획은 [`docs/ORACLE_MESSAGE_AND_MOBILE_REFACTOR_PLAN.md`](docs/ORACLE_MESSAGE_AND_MOBILE_REFACTOR_PLAN.md)를 참고하십시오.
 
 대화 원문 저장, 모델 context window, 채팅 화면 가상화의 경계는 [`docs/MESSAGE_RETENTION_POLICY.md`](docs/MESSAGE_RETENTION_POLICY.md)를 참고하십시오.
 

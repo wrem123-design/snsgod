@@ -180,6 +180,7 @@ export function createDefaultState(): SNSGodState {
     referenceFaceSlots: [],
     userStickers: [],
     notifications: [],
+    notificationEvents: {},
     blindDate: { sessions: [], archives: [] },
     datingApp: { refreshIntervalHours: 12, acceptanceChancePercent: 50, requestStatus: 'none' },
     selectedRoomId: roomId

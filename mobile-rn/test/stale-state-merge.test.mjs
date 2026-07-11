@@ -3,10 +3,9 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import ts from 'typescript';
 
-async function importPureTypeScript(relativePath) {
-  const source = readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8');
+function typescriptDataUrl(source, fileName) {
   const transpiled = ts.transpileModule(source, {
-    fileName: relativePath,
+    fileName,
     reportDiagnostics: true,
     compilerOptions: {
       module: ts.ModuleKind.ESNext,
@@ -14,9 +13,19 @@ async function importPureTypeScript(relativePath) {
     },
   });
   assert.equal(transpiled.diagnostics?.length ?? 0, 0);
-  return import(
-    `data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString('base64')}`
-  );
+  return `data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString('base64')}`;
+}
+
+const notificationsModuleUrl = typescriptDataUrl(
+  readFileSync(new URL('../src/logic/notifications.ts', import.meta.url), 'utf8')
+    .replace("import { makeId } from './ids';", "let testId = 0; const makeId = prefix => `${prefix}_${++testId}`;"),
+  'src/logic/notifications.ts',
+);
+
+async function importPureTypeScript(relativePath) {
+  const source = readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8')
+    .replace("from './notifications';", `from '${notificationsModuleUrl}';`);
+  return import(typescriptDataUrl(source, relativePath));
 }
 
 const {
@@ -70,6 +79,37 @@ function baseState(overrides = {}) {
     ...overrides,
   };
 }
+
+test('concurrent notification receipts restore the exact unread total after stale merge', () => {
+  const base = baseState({ unreadCounts: { room: 0 }, notifications: [], notificationEvents: {} });
+  const latest = {
+    ...base,
+    unreadCounts: { room: 1 },
+    notificationEvents: {
+      'room:room:message-1': { targetKind: 'room', targetId: 'room', receivedAt: 2 },
+    },
+    notifications: [{
+      id: 'notification-1', type: 'chat', title: 'one', roomId: 'room',
+      eventIds: ['room:room:message-1'], count: 1, createdAt: 2,
+    }],
+  };
+  const incoming = {
+    ...base,
+    unreadCounts: { room: 1 },
+    notificationEvents: {
+      'room:room:message-2': { targetKind: 'room', targetId: 'room', receivedAt: 3 },
+    },
+    notifications: [{
+      id: 'notification-2', type: 'chat', title: 'two', roomId: 'room',
+      eventIds: ['room:room:message-2'], count: 1, createdAt: 3,
+    }],
+  };
+
+  const merged = mergeStaleState(latest, base, incoming);
+  assert.equal(merged.unreadCounts.room, 2);
+  assert.equal(merged.notifications.length, 2);
+  assert.equal(Object.keys(merged.notificationEvents).length, 2);
+});
 
 test('a stale settings result preserves newer server state, messages, media patches, and deletions', () => {
   const base = baseState();

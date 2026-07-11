@@ -243,14 +243,17 @@ async function runCalendarEvent(state: SNSGodState): Promise<SNSGodState | undef
         }
       }
     };
+    const deliveredEventIds: string[] = [];
     for (const bubble of reply.messages.length ? reply.messages : [{ content: `${event.title} 생각나서 연락했어.` }]) {
+      const messageId = makeId('msg');
       next = appendMessage(next, room.id, {
-        id: makeId('msg'),
+        id: messageId,
         role: 'character',
         characterId: character.id,
         content: bubble.content,
         createdAt: Date.now()
       });
+      deliveredEventIds.push(`room:${room.id}:${messageId}`);
     }
     next = { ...next, __calendarSent: { ...sent, [marker]: new Date().toISOString() } };
     return notifyRoomMessage(next, {
@@ -258,7 +261,8 @@ async function runCalendarEvent(state: SNSGodState): Promise<SNSGodState | undef
       characterId: character.id,
       title: `${character.name} · ${event.title}`,
       body: reply.messages[0]?.content || '기념일 메시지',
-      app: 'messenger'
+      app: 'messenger',
+      eventIds: deliveredEventIds,
     });
   }
   return undefined;
@@ -618,9 +622,11 @@ async function runPrivateFirstMessage(state: SNSGodState, firstMessageOnly: bool
   if (overdue) {
     void appendDebugLog('proactive.catchup', `room=${room.id} plannedAt=${new Date(bubbleAt).toISOString()} overdueMs=${Date.now() - plannedAt}`);
   }
+  const deliveredEventIds: string[] = [];
   for (const bubble of reply.messages.length ? reply.messages : [{ content: '뭐해?' }]) {
+    const messageId = makeId('msg');
     next = appendMessage(next, room.id, {
-      id: makeId('msg'),
+      id: messageId,
       role: 'character',
       characterId: character.id,
       content: bubble.content,
@@ -636,6 +642,7 @@ async function runPrivateFirstMessage(state: SNSGodState, firstMessageOnly: bool
         stateUpdatedAt: Number(resolveCharacterRuntimeState(state, character).lastUpdatedAt || 0)
       }
     });
+    deliveredEventIds.push(`room:${room.id}:${messageId}`);
     bubbleAt = Math.min(Date.now(), bubbleAt + 900 + Math.floor(Math.random() * 1600));
   }
   const updatedCharacter = findCharacter(next, character.id);
@@ -650,7 +657,8 @@ async function runPrivateFirstMessage(state: SNSGodState, firstMessageOnly: bool
     characterId: character.id,
     title: character.name,
     body: reply.messages[0]?.content || '새 메시지',
-    app: 'messenger'
+    app: 'messenger',
+    eventIds: deliveredEventIds,
   });
 }
 
@@ -713,6 +721,7 @@ async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | u
   };
   let deliveredCount = 0;
   let firstDelivered: { speaker: SNSGodCharacter; content: string } | undefined;
+  const deliveredEventIds: string[] = [];
   const groupLastAt = Number(room.lastActivity || room.createdAt || Date.now()) || Date.now();
   const groupFrequencyMs = Math.max(1, Math.min(...participants.map(character => Number(characterWithConversationRhythm(state, character).frequencyMinutes || 10)))) * 60000;
   const groupPlannedAt = groupLastAt + groupFrequencyMs;
@@ -722,8 +731,9 @@ async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | u
     const createdAt = groupOverdue
       ? Math.min(Date.now(), groupBubbleAt + Math.max(0, Math.min(4000, Number(item.delay || 0) * 1000)))
       : Date.now() + deliveredCount * 900 + Math.max(0, Math.min(4000, Number(item.delay || 0) * 1000));
+    const messageId = makeId('msg');
     next = appendGroupMessage(next, room.id, {
-      id: makeId('msg'),
+      id: messageId,
       role: 'character',
       characterId: item.speaker.id,
       content: item.content,
@@ -739,6 +749,7 @@ async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | u
         stateUpdatedAt: resolveCharacterRuntimeState(state, item.speaker).lastUpdatedAt
       }
     });
+    deliveredEventIds.push(`room:${room.id}:${messageId}`);
     firstDelivered = firstDelivered || item;
     deliveredCount += 1;
     if (groupOverdue) groupBubbleAt = Math.min(Date.now(), groupBubbleAt + 900 + Math.floor(Math.random() * 1400));
@@ -749,7 +760,8 @@ async function runGroupFirstMessage(state: SNSGodState): Promise<SNSGodState | u
     characterId: firstDelivered.speaker.id,
     title: deliveredCount > 1 ? `${room.name} · ${deliveredCount}개 새 메시지` : `${room.name} · ${firstDelivered.speaker.name}`,
     body: `${firstDelivered.speaker.name}: ${firstDelivered.content}`,
-    app: 'messenger'
+    app: 'messenger',
+    eventIds: deliveredEventIds,
   });
 }
 

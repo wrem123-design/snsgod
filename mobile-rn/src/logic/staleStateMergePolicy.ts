@@ -1,4 +1,5 @@
 import type { SNSGodState } from '../types';
+import { reconcileNotificationEvents } from './notifications';
 
 type StateScalar = string | number | boolean | null | undefined;
 type StateNode = StateScalar | StateNode[] | StateObject;
@@ -407,8 +408,10 @@ function preserveServerSyncProgress(
 
 function enforceMergedStateInvariants(state: SNSGodState): SNSGodState {
   const referenceFaceSlots = state.referenceFaceSlots || [];
-  if (referenceFaceSlots.length <= 50) return state;
-  return { ...state, referenceFaceSlots: referenceFaceSlots.slice(0, 50) };
+  const bounded = referenceFaceSlots.length <= 50
+    ? state
+    : { ...state, referenceFaceSlots: referenceFaceSlots.slice(0, 50) };
+  return reconcileNotificationEvents(bounded);
 }
 
 function stateRoomIds(state: SNSGodState): Set<string> {

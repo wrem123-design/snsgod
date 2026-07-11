@@ -4,7 +4,14 @@ import test from 'node:test';
 import ts from 'typescript';
 
 async function importPureTypeScript(relativePath) {
-  const source = readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8');
+  const source = readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8')
+    .replace("import { markNotificationItemsRead } from './notifications';", `const markNotificationItemsRead = (state, ids) => {
+      const selected = (state.notifications || []).filter(item => ids.includes(item.id));
+      const roomIds = new Set(selected.map(item => item.roomId || item.target?.roomId).filter(Boolean));
+      const unreadCounts = { ...(state.unreadCounts || {}) };
+      roomIds.forEach(roomId => { unreadCounts[roomId] = 0; });
+      return { ...state, unreadCounts, notifications: (state.notifications || []).map(item => roomIds.has(item.roomId || item.target?.roomId) || ids.includes(item.id) ? { ...item, read: true } : item) };
+    };`);
   const transpiled = ts.transpileModule(source, {
     fileName: relativePath,
     reportDiagnostics: true,
@@ -62,6 +69,7 @@ test('round-trips notification root and item deep links for cold or warm app ent
 test('opens one notification request, marks only that item read, and falls back safely', () => {
   const snapshot = {
     ...state(),
+    unreadCounts: { 'direct-1': 2 },
     notifications: [
       { id: 'noti-1', createdAt: 2, read: false, target: { app: 'social', postId: 'post-1' } },
       { id: 'noti-2', createdAt: 1, read: false, target: { app: 'messenger', roomId: 'direct-1' } },
@@ -75,6 +83,20 @@ test('opens one notification request, marks only that item read, and falls back 
   const missing = openNotificationRequest(snapshot, { kind: 'item', notificationId: 'deleted' });
   assert.deepEqual(missing.route, { name: 'notifications' });
   assert.strictEqual(missing.state, snapshot);
+});
+
+test('opening a room target clears its unread and related notifications in the same state change', () => {
+  const snapshot = {
+    ...state(),
+    unreadCounts: { 'direct-1': 2 },
+    notifications: [
+      { id: 'noti-1', createdAt: 2, read: false, roomId: 'direct-1', target: { app: 'messenger', roomId: 'direct-1' } },
+      { id: 'noti-2', createdAt: 1, read: false, roomId: 'direct-1', target: { app: 'messenger', roomId: 'direct-1' } },
+    ],
+  };
+  const opened = openNotificationRequest(snapshot, { kind: 'item', notificationId: 'noti-1' });
+  assert.equal(opened.state.unreadCounts['direct-1'], 0);
+  assert.ok(opened.state.notifications.every(item => item.read === true));
 });
 
 test('connects list taps and Android cold or warm roots to the shared notification router', () => {

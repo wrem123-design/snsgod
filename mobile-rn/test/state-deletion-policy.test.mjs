@@ -80,6 +80,11 @@ test('room deletion cascades through jobs, sessions, generated SNS, DM, notifica
       { id: 'notification-target', type: 'sns', title: '', target: { postId: 'post-room', threadId: 'thread-room' }, createdAt: 1 },
       { id: 'notification-other', type: 'chat', title: '', roomId: 'room-2', createdAt: 1 },
     ],
+    notificationEvents: {
+      'event-room': { targetKind: 'room', targetId: 'room-1', receivedAt: 1 },
+      'event-thread': { targetKind: 'snsdm', targetId: 'thread-room', receivedAt: 1 },
+      'event-other': { targetKind: 'room', targetId: 'room-2', receivedAt: 1 },
+    },
     datingApp: { requestStatus: 'accepted', acceptedRoomId: 'room-1', acceptedCharacterId: 'character-1', history: [{ id: 'history-1', finalProfileId: 'profile', finalProfile: {}, decisions: [], savedAt: 1, acceptedRoomId: 'room-1', acceptedCharacterId: 'character-1', requestStatus: 'accepted' }] },
     selectedRoomId: 'room-1',
   });
@@ -99,6 +104,7 @@ test('room deletion cascades through jobs, sessions, generated SNS, DM, notifica
   assert.deepEqual(next.snsPosts.map(item => item.id), ['post-other']);
   assert.deepEqual(next.snsDmThreads.map(item => item.id), ['thread-other']);
   assert.deepEqual(next.notifications.map(item => item.id), ['notification-other']);
+  assert.deepEqual(Object.keys(next.notificationEvents), ['event-other']);
   assert.equal(next.datingApp.acceptedRoomId, undefined);
   assert.equal(next.datingApp.acceptedCharacterId, undefined);
   assert.equal(next.datingApp.requestStatus, 'none');

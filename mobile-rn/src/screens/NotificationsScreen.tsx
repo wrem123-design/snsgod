@@ -2,6 +2,7 @@ import React from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme';
 import { NotificationItem, SNSGodState } from '../types';
+import { markNotificationItemsRead } from '../logic/notifications';
 
 function timeText(value: number) {
   const date = new Date(value);
@@ -18,7 +19,7 @@ export function NotificationsScreen({ state, onChange, onBack, onOpenNotificatio
 
   function markAllRead() {
     const visibleIds = new Set(notifications.map(item => item.id));
-    onChange({ ...state, notifications: (state.notifications || []).map(item => visibleIds.has(item.id) ? { ...item, read: true } : item) });
+    onChange(markNotificationItemsRead(state, [...visibleIds]));
   }
 
   function clearAll() {

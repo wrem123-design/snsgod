@@ -41,7 +41,7 @@ import { findRandomChat, promoteRandomChatRoom } from './logic/randomChat';
 import { allRooms, findCharacter, isRoomDisabled } from './logic/stateHelpers';
 import { deleteCharacterCascade, deleteRoomCascade } from './logic/deletionCascadePolicy';
 import { IncomingPhoneCall, markPhoneCardStatus, missIncomingPhoneCall, newestPendingPhoneCandidate, rejectIncomingPhoneCall } from './logic/phone';
-import { markRoomRead, pushNotification } from './logic/notifications';
+import { markRoomRead, notifyRoomMessage, notifySnsDmMessages } from './logic/notifications';
 import { resetReplyLlmQueue, startReplyJob } from './logic/replyEngine';
 import { createGroupMeetingEventSession, createManualGroupMeetingEventPrompt, createManualMeetingEventPrompt, createMeetingEventSession, shouldStartGroupMeetingEvent, shouldStartMeetingEvent } from './logic/meetingEvent';
 import { forceUpdateRoomMemory } from './logic/memoryBridge';
@@ -68,6 +68,14 @@ const MEDIA_REPLACEMENT_CACHE_SWEEP_MS = 5_000;
 const MEDIA_REPLACEMENT_CACHE_MAX_ENTRIES = 12;
 const MEDIA_REPLACEMENT_CACHE_MAX_DATA_URI_CHARACTERS = 6_000_000;
 const MEDIA_TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+function roomNotificationEventId(roomId: string, messageId: string): string {
+  return `room:${roomId}:${messageId}`;
+}
+
+function snsDmNotificationEventId(threadId: string, messageId: string): string {
+  return `snsdm:${threadId}:${messageId}`;
+}
 
 type Route =
   | { name: 'chatList' }
@@ -497,8 +505,6 @@ export default function App() {
   function withUnreadForNewMessages(previous: SNSGodState | null, next: SNSGodState, visibleRoomId?: string): SNSGodState {
     if (!previous) return next;
     let result = next;
-    const unreadCounts = { ...(next.unreadCounts || {}) };
-    let changed = false;
     for (const [roomId, messages] of Object.entries(next.messages || {})) {
       const previousIds = new Set((previous.messages?.[roomId] || []).map(message => message.id));
       const incoming = messages.filter(message =>
@@ -507,35 +513,39 @@ export default function App() {
         && (message.content?.trim() || message.mediaData || message.sticker || message.callInvite || message.phoneLog)
       );
       if (!incoming.length) continue;
-      if (roomId === visibleRoomId) {
-        result = markRoomRead(result, roomId);
-        if (unreadCounts[roomId]) {
-          unreadCounts[roomId] = 0;
-          changed = true;
-        }
-        continue;
-      }
       const minimum = (previous.unreadCounts?.[roomId] || 0) + incoming.length;
-      if ((unreadCounts[roomId] || 0) < minimum) {
-        unreadCounts[roomId] = minimum;
-        changed = true;
-      }
       const latestIncoming = incoming[incoming.length - 1];
       const character = next.characters.find(item => item.id === latestIncoming.characterId);
       const isRandomRoom = (next.randomChats || []).some(room => room.id === roomId);
-      result = pushNotification(result, {
-        type: isRandomRoom ? 'randomchat' : 'chat',
+      result = notifyRoomMessage(result, {
+        roomId,
+        characterId: latestIncoming.characterId,
         title: character?.name || '새 메시지',
         body: latestIncoming.content || latestIncoming.imageCaption || (latestIncoming.mediaData ? '사진' : latestIncoming.sticker ? '스티커' : '새 메시지'),
         app: isRandomRoom ? 'randomchat' : 'messenger',
-        roomId,
-        characterId: latestIncoming.characterId,
-        target: { app: isRandomRoom ? 'randomchat' : 'messenger', roomId, characterId: latestIncoming.characterId },
-        collapseKey: `room:${roomId}`
+        visibleRoomId,
+        eventIds: incoming.map(message => roomNotificationEventId(roomId, message.id)),
+        unreadFloor: minimum,
       });
-      changed = true;
     }
-    return changed ? { ...result, unreadCounts } : result;
+    for (const thread of next.snsDmThreads || []) {
+      const previousThread = (previous.snsDmThreads || []).find(item => item.id === thread.id);
+      const previousIds = new Set((previousThread?.messages || []).map(message => message.id));
+      const incoming = thread.messages.filter(message => !previousIds.has(message.id) && message.from !== 'user');
+      if (!incoming.length) continue;
+      const latestIncoming = incoming[incoming.length - 1];
+      const character = next.characters.find(item => item.id === thread.characterId);
+      const unreadFloor = Number(previousThread?.unread || 0) + incoming.length;
+      result = notifySnsDmMessages(result, {
+        threadId: thread.id,
+        characterId: thread.characterId,
+        title: `${character?.name || thread.title} DM`,
+        body: latestIncoming.body,
+        eventIds: incoming.map(message => snsDmNotificationEventId(thread.id, message.id)),
+        unreadFloor,
+      });
+    }
+    return result;
   }
 
   function withNextRevision(next: SNSGodState, previous: SNSGodState | null): SNSGodState {

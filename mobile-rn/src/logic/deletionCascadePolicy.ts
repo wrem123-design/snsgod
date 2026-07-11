@@ -202,6 +202,10 @@ function pruneDeletionDependents(
         && (!postId || !removedPostIds.has(postId))
         && (!threadId || !removedThreadIds.has(threadId));
     }),
+    notificationEvents: Object.fromEntries(Object.entries(state.notificationEvents || {}).filter(([, receipt]) => (
+      !(receipt.targetKind === 'room' && roomIds.has(receipt.targetId))
+      && !(receipt.targetKind === 'snsdm' && removedThreadIds.has(receipt.targetId))
+    ))),
     datingApp: clearInvalidDatingProgress(state.datingApp, roomIds, characterIds),
     sumGod,
     selectedRoomId: state.selectedRoomId && roomIds.has(state.selectedRoomId)

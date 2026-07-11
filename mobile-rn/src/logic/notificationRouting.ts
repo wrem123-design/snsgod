@@ -1,4 +1,5 @@
 import type { NotificationItem, SNSGodState } from '../types';
+import { markNotificationItemsRead } from './notifications';
 
 export type NotificationRoute =
   | { name: 'chatRoom'; roomId: string }
@@ -44,9 +45,8 @@ export function openNotificationRequest(state: SNSGodState, request: Notificatio
   if (request.kind === 'root') return { state, route: { name: 'notifications' } };
   const notification = (state.notifications || []).find(item => item.id === request.notificationId);
   if (!notification) return { state, route: { name: 'notifications' } };
-  const notifications = (state.notifications || []).map(item => item.id === notification.id ? { ...item, read: true } : item);
   return {
-    state: { ...state, notifications },
+    state: markNotificationItemsRead(state, [notification.id]),
     route: resolveNotificationRoute(state, notification),
   };
 }

@@ -14,6 +14,7 @@ test('message copy relies on the Android clipboard toast without a duplicate suc
 
 test('Oracle messaging polls while the JS runtime is alive and keeps the foreground service enabled', () => {
   const app = read('src/App.tsx');
+  const server = read('src/logic/serverMessaging.ts');
   assert.match(app, /ORACLE_SYNC_INTERVAL_MS/);
   assert.match(app, /syncOracleMessages\('server-interval'\)/);
   assert.match(app, /setAutomationKeepAliveRunning\(autoOn\)/);
@@ -22,6 +23,13 @@ test('Oracle messaging polls while the JS runtime is alive and keeps the foregro
   assert.doesNotMatch(app, /outbox \|\| \[\]\)\.length \? await flushServerOutbox\(next\) : await bootstrapServer\(next\)/);
   assert.match(app, /mergeServerSyncResult\(latest, current, next\)/);
   assert.match(app, /oracleSyncPendingReasonRef/);
+  const syncStart = app.indexOf('async function syncOracleMessages');
+  const syncEnd = app.indexOf('\n  function ', syncStart + 1);
+  const syncBody = app.slice(syncStart, syncEnd);
+  assert.ok(syncBody.indexOf('next = await syncServerMessages(next)') < syncBody.indexOf('shouldBootstrapOracleSync'));
+  const bootstrapStart = server.indexOf('export async function bootstrapServer');
+  const bootstrapEnd = server.indexOf('\n}\n', bootstrapStart) + 2;
+  assert.doesNotMatch(server.slice(bootstrapStart, bootstrapEnd), /syncCursor\s*:/);
 });
 
 test('Android keeps the foreground service when the task is dismissed', () => {

@@ -276,8 +276,10 @@ export async function registerServerDevice(state: SNSGodState, deviceName = 'SNS
 
 export async function bootstrapServer(state: SNSGodState, excludeMessageIds: string[] = []): Promise<SNSGodState> {
   if (!isServerMessagingEnabled(state)) return state;
-  const response = await request<{ cursor?: number }>(state, '/v1/sync/bootstrap', { method: 'POST', body: bootstrapPayload(state, excludeMessageIds) });
-  return setServerStatus(state, { syncCursor: Number(response.cursor || state.config.serverMessaging?.syncCursor || 0), lastSyncAt: Date.now(), lastError: '' });
+  await request<{ cursor?: number }>(state, '/v1/sync/bootstrap', { method: 'POST', body: bootstrapPayload(state, excludeMessageIds) });
+  // Only /v1/sync/changes owns the client cursor. Advancing it from a bootstrap
+  // response would skip server messages created while this device was offline.
+  return setServerStatus(state, { lastSyncAt: Date.now(), lastError: '' });
 }
 
 export function enqueueServerMessage(state: SNSGodState, message: SNSGodMessage, roomId: string): SNSGodState {

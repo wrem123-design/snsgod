@@ -881,6 +881,9 @@ export default function App() {
         if (!isRuntimeEpochCurrent(operationEpoch) || !stateRef.current || !isRemoteServicesEnabled(stateRef.current)) return;
         registeredNow = true;
       }
+      // Pull server-originated messages before bootstrap can publish newer
+      // state. A second pull below closes the window for concurrent events.
+      next = await syncServerMessages(next);
       if ((next.config.serverMessaging?.outbox || []).length) {
         next = await flushServerOutbox(next);
       }

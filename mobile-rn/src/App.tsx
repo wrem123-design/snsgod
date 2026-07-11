@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as Application from 'expo-application';
 import * as FileSystem from 'expo-file-system';
-import { Alert, AppState, BackHandler, DevSettings, Keyboard, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { Alert, AppState, BackHandler, DevSettings, Keyboard, Linking, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { ChatListScreen } from './screens/ChatListScreen';
 import { ChatRoomScreen } from './screens/ChatRoomScreen';
 import { CharacterSettingsScreen } from './screens/CharacterSettingsScreen';
@@ -32,7 +32,7 @@ import { Avatar } from './components/Avatar';
 import { MenuHubScreen } from './screens/MenuHubScreen';
 import { flushSaveState, getStoragePaths, importState, loadState, recordSkippedSaveBeforeHydration, saveStateDebounced, SaveStateOptions } from './storage/persist';
 import { colors } from './theme';
-import { SNSGodCharacter, SNSGodState, SNSPost } from './types';
+import { NotificationItem, SNSGodCharacter, SNSGodState, SNSPost } from './types';
 import { isAutomationQueueBusy, runAutomationQueueTick } from './logic/automationQueue';
 import { cancelAllChatJobs, cancelChatJob } from './logic/chatJobs';
 import { maybePromptBatteryOptimizationExemption, setAutomationKeepAliveRunning } from './logic/backgroundAutomation';
@@ -40,7 +40,6 @@ import { appendDebugLog } from './logic/debugLog';
 import { findRandomChat, promoteRandomChatRoom } from './logic/randomChat';
 import { allRooms, findCharacter, isRoomDisabled } from './logic/stateHelpers';
 import { deleteCharacterCascade, deleteRoomCascade } from './logic/deletionCascadePolicy';
-import { roomRouteKind } from './logic/roomStore';
 import { IncomingPhoneCall, markPhoneCardStatus, missIncomingPhoneCall, newestPendingPhoneCandidate, rejectIncomingPhoneCall } from './logic/phone';
 import { markRoomRead, pushNotification } from './logic/notifications';
 import { resetReplyLlmQueue, startReplyJob } from './logic/replyEngine';
@@ -61,6 +60,7 @@ import { canCommitRuntimeEpoch } from './logic/runtimeEpochPolicy';
 import { getSumGodProgress, invalidateSumGodBackupWrites, replaceSumGodBackup } from './logic/sumgod';
 import { resetDatingImageQueue } from './logic/datingApp';
 import { importFullBackupZip, type PreparedFullBackupRestore } from './logic/backup';
+import { notificationRouteRequestFromUrl, openNotificationRequest, type NotificationRoute, type NotificationRouteRequest } from './logic/notificationRouting';
 
 const INTERRUPTED_REPLY_RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MEDIA_REPLACEMENT_CACHE_TTL_MS = 30_000;
@@ -82,7 +82,7 @@ type Route =
   | { name: 'groupRoomSettings'; roomId: string; returnRoomId: string }
   | { name: 'lorebook' }
   | { name: 'prompts' }
-  | { name: 'sns'; platform: SNSPost['platform'] }
+  | { name: 'sns'; platform: SNSPost['platform']; postId?: string; threadId?: string }
   | { name: 'randomHub' }
   | { name: 'etc' }
   | { name: 'gallery' }
@@ -131,6 +131,7 @@ export default function App() {
   const oracleSyncInFlightRef = useRef(false);
   const oracleSyncPendingReasonRef = useRef<{ reason: string; epoch: number } | null>(null);
   const meetingEventWorkRef = useRef(new Map<string, Promise<boolean>>());
+  const pendingNotificationRequestRef = useRef<NotificationRouteRequest | null>(null);
 
   function clearRuntimeOnlyState(next: SNSGodState): SNSGodState {
     return { ...next, pendingReplies: {} };
@@ -198,6 +199,9 @@ export default function App() {
       stateRef.current = ready;
       hydratedRef.current = true;
       setHydrated(true);
+      const pendingNotificationRequest = pendingNotificationRequestRef.current;
+      pendingNotificationRequestRef.current = null;
+      if (pendingNotificationRequest) setTimeout(() => void openNotificationRouteRequest(pendingNotificationRequest), 0);
       void appendDebugLog('app', `state loaded: characters=${next.characters.length}, rooms=${Object.values(next.chatRooms).flat().length}`);
       if (isServerMessagingEnabled(ready)) {
         void syncOracleMessages('startup');
@@ -217,6 +221,36 @@ export default function App() {
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  useEffect(() => {
+    function handleUrl(url: string) {
+      const request = notificationRouteRequestFromUrl(url);
+      if (request) void openNotificationRouteRequest(request);
+    }
+    void Linking.getInitialURL().then(url => {
+      if (url) handleUrl(url);
+    });
+    const subscription = Linking.addEventListener('url', event => handleUrl(event.url));
+    return () => subscription.remove();
+  }, []);
+
+  async function openNotificationRouteRequest(request: NotificationRouteRequest) {
+    if (!stateRef.current) {
+      pendingNotificationRequestRef.current = request;
+      return;
+    }
+    let resolvedRoute: NotificationRoute = { name: 'notifications' };
+    await commitCurrent(latest => {
+      const opened = openNotificationRequest(latest, request);
+      resolvedRoute = opened.route;
+      return opened.state;
+    });
+    navigate(resolvedRoute);
+  }
+
+  function openNotificationItem(item: NotificationItem) {
+    void openNotificationRouteRequest({ kind: 'item', notificationId: item.id });
+  }
   const serverPolicyFingerprint = state ? JSON.stringify({
     server: {
       enabled: state.config.serverMessaging?.enabled === true,
@@ -1176,6 +1210,8 @@ export default function App() {
         <SNSScreen
           state={state}
           platform={route.platform}
+          initialPostId={route.postId}
+          initialThreadId={route.threadId}
           onChange={commitRenderedState}
           onOpenSettings={() => navigateRendered({ name: 'settings' })}
           onOpenNotifications={() => navigateRendered({ name: 'notifications' })}
@@ -1228,11 +1264,7 @@ export default function App() {
           state={state}
           onChange={commitRenderedState}
           onBack={goBackRendered}
-          onOpenRoom={roomId => {
-            const current = stateRef.current;
-            const kind = current ? roomRouteKind(current, roomId) : 'chatRoom';
-            navigateRendered({ name: kind, roomId } as Route);
-          }}
+          onOpenNotification={openNotificationItem}
         />
       ) : route.name === 'profile' ? (
         <ProfileScreen

@@ -27,9 +27,11 @@ function finalImagePromptForRetry(post: SNSPost): string {
   return prompt;
 }
 
-export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications, onChange }: {
+export function SNSScreen({ state, platform, initialPostId, initialThreadId, onOpenSettings, onOpenNotifications, onChange }: {
   state: SNSGodState;
   platform: SNSPost['platform'];
+  initialPostId?: string;
+  initialThreadId?: string;
   onOpenSettings: () => void;
   onOpenNotifications: () => void;
   onChange: (next: SNSGodState, options?: { conflict?: 'incoming' | 'latest' }) => Promise<void> | void;
@@ -80,6 +82,23 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
     if (selectedCharacterId && thread.characterId !== selectedCharacterId) return false;
     return dmThreadPlatform(thread, state.snsPosts || []) === platform;
   }), [platform, selectedCharacterId, state.snsDmThreads, state.snsPosts]);
+
+  useEffect(() => {
+    const thread = initialThreadId ? (state.snsDmThreads || []).find(item => item.id === initialThreadId) : undefined;
+    const post = thread?.postId
+      ? (state.snsPosts || []).find(item => item.id === thread.postId)
+      : initialPostId ? (state.snsPosts || []).find(item => item.id === initialPostId) : undefined;
+    if (thread) setActiveDmId(thread.id);
+    if (thread?.characterId || post?.characterId) setSelectedCharacterId(String(thread?.characterId || post?.characterId));
+  }, [initialPostId, initialThreadId, state.snsDmThreads, state.snsPosts]);
+
+  useEffect(() => {
+    if (!initialPostId) return;
+    const index = posts.findIndex(post => post.id === initialPostId);
+    if (index < 0) return;
+    const timer = setTimeout(() => feedRef.current?.scrollToIndex({ index, animated: false, viewPosition: 0.1 }), 0);
+    return () => clearTimeout(timer);
+  }, [initialPostId, posts]);
 
   useEffect(() => {
     const existingIds = new Set((state.snsDmThreads || []).map(thread => thread.id));
@@ -598,6 +617,7 @@ export function SNSScreen({ state, platform, onOpenSettings, onOpenNotifications
       <FlatList
         ref={feedRef}
         data={posts}
+        onScrollToIndexFailed={({ index, averageItemLength }) => feedRef.current?.scrollToOffset({ offset: index * averageItemLength, animated: false })}
         keyExtractor={item => item.id}
         keyboardShouldPersistTaps="handled"
         ListHeaderComponent={renderGeneratorPanel()}

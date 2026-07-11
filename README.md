@@ -67,6 +67,7 @@ Oracle Ubuntu 배포 절차는 [`docs/ORACLE_SERVER_DEPLOYMENT_GUIDE.md`](docs/O
 
 프롬프트 block 조립, trace, budget과 최신 사용자 입력 중복 방지 정책은 [`docs/PROMPT_COMPILER.md`](docs/PROMPT_COMPILER.md)를 참고하십시오.
 프롬프트 설정별 실제 소비 경로와 숨김 호환성 정책은 [`docs/PROMPT_SETTINGS_CONSUMER_MAP.md`](docs/PROMPT_SETTINGS_CONSUMER_MAP.md)를 참고하십시오.
+사용자 기능과 주요 사용 흐름은 [`docs/FEATURES.md`](docs/FEATURES.md)를 참고하십시오.
 
 개인톡·단톡·선톡·통화가 공유하는 캐릭터 정체성·언어·기억 경계는 [`docs/CANONICAL_PERSONA_POLICY.md`](docs/CANONICAL_PERSONA_POLICY.md)를 참고하십시오.
 

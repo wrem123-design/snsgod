@@ -249,7 +249,7 @@ const styles = StyleSheet.create({
   emptySlot: { alignItems: 'center', justifyContent: 'center', backgroundColor: '#f7f2e9', borderStyle: 'dashed' },
   emptyPlus: { color: colors.text, fontSize: 34, lineHeight: 36, fontWeight: '900' },
   emptySlotText: { color: colors.sub, fontSize: 12, fontWeight: '900' },
-  viewer: { ...StyleSheet.absoluteFillObject, zIndex: 20, backgroundColor: '#101214', padding: 12 },
+  viewer: { ...StyleSheet.absoluteFill, zIndex: 20, backgroundColor: '#101214', padding: 12 },
   viewerHeader: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 8 },
   viewerTitleBlock: { flex: 1, minWidth: 0 },
   viewerTitle: { color: '#fffefa', fontSize: 17, fontWeight: '900' },

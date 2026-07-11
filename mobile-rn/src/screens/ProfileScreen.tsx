@@ -188,7 +188,7 @@ const styles = StyleSheet.create({
   historyTile: { width: 82, padding: 5, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: '#fffefa' },
   historyImage: { width: 70, height: 70, borderRadius: 8, backgroundColor: '#eee8dc' },
   historyLabel: { marginTop: 4, color: colors.sub, fontSize: 11, fontWeight: '800', textAlign: 'center' },
-  viewerOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 30, backgroundColor: '#101214', padding: 12 },
+  viewerOverlay: { ...StyleSheet.absoluteFill, zIndex: 30, backgroundColor: '#101214', padding: 12 },
   viewerHeader: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 10 },
   viewerTitle: { flex: 1, color: '#fffefa', fontSize: 18, fontWeight: '900' },
   viewerClose: { minHeight: 38, paddingHorizontal: 14, borderRadius: 19, backgroundColor: '#fff', justifyContent: 'center' },

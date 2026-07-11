@@ -18,7 +18,10 @@
         {
           "configureAndroidBackup": true
         }
-      ]
+      ],
+      "expo-sharing",
+      "expo-sqlite",
+      "expo-status-bar"
     ]
   }
 }

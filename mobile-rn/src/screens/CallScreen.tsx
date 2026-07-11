@@ -870,7 +870,7 @@ function formatElapsed(seconds: number) {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#1f2933' },
   fallbackScreen: { flex: 1, backgroundColor: '#27313b', padding: 20, justifyContent: 'center' },
-  overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(13,18,24,0.68)' },
+  overlay: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(13,18,24,0.68)' },
   stage: { flex: 1, paddingHorizontal: 20, paddingBottom: 14 },
   stageKeyboard: { paddingBottom: 6 },
   header: { minHeight: 54, paddingTop: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },

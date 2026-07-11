@@ -803,7 +803,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#151d27' },
   fallback: { flex: 1, backgroundColor: '#151d27', padding: 20, justifyContent: 'center' },
   fallbackText: { color: '#fff', fontSize: 18, fontWeight: '900', textAlign: 'center' },
-  overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(10,14,20,0.72)' },
+  overlay: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(10,14,20,0.72)' },
   resultWrap: { flex: 1, margin: 18, justifyContent: 'center', gap: 10 },
   resultTitle: { color: '#fff', fontSize: 28, lineHeight: 34, fontWeight: '900' },
   resultLine: { color: 'rgba(237,242,246,0.86)', fontSize: 15, lineHeight: 22, fontWeight: '800' },

@@ -39,3 +39,11 @@ Dependencies point from app/screens toward logic/storage. Logic and storage modu
 - Module-boundary tests assert dependency direction, public types, absence of duplicated root-route orchestration, and callback-only backup UI.
 - Feature tests cover local-only policy, backup encryption/authentication, transactional restore, settings IA, stale completion rejection, media rollback, and secret redaction.
 - Every release candidate runs all Node tests, TypeScript, Android release assembly, data-preserving installation, accessibility navigation, and crash-buffer inspection.
+
+## Native runtime baseline
+
+- The supported baseline is Expo SDK 57, React Native 0.86, React 19.2, and the mandatory React Native new architecture.
+- `MainApplication.kt` follows Expo's `ExpoReactHostFactory` startup path and explicitly retains `TermuxBridgePackage` and `AutomationKeepAlivePackage`.
+- Existing file operations use `expo-file-system/legacy` intentionally. Migrating to the new object API is a separate behavioral change and must preserve backup, media, album trash, and persistence semantics.
+- The repository contains a customized bare Android project. Expo Doctor's native/app-config synchronization warning is expected; `expo prebuild` must not overwrite the custom package registration without a reviewed native diff.
+- On Windows, the release script places Gradle's cache at `C:\sg-gradle` to keep generated React Native Prefab paths below the legacy path-length boundary.

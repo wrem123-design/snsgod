@@ -364,9 +364,9 @@ const styles = StyleSheet.create({
   championImage: { width: '100%', aspectRatio: 0.76, borderRadius: 8, backgroundColor: '#333' },
   championTitle: { marginTop: 18, color: '#fff', fontSize: 30, fontWeight: '900', textAlign: 'center' },
   championSub: { marginTop: 6, color: '#d8d8d8', fontSize: 14, lineHeight: 20, fontWeight: '800', textAlign: 'center' },
-  winnerOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 20, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' },
-  winnerImage: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%', resizeMode: 'cover' },
-  winnerShade: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.25)' },
+  winnerOverlay: { ...StyleSheet.absoluteFill, zIndex: 20, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' },
+  winnerImage: { ...StyleSheet.absoluteFill, width: '100%', height: '100%', resizeMode: 'cover' },
+  winnerShade: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.25)' },
   winnerLabel: { color: colors.accent, fontSize: 26, fontWeight: '900', textShadowColor: '#000', textShadowRadius: 8 },
   winnerName: { marginTop: 8, color: '#fff', fontSize: 34, fontWeight: '900', textShadowColor: '#000', textShadowRadius: 8 }
 });

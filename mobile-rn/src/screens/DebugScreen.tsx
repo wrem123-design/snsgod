@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import * as Application from 'expo-application';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { Alert, NativeModules, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { exportFullBackupZip } from '../logic/backup';

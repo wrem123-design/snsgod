@@ -42,10 +42,10 @@ test('release metadata identifies the updated mobile build', () => {
   const packageConfig = JSON.parse(read('package.json'));
   const gradle = read('android/app/build.gradle');
   const rootGradle = read('android/build.gradle');
-  assert.equal(appConfig.expo.version, '0.3.5');
-  assert.equal(packageConfig.version, '0.3.5');
-  assert.match(gradle, /versionCode 14/);
-  assert.match(gradle, /versionName "0\.3\.5"/);
+  assert.equal(appConfig.expo.version, '0.3.6');
+  assert.equal(packageConfig.version, '0.3.6');
+  assert.match(gradle, /versionCode 15/);
+  assert.match(gradle, /versionName "0\.3\.6"/);
   assert.match(rootGradle, /com\.google\.gms:google-services/);
   assert.match(gradle, /google-services\.json/);
   assert.match(gradle, /apply plugin: "com\.google\.gms\.google-services"/);
@@ -91,6 +91,27 @@ test('Oracle settings expose notification delivery state and system recovery act
   assert.match(settings, /백그라운드 답장 알림이 꺼져 있습니다/);
   assert.match(settings, /Linking\.openSettings\(\)/);
   assert.match(settings, /알림 설정 열기/);
+});
+
+test('basic settings expose system notification categories without gating message sync', () => {
+  const types = read('src/types.ts');
+  const navigation = read('src/screens/settings/SettingsNavigation.tsx');
+  const settings = read('src/screens/SettingsScreen.tsx');
+  const notificationSection = read('src/screens/settings/NotificationSettingsSection.tsx');
+  const app = read('src/App.tsx');
+  const server = read('src/logic/serverMessaging.ts');
+
+  assert.match(types, /export type NotificationDisplayPreferences/);
+  assert.match(types, /notificationPreferences\?: NotificationDisplayPreferences/);
+  assert.match(navigation, /key: 'notifications', label: '알림'/);
+  assert.match(settings, /<NotificationSettingsSection/);
+  assert.match(notificationSection, /답장 메시지/);
+  assert.match(notificationSection, /캐릭터 선톡/);
+  assert.match(notificationSection, /메시지 생성과 앱 내부 저장·읽지 않음 표시는 계속 동작/);
+  assert.match(app, /notificationPreferences: state\.config\.notificationPreferences/);
+  assert.match(server, /pushPreferences: notificationPreferencesForServer\(state\)/);
+  assert.match(server, /notificationImage: notificationImageForServer\(character\)/);
+  assert.doesNotMatch(server, /notificationPreferences[\s\S]{0,120}isServerMessagingEnabled/);
 });
 
 test('returning to the foreground refreshes both push registration and Oracle messages', () => {

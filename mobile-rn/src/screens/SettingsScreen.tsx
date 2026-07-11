@@ -28,6 +28,7 @@ import { mergeServerConnectionResult } from '../logic/staleStateMergePolicy';
 import { isRemoteServicesEnabled, withDataBoundaryMode } from '../logic/remoteServicePolicy';
 import { AdvancedSettingsNotice, defaultSectionForSettingsMode, SettingsMode, SettingsNavigation, SettingsSection } from './settings/SettingsNavigation';
 import { BackupSettingsSection } from './settings/BackupSettingsSection';
+import { NotificationSettingsSection } from './settings/NotificationSettingsSection';
 
 const PROVIDERS: ApiProvider[] = ['vertex', 'gemini', 'openai', 'anthropic', 'custom', 'grok'];
 const PROVIDER_PRESETS: Partial<Record<ApiProvider, { endpoint: string; model: string }[]>> = {
@@ -1382,6 +1383,7 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
           <>
         {settingsMode === 'advanced' ? <AdvancedSettingsNotice /> : null}
         {status ? <View style={styles.statusBox}><Text style={styles.statusText}>{status}</Text></View> : null}
+        <NotificationSettingsSection state={state} visible={activeSection === 'notifications'} onCommitCurrent={onCommitCurrent} />
         <View style={[styles.card, activeSection !== 'characters' && styles.hidden]}>
           <Text style={styles.cardTitle}>캐릭터별 설정</Text>
           <Text style={styles.help}>캐릭터, 능동 채팅, 삼화 태그, 로어북은 캐릭터 편집 화면에서 관리합니다.</Text>

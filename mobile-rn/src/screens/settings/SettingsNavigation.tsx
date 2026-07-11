@@ -3,12 +3,13 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../../theme';
 
 export type SettingsMode = 'basic' | 'advanced';
-export type SettingsSection = 'user' | 'characters' | 'stickers' | 'screen' | 'backup' | 'api' | 'image' | 'prompts' | 'lorebook';
+export type SettingsSection = 'user' | 'characters' | 'stickers' | 'notifications' | 'screen' | 'backup' | 'api' | 'image' | 'prompts' | 'lorebook';
 
 export const BASIC_SETTINGS_SECTIONS: ReadonlyArray<{ key: SettingsSection; label: string }> = [
   { key: 'user', label: '기본' },
   { key: 'characters', label: '캐릭터' },
   { key: 'stickers', label: '스티커' },
+  { key: 'notifications', label: '알림' },
   { key: 'screen', label: '화면' },
   { key: 'backup', label: '백업' },
 ];

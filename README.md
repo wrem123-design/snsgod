@@ -75,7 +75,7 @@ Oracle 메시지 서버를 연결한 모바일 앱은 실행 중이거나 백그
 
 사용 방법은 **설정 → API → Oracle 메시지 서버**에서 서버 주소와 연결 키를 입력한 뒤 **연결 및 동기화**를 누르는 것입니다. `마지막 동기화` 시각이 표시되면 연결된 상태입니다. 기기 인증 정보가 없거나 서버가 응답하지 않으면 최근 오류에 재연결 또는 시간 초과 안내가 표시되며, 요청은 20초 뒤 해제되어 다음 1분 동기화가 다시 시도할 수 있습니다.
 
-실제 원격 알림을 켜려면 Firebase에 Android 패키지 `com.snsgod.rn`을 등록한 뒤 받은 `google-services.json`을 `mobile-rn/android/app/google-services.json`에 두고 APK를 다시 빌드합니다. 같은 Firebase 프로젝트의 서비스 계정 JSON은 Oracle 서버의 Git 외부 경로에 저장한 뒤 `PUSH_PROVIDER=fcm`, `FIREBASE_SERVICE_ACCOUNT_PATH=/절대/경로/서비스계정.json`으로 설정합니다. 알림 권한이 꺼져 있어도 앱은 FCM 토큰 등록을 시도해 서버 메시지를 보관·동기화하지만, 백그라운드 알림을 화면에 표시하려면 Oracle 카드의 **알림 설정 열기**에서 권한을 허용해야 합니다. Android 설정 화면에서 앱을 직접 **강제 종료**한 상태는 운영체제가 FCM도 차단하므로 앱을 한 번 다시 실행해야 합니다.
+실제 원격 알림을 켜려면 Firebase에 Android 패키지 `com.snsgod.rn`을 등록한 뒤 받은 `google-services.json`을 `mobile-rn/android/app/google-services.json`에 두고 APK를 다시 빌드합니다. 같은 Firebase 프로젝트의 서비스 계정 JSON은 Oracle 서버의 Git 외부 경로에 저장한 뒤 `PUSH_PROVIDER=fcm`, `FIREBASE_SERVICE_ACCOUNT_PATH=/절대/경로/서비스계정.json`으로 설정합니다. 알림 권한이 꺼져 있어도 앱은 FCM 토큰 등록과 서버 메시지 보관·동기화를 계속하며, **설정 → 기본 설정 → 알림**에서 답장과 선톡의 휴대폰 표시를 각각 선택할 수 있습니다. Android 설정 화면에서 앱을 직접 **강제 종료**한 상태는 운영체제가 FCM도 차단하므로 앱을 한 번 다시 실행해야 합니다.
 
 ## 검증 명령
 

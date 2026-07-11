@@ -31,6 +31,9 @@ The app uses warm messenger surfaces with soft contrast, compact controls, and c
 - chat.body: 16px, line-height 22
 - meeting.body: 18px, line-height 28, 800
 - compact.label: 11px, 900
+- settings.sectionTitle: 17px, 900
+- settings.rowTitle: 14px, 900
+- settings.help: 12px, line-height 18, 700
 
 ## Spacing
 - screen.gutter: 12px
@@ -63,6 +66,7 @@ The app uses warm messenger surfaces with soft contrast, compact controls, and c
 - Album selection: 52px action bar minimum, 42px action touch height, 28px selected marker, and 12px action bar gap. Selection confirmation uses the existing panel, border, accent, and danger tokens without introducing another surface style.
 - Album trash: reuse the 42px action touch height, 12px image radius, 12px card padding, and 8px compact gap. Restore uses surfaceAlt; permanent delete uses danger only on the final action. Impact rows remain plain panel rows rather than a new card family.
 - Root navigation: four equal roots in a 68px bottom bar, each with a 24px system glyph and visible 11px Korean label. Selected state uses accent on panel; unselected state uses panelSoft and sub text. Root hub rows use 72px minimum height, 12px padding, 12px radius, and 8px gap.
+- Notification settings: reuse the panel card with 12px padding and 8px radius. Each system-alert row is at least 72px high with an accessible 42px on/off control. Explanatory and Android permission blocks use panelSoft rather than introducing another card family.
 
 ## Motion
 - Meeting text fades in with opacity only.

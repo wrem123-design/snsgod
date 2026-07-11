@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { hydrateStateSecrets, saveStateSecrets, stateWithoutStoredSecrets } from './secureSecrets';
 import * as FileSystem from 'expo-file-system';
 import * as SQLite from 'expo-sqlite';
 import { InteractionManager } from 'react-native';
@@ -163,14 +164,16 @@ export async function loadState(): Promise<SNSGodState> {
     backups,
     selected.source === 'default'
   ));
+  const secretHydration = await hydrateStateSecrets(normalized);
+  const hydrated = secretHydration.state;
   if (selected.source === 'sqlite' || selected.source === 'sqliteUnverified') {
-    persistedMessageRooms = new Map(Object.entries(normalized.messages || {}));
+    persistedMessageRooms = new Map(Object.entries(hydrated.messages || {}));
     persistedMessageRoomsReady = true;
   } else {
     persistedMessageRooms = new Map();
     persistedMessageRoomsReady = false;
   }
-  const stats = getStorageStats(normalized);
+  const stats = getStorageStats(hydrated);
   persistedRevision = stats.revision;
   persistedWriteSeq = stats.writeSeq;
   const backupStats = fileRaw ? statsFromRaw(fileRaw) : undefined;
@@ -185,7 +188,10 @@ export async function loadState(): Promise<SNSGodState> {
       lastAsyncStorageWarning = `legacy AsyncStorage cleanup failed: ${error instanceof Error ? error.message : String(error)}`;
     });
   }
-  return normalized;
+  if (secretHydration.migratedPlaintext) {
+    saveStateDebounced(hydrated, { important: true, reason: 'secure secret plaintext migration' });
+  }
+  return hydrated;
 }
 
 function mergeSaveOptions(current: SaveStateOptions | undefined, next: SaveStateOptions | undefined): SaveStateOptions {
@@ -454,9 +460,10 @@ function mergeCriticalBackups(
 
 async function preparePersistedPayload(state: SNSGodState, options: { includeFullBackupPayload?: boolean; perf?: ReturnType<typeof createPersistPerfCollector> } = {}): Promise<PersistedPayload> {
   const perf = options.perf;
+  const storageSafeState = stateWithoutStoredSecrets(state);
   const externalized = perf
-    ? await perf.measure('externalizeStateMedia', () => externalizeStateMediaWithResult(state))
-    : await externalizeStateMediaWithResult(state);
+    ? await perf.measure('externalizeStateMedia', () => externalizeStateMediaWithResult(storageSafeState))
+    : await externalizeStateMediaWithResult(storageSafeState);
   const normalized = perf
     ? perf.measureSync('normalizeState', () => normalizeState(externalized.state))
     : normalizeState(externalized.state);
@@ -476,6 +483,7 @@ async function preparePersistedPayload(state: SNSGodState, options: { includeFul
     : undefined;
   const stats = statsFromSnapshot(snapshot);
   const backupStats = fullSnapshot ? statsFromSnapshot(fullSnapshot) : undefined;
+  await saveStateSecrets(state);
   return {
     snapshot,
     normalizedState: normalized,

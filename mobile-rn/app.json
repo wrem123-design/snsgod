@@ -11,6 +11,14 @@
     "android": {
       "package": "com.snsgod.rn",
       "permissions": []
-    }
+    },
+    "plugins": [
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true
+        }
+      ]
+    ]
   }
 }

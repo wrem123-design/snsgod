@@ -297,6 +297,7 @@ export function applyStateMediaUriReplacements(
     ...session,
     stillImage: replace(session.stillImage),
   }));
+  const mediaAlbumFavoriteUris = state.mediaAlbumFavoriteUris?.map(uri => replace(uri) ?? uri);
 
   const blindDate = state.blindDate ? {
     ...state.blindDate,
@@ -342,6 +343,7 @@ export function applyStateMediaUriReplacements(
     snsDmThreads,
     referenceFaceSlots,
     meetingEventSessions,
+    mediaAlbumFavoriteUris,
     blindDate,
     datingApp,
   };

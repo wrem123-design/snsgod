@@ -38,7 +38,7 @@ export function MenuHubScreen({ mode, onOpenEncounter, onOpenBlindDate, onOpenDa
     { title: 'GLAM', subtitle: '3명 중 2명까지 하트', image: menuImages.datingApp, onPress: onOpenDatingApp },
     { title: '이상형 월드컵', image: menuImages.worldcup, onPress: onOpenIdealWorldcup },
     { title: 'SumGod', subtitle: '커플 질문 다이어리', image: menuImages.sumgod, onPress: onOpenSumGod },
-    { title: '갤러리', subtitle: '저장된 이미지 보기', image: menuImages.gallery, onPress: onOpenGallery }
+    { title: '앨범', subtitle: '모든 이미지와 사용처 보기', image: menuImages.gallery, onPress: onOpenGallery }
   ];
   const optionItems: MenuItem[] = [
     { title: '레퍼런스', subtitle: '얼굴 슬롯 관리', image: menuImages.references, onPress: onOpenReferences },

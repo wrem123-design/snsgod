@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as Application from 'expo-application';
 import * as FileSystem from 'expo-file-system/legacy';
-import { Alert, AppState, BackHandler, DevSettings, Keyboard, Linking, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { Alert, AppState, BackHandler, DevSettings, Keyboard, Linking, Platform, Pressable, SafeAreaView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { ChatListScreen } from './screens/ChatListScreen';
 import { ChatRoomScreen } from './screens/ChatRoomScreen';
 import { CharacterSettingsScreen } from './screens/CharacterSettingsScreen';
@@ -72,6 +72,7 @@ import { isRemoteServicesEnabled } from './logic/remoteServicePolicy';
 import { carryStateSecrets } from './storage/secureSecrets';
 
 const ORACLE_SYNC_INTERVAL_MS = 60 * 1000;
+const ANDROID_STATUS_BAR_INSET = Platform.OS === 'android' ? StatusBar.currentHeight || 0 : 0;
 const MEDIA_REPLACEMENT_CACHE_TTL_MS = 30_000;
 const MEDIA_REPLACEMENT_CACHE_SWEEP_MS = 5_000;
 const MEDIA_REPLACEMENT_CACHE_MAX_ENTRIES = 12;
@@ -1694,9 +1695,9 @@ function IncomingCallOverlay({ state, incoming, onAccept, onReject }: {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#fff' },
+  safe: { flex: 1, paddingTop: ANDROID_STATUS_BAR_INSET, backgroundColor: '#fff' },
   content: { flex: 1 },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0877f2' },
+  loading: { flex: 1, paddingTop: ANDROID_STATUS_BAR_INSET, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0877f2' },
   loadingBrandMark: { alignItems: 'center', justifyContent: 'center' },
   loadingBrandText: { color: '#fff', fontSize: 86, lineHeight: 96, fontWeight: '900', letterSpacing: 0 },
   loadingSystemText: { position: 'absolute', bottom: 42, left: 24, right: 24, color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '700', textAlign: 'center' },

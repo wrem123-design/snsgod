@@ -55,6 +55,7 @@ The app uses warm messenger surfaces with soft contrast, compact controls, and c
 - chat.keyboardAvoidance: iOS uses padding; Android uses height together with native adjustResize
 - chat.keyboardVerticalOffset: 0px because chat screens render inside the root safe area without a navigation header overlay
 - chat.composerFocus: keep the latest message visible only when the conversation was already near the bottom; preserve intentionally scrolled history
+- system.statusBarInset: Android uses the runtime `StatusBar.currentHeight`; iOS continues to use the native `SafeAreaView` inset
 
 ## Components
 - Chat bubbles use warm off-white for other speakers and yellow for the user.

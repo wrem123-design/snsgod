@@ -37,6 +37,13 @@ test('Android keeps the foreground service when the task is dismissed', () => {
   assert.match(manifest, /android:stopWithTask="false"/);
 });
 
+test('Android root content starts below the Galaxy system status bar', () => {
+  const app = read('src/App.tsx');
+  assert.match(app, /const ANDROID_STATUS_BAR_INSET = Platform\.OS === 'android'\s*\? StatusBar\.currentHeight \|\| 0\s*: 0/);
+  assert.match(app, /safe: \{[^}]*paddingTop: ANDROID_STATUS_BAR_INSET/);
+  assert.match(app, /loading: \{[^}]*paddingTop: ANDROID_STATUS_BAR_INSET/);
+});
+
 test('release metadata identifies the updated mobile build', () => {
   const appConfig = JSON.parse(read('app.json'));
   const packageConfig = JSON.parse(read('package.json'));

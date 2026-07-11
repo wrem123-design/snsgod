@@ -494,7 +494,7 @@ export async function startReplyJob(input: StartReplyJobInput) {
                 if (!roomStillValid(current, input.roomId, input.characterId)) return current;
                 if ((current.meetingEventSessions || []).some(session => (
                   session.roomId === input.roomId
-                  && (session.status === 'pending' || session.status === 'active')
+                  && (session.status === 'pending' || session.status === 'active' || session.status === 'paused')
                 ))) return current;
                 return mergeStaleState(current, sourceState, generated, { conflict: 'latest' });
               });

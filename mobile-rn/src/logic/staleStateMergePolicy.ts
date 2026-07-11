@@ -475,12 +475,17 @@ export function preserveLatestDeletionInvariants(
   const meetingEventSessions = (candidate.meetingEventSessions || []).filter(
     session => !deletedRoomIds.has(session.roomId),
   );
+  const callSessions = (candidate.callSessions || []).filter(session => (
+    !deletedRoomIds.has(String(session.roomId || ''))
+    && !deletedCharacterIds.has(session.characterId)
+  ));
   return {
     ...candidate,
     messages,
     unreadCounts,
     snsPosts,
     snsDmThreads,
+    callSessions,
     meetingEventSessions,
     roomSummaries: (candidate.roomSummaries || []).filter(summary => (
       !deletedRoomIds.has(summary.roomId)
@@ -510,6 +515,10 @@ export function preserveLatestDeletionInvariants(
     activeMeetingEventId: candidate.activeMeetingEventId
       && meetingEventSessions.some(session => session.id === candidate.activeMeetingEventId)
       ? candidate.activeMeetingEventId
+      : undefined,
+    activeCallSessionId: candidate.activeCallSessionId
+      && callSessions.some(session => session.id === candidate.activeCallSessionId)
+      ? candidate.activeCallSessionId
       : undefined,
     selectedRoomId: candidate.selectedRoomId && deletedRoomIds.has(candidate.selectedRoomId)
       ? undefined

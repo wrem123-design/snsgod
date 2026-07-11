@@ -62,6 +62,7 @@ import { resetDatingImageQueue } from './logic/datingApp';
 import { importFullBackupZip, type PreparedFullBackupRestore } from './logic/backup';
 import { notificationRouteRequestFromUrl, openNotificationRequest, type NotificationRoute, type NotificationRouteRequest } from './logic/notificationRouting';
 import { cancelAllPendingReplyJobs, reconcilePendingReplyJobs } from './logic/pendingReplyJobs';
+import { normalizePersistedInteractionLifecycles, pauseActiveInteractions, resumePointedInteractions } from './logic/interactionLifecycle';
 
 const MEDIA_REPLACEMENT_CACHE_TTL_MS = 30_000;
 const MEDIA_REPLACEMENT_CACHE_SWEEP_MS = 5_000;
@@ -143,7 +144,8 @@ export default function App() {
   const pendingNotificationRequestRef = useRef<NotificationRouteRequest | null>(null);
 
   function reconcileLoadedState(next: SNSGodState): { state: SNSGodState; resumable: PendingReplyJob[] } {
-    return reconcilePendingReplyJobs(next);
+    const reconciled = reconcilePendingReplyJobs(next);
+    return { ...reconciled, state: normalizePersistedInteractionLifecycles(reconciled.state) as SNSGodState };
   }
 
   function sameRoute(a: Route, b: Route): boolean {
@@ -334,6 +336,16 @@ export default function App() {
     const subscription = AppState.addEventListener('change', nextState => {
       if (restoringRef.current) return;
       if (nextState === 'active') {
+        const current = stateRef.current;
+        if (current) {
+          const resumed = resumePointedInteractions(current) as SNSGodState;
+          if (resumed !== current) {
+            const snapshot = withNextRevision(resumed, current);
+            stateRef.current = snapshot;
+            setState(snapshot);
+            saveStateDebounced(snapshot, { important: true, reason: 'app foreground interaction resume' });
+          }
+        }
         // Server mode receives messages that were generated while the app was closed.
         if (stateRef.current && isServerMessagingEnabled(stateRef.current)) {
           void syncOracleMessages('app-active');
@@ -344,7 +356,8 @@ export default function App() {
       }
       const current = stateRef.current;
       if (current) {
-        const summarized = summarizeRoomsBeforeFlush(current);
+        const pausedInteractions = pauseActiveInteractions(current) as SNSGodState;
+        const summarized = summarizeRoomsBeforeFlush(pausedInteractions);
         const snapshot = summarized === current ? current : withNextRevision(summarized, current);
         stateRef.current = snapshot;
         setState(snapshot);
@@ -387,9 +400,22 @@ export default function App() {
   useEffect(() => {
     if (!state?.activeMeetingEventId || route.name === 'meeting' || route.name === 'call') return;
     const session = (state.meetingEventSessions || []).find(item => item.id === state.activeMeetingEventId);
-    if (!session || session.status !== 'active') return;
+    if (!session || (session.status !== 'active' && session.status !== 'paused')) return;
     navigate({ name: 'meeting', sessionId: session.id, returnRoute: routeRef.current });
   }, [state?.activeMeetingEventId, route.name]);
+
+  useEffect(() => {
+    if (!state?.activeCallSessionId || route.name === 'call' || route.name === 'meeting') return;
+    const session = (state.callSessions || []).find(item => item.id === state.activeCallSessionId);
+    if (!session || (session.status !== 'active' && session.status !== 'paused')) return;
+    navigate({
+      name: 'call',
+      characterId: session.characterId,
+      roomId: session.roomId,
+      sourceMessageId: session.sourceMessageId,
+      returnRoute: routeRef.current
+    });
+  }, [state?.activeCallSessionId, route.name]);
 
   useEffect(() => {
     if (incomingTimerRef.current) {
@@ -794,7 +820,7 @@ export default function App() {
 
   function hasOpenMeeting(snapshot: SNSGodState, roomId: string): boolean {
     return (snapshot.meetingEventSessions || []).some(session => (
-      session.roomId === roomId && (session.status === 'pending' || session.status === 'active')
+      session.roomId === roomId && (session.status === 'pending' || session.status === 'active' || session.status === 'paused')
     ));
   }
 
@@ -1297,7 +1323,7 @@ export default function App() {
           onOpenSettings={character => navigateRendered({ name: 'characterSettings', characterId: character.id, returnRoomId: route.returnRoomId })}
         />
       ) : route.name === 'call' ? (
-        <CallScreen state={state} characterId={route.characterId} roomId={route.roomId} sourceMessageId={route.sourceMessageId} onBack={goBackRendered} onChange={commitRenderedState} onRequestReply={requestRenderedReply} />
+        <CallScreen state={state} characterId={route.characterId} roomId={route.roomId} sourceMessageId={route.sourceMessageId} onBack={goBackRendered} onChange={commitRenderedState} onCommitCurrent={commitRenderedCurrentForScreen} onRequestReply={requestRenderedReply} />
       ) : route.name === 'meeting' ? (
         <MeetingEventScreen state={state} sessionId={route.sessionId} onBack={goBackRendered} onChange={commitRenderedState} />
       ) : route.name === 'roomSettings' ? (

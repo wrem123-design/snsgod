@@ -7,16 +7,17 @@ import { appendMessage, findCharacter, findRoom, roomMessages } from '../logic/s
 import { makeId } from '../logic/ids';
 import { formatPhoneDuration, phoneSummaryFromLines } from '../logic/phone';
 import { isRenderableMediaUri } from '../logic/media';
-import { SNSGodMessage, SNSGodState } from '../types';
+import { CallSession, CallSessionLine, CallSessionPhase, CallSessionUiMode, SNSGodMessage, SNSGodState } from '../types';
 import { canonicalPersonaBlocks } from '../logic/canonicalPersona';
 import { compilePromptBlocks, PromptBlock } from '../logic/promptCompiler';
 import { privateMemoryPromptBlock } from '../logic/memoryBridge';
 import { cancelChatJob } from '../logic/chatJobs';
 import { cancelPendingReplyJob } from '../logic/pendingReplyJobs';
+import { applyLifecycleResultOnce, findResumableCallSession, transitionInteractionLifecycle } from '../logic/interactionLifecycle';
 
-type CallLine = { id: string; speaker: 'user' | 'character' | 'system'; text: string; createdAt: number };
-type CallPhase = 'dialing' | 'ringing' | 'connected' | 'character_typing' | 'awaiting_next' | 'awaiting_choice' | 'awaiting_text' | 'user_sending' | 'listening' | 'ending' | 'ended';
-type CallTurnUiMode = 'next' | 'choices' | 'input' | 'mixed';
+type CallLine = CallSessionLine;
+type CallPhase = CallSessionPhase;
+type CallTurnUiMode = CallSessionUiMode;
 type PhoneTurn = {
   lines?: string[];
   characterLines?: string[];
@@ -94,38 +95,41 @@ function replaceRepeatedPhoneGlitches(sourceLines: string[], previousLines: Call
   });
 }
 
-export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack, onChange, onRequestReply }: {
+export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack, onChange, onCommitCurrent, onRequestReply }: {
   state: SNSGodState;
   characterId: string;
   roomId?: string;
   sourceMessageId?: string;
   onBack: () => void;
   onChange?: (next: SNSGodState) => Promise<void> | void;
+  onCommitCurrent?: (patch: (current: SNSGodState) => SNSGodState) => unknown;
   onRequestReply?: (roomId: string, characterId: string, latestUserInput: string, options?: { sourceMessageId?: string; userMessageCreatedAt?: number }) => void;
 }) {
   const character = findCharacter(state, characterId);
   const room = findRoom(state, roomId);
+  const resumableSession = findResumableCallSession(state, { characterId, roomId, sourceMessageId }) as CallSession | undefined;
+  const callSessionIdRef = useRef(resumableSession?.id || makeId('call'));
   const userName = character ? String(room?.userAlias || character.userName || state.config.userName || '나') : '나';
-  const [lines, setLines] = useState<CallLine[]>([]);
-  const linesRef = useRef<CallLine[]>([]);
-  const [phase, setPhase] = useState<CallPhase>('dialing');
-  const [displayText, setDisplayText] = useState('');
-  const [currentSpeaker, setCurrentSpeaker] = useState<'character' | 'user' | 'system'>('system');
-  const [currentFullText, setCurrentFullText] = useState('연결 중...');
-  const [pages, setPages] = useState<string[]>([]);
-  const [pageIndex, setPageIndex] = useState(0);
-  const [choices, setChoices] = useState<string[]>([]);
-  const [uiMode, setUiMode] = useState<CallTurnUiMode>('choices');
-  const [allowDirectReply, setAllowDirectReply] = useState(true);
+  const [lines, setLines] = useState<CallLine[]>(resumableSession?.lines || []);
+  const linesRef = useRef<CallLine[]>(resumableSession?.lines || []);
+  const [phase, setPhase] = useState<CallPhase>(resumableSession?.phase || 'dialing');
+  const [displayText, setDisplayText] = useState(() => [...(resumableSession?.lines || [])].reverse().find(item => item.speaker !== 'system')?.text || '');
+  const [currentSpeaker, setCurrentSpeaker] = useState<'character' | 'user' | 'system'>(() => [...(resumableSession?.lines || [])].reverse().find(item => item.speaker !== 'system')?.speaker || 'system');
+  const [currentFullText, setCurrentFullText] = useState(() => [...(resumableSession?.lines || [])].reverse().find(item => item.speaker !== 'system')?.text || '연결 중...');
+  const [pages, setPages] = useState<string[]>(resumableSession?.pages || []);
+  const [pageIndex, setPageIndex] = useState(resumableSession?.pageIndex || 0);
+  const [choices, setChoices] = useState<string[]>(resumableSession?.choices || []);
+  const [uiMode, setUiMode] = useState<CallTurnUiMode>(resumableSession?.uiMode || 'choices');
+  const [allowDirectReply, setAllowDirectReply] = useState(resumableSession?.allowDirectReply !== false);
   const [draftText, setDraftText] = useState('');
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
-  const startedAtRef = useRef(Date.now());
-  const connectedAtRef = useRef<number | undefined>(undefined);
+  const startedAtRef = useRef(resumableSession?.startedAt || Date.now());
+  const connectedAtRef = useRef<number | undefined>(resumableSession?.connectedAt);
   const endingRef = useRef(false);
   const bootedRef = useRef(false);
   const typingTokenRef = useRef(0);
-  const characterTurnCountRef = useRef(0);
+  const characterTurnCountRef = useRef(resumableSession?.turnCount || 0);
   const finalTurnActiveRef = useRef(false);
   const skipExtraGoodbyeRef = useRef(false);
   const connectionGlitchAllowedRef = useRef(Math.random() < 0.25);
@@ -159,7 +163,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      void cancelCall();
+      void exitCall();
       return true;
     });
     return () => subscription.remove();
@@ -181,12 +185,123 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
   }, [character?.id]);
 
   async function bootCall() {
+    if (resumableSession && (resumableSession.status === 'paused' || resumableSession.status === 'active')) {
+      const restoredPhase: CallPhase = resumableSession.phase === 'awaiting_text'
+        ? 'awaiting_text'
+        : resumableSession.choices.length
+          ? 'awaiting_choice'
+          : 'awaiting_next';
+      setPhase(restoredPhase);
+      await persistSession({ phase: restoredPhase, status: 'active' }, { keepPointer: true });
+      return;
+    }
+    await persistSession({ status: 'pending', phase: 'dialing' }, { keepPointer: true });
     await showSystemCard('연결 중...', 'dialing');
     await sleep(700);
     connectedAtRef.current = Date.now();
     await showSystemCard('통화 연결됨', 'connected');
+    await persistSession({ status: 'active', phase: 'connected', connectedAt: connectedAtRef.current }, { keepPointer: true });
     await sleep(450);
     await requestCharacterTurn(linesRef.current, true);
+  }
+
+  function currentSessionSnapshot(current: SNSGodState, overrides: Partial<CallSession> = {}): CallSession {
+    const now = Date.now();
+    const existing = (current.callSessions || []).find(item => item.id === callSessionIdRef.current);
+    const base: CallSession = existing || {
+      id: callSessionIdRef.current,
+      characterId,
+      roomId,
+      sourceMessageId,
+      direction: sourceMessageId ? 'incoming' : 'outgoing',
+      status: 'pending',
+      startedAt: startedAtRef.current,
+      turnCount: 0,
+      lines: [],
+      phase: 'dialing',
+      pages: [],
+      pageIndex: 0,
+      choices: [],
+      uiMode: 'choices',
+      allowDirectReply: true,
+      updatedAt: now
+    };
+    const requestedStatus = overrides.status;
+    const snapshot: CallSession = {
+      ...base,
+      characterId,
+      roomId,
+      sourceMessageId,
+      lines: linesRef.current,
+      connectedAt: connectedAtRef.current,
+      turnCount: characterTurnCountRef.current,
+      phase,
+      pages,
+      pageIndex,
+      choices,
+      uiMode,
+      allowDirectReply,
+      updatedAt: now,
+      ...overrides,
+      status: base.status
+    };
+    return requestedStatus && requestedStatus !== base.status
+      ? transitionInteractionLifecycle(snapshot, requestedStatus, now)
+      : snapshot;
+  }
+
+  async function persistSession(overrides: Partial<CallSession> = {}, options: { keepPointer?: boolean } = {}) {
+    const apply = (current: SNSGodState): SNSGodState => {
+      const session = currentSessionSnapshot(current, overrides);
+      const terminal = session.status === 'cancelled' || session.status === 'finished';
+      const alreadyPointed = current.activeCallSessionId === session.id;
+      const keepPointer = !terminal && (
+        alreadyPointed
+        || (options.keepPointer === true && session.status !== 'paused')
+      );
+      const callStatus = session.status === 'paused'
+        ? 'paused'
+        : session.status === 'cancelled'
+          ? 'rejected'
+          : session.status === 'pending'
+            ? 'ringing'
+            : 'accepted';
+      const resumeCardId = `call_resume:${session.id}`;
+      let next: SNSGodState = {
+        ...current,
+        activeCallSessionId: keepPointer ? session.id : current.activeCallSessionId === session.id ? undefined : current.activeCallSessionId,
+        callSessions: [session, ...(current.callSessions || []).filter(item => item.id !== session.id)].slice(0, 50),
+        messages: roomId ? {
+          ...current.messages,
+          [roomId]: (current.messages[roomId] || []).map(message => (sourceMessageId && message.id === sourceMessageId) || message.callResumeSessionId === session.id ? {
+            ...message,
+            callStatus,
+            callHandledAt: terminal ? Date.now() : message.callHandledAt
+          } : message)
+        } : current.messages
+      };
+      if (session.status === 'paused' && roomId && !sourceMessageId && !(next.messages[roomId] || []).some(message => message.id === resumeCardId)) {
+        next = appendMessage(next, roomId, {
+          id: resumeCardId,
+          role: 'character',
+          characterId,
+          content: '',
+          createdAt: Date.now(),
+          callInvite: true,
+          callStatus: 'paused',
+          callResumeSessionId: session.id,
+          callTitle: `${character?.name || '상대'} 통화`,
+          callLine: '중단한 통화를 이어갈 수 있습니다.',
+          sourceMode: 'phone'
+        });
+      }
+      return next;
+    };
+    if (onCommitCurrent) {
+      await onCommitCurrent(apply);
+      return;
+    }
+    if (onChange) await onChange(apply(state));
   }
 
   function addLine(speaker: CallLine['speaker'], text: string) {
@@ -242,7 +357,17 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
     setAllowDirectReply(directReplyAllowed);
     setPhase('character_typing');
     await typeText(text, 'character', index < nextPages.length - 1 ? 'awaiting_next' : mode === 'next' ? 'awaiting_next' : mode === 'input' ? 'awaiting_text' : 'awaiting_choice');
-    addLine('character', text);
+    const nextLines = addLine('character', text);
+    await persistSession({
+      lines: nextLines,
+      phase: index < nextPages.length - 1 ? 'awaiting_next' : mode === 'next' ? 'awaiting_next' : mode === 'input' ? 'awaiting_text' : 'awaiting_choice',
+      pages: nextPages,
+      pageIndex: index,
+      choices: nextChoices,
+      uiMode: mode,
+      allowDirectReply: directReplyAllowed,
+      turnCount: characterTurnCountRef.current
+    }, { keepPointer: true });
   }
 
   function sanitizePhoneLines(sourceLines: string[], previousLines: CallLine[]) {
@@ -378,6 +503,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
           ].join('\n\n')
         }
       ]);
+      if (endingRef.current) return;
       characterTurnCountRef.current = turnNumber;
       const turn = parsePhoneTurn(result.text, baseLines, { finalTurn: isFinalTurn, windDown: isWindDown });
       await showCharacterPage(turn.lines, 0, turn.choices, turn.uiMode, turn.allowDirectReply);
@@ -385,6 +511,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
         await finishFinalTurnPages(turn.lines, turn.choices);
       }
     } catch {
+      if (endingRef.current) return;
       characterTurnCountRef.current = turnNumber;
       const fallbackLines = isFinalTurn
         ? ['알겠어. 이만 끊을게. 나중에 또 이야기하자.']
@@ -473,6 +600,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
     const next = addLine('user', trimmed);
     setUiMode('next');
     setChoices([]);
+    await persistSession({ lines: next, phase: 'user_sending', choices: [], uiMode: 'next' }, { keepPointer: true });
     if (looksLikeHangup(trimmed) || finalTurnActiveRef.current) {
       await sleep(250);
       await endCall(undefined, next);
@@ -512,10 +640,10 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
     typingTokenRef.current += 1;
     let finalLines = providedLines || (finalUserText?.trim() ? addLine('user', finalUserText.trim()) : linesRef.current);
     let conversationLines = finalLines.filter(item => item.speaker !== 'system');
-    if (!conversationLines.length && onChange && roomId && !sourceMessageId) {
+    if (!conversationLines.length && (onChange || onCommitCurrent) && roomId && !sourceMessageId) {
       const missedContent = `${character.name}에게 부재중 전화를 남겼습니다.`;
       const missedMessage: SNSGodMessage = {
-        id: makeId('msg'),
+        id: `phone_missed:${callSessionIdRef.current}`,
         role: 'user',
         characterId: character.id,
         content: missedContent,
@@ -526,7 +654,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
       };
       await showSystemCard('통화 종료 중...', 'ending');
       cancelChatJob(roomId);
-      await onChange(appendMessage(cancelPendingReplyJob(state, roomId, 'newer-user-message'), roomId, missedMessage));
+      await commitFinishedCall([], missedMessage);
       onRequestReply?.(roomId, character.id, missedContent, {
         sourceMessageId: missedMessage.id,
         userMessageCreatedAt: missedMessage.createdAt,
@@ -548,12 +676,27 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
       await sleep(350);
     }
     const endedAt = Date.now();
-    if (onChange) {
+    await commitFinishedCall(conversationLines, undefined, endedAt);
+    setPhase('ended');
+    onBack();
+  }
+
+  async function commitFinishedCall(conversationLines: CallLine[], missedMessage?: SNSGodMessage, endedAt = Date.now()) {
+    if (!character) return;
+    const apply = (current: SNSGodState): SNSGodState => {
+      const existingSession = (current.callSessions || []).find(item => item.id === callSessionIdRef.current);
+      if (existingSession?.status === 'finished' && existingSession.resultAppliedAt) return current;
       const startedAt = conversationLines[0]?.createdAt || connectedAtRef.current || startedAtRef.current;
-      const summaryLines = conversationLines.map(item => ({ speaker: item.speaker, text: item.text }));
-      const summary = phoneSummaryFromLines(character.name, userName, summaryLines);
+      const summary = phoneSummaryFromLines(character.name, userName, conversationLines.map(item => ({ speaker: item.speaker, text: item.text })));
+      const finished = currentSessionSnapshot(current, {
+        lines: conversationLines,
+        phase: 'ended',
+        endedAt,
+        status: 'finished'
+      });
+      const claimed = applyLifecycleResultOnce(finished, endedAt).session;
       const log = {
-        id: `call_${Date.now()}`,
+        id: `call_log:${claimed.id}`,
         characterId: character.id,
         characterName: character.name,
         roomId,
@@ -563,22 +706,27 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
         lines: conversationLines,
         summary
       };
-      const callLogs = Array.isArray(state.callLogs) ? state.callLogs as unknown[] : [];
+      const callLogs = Array.isArray(current.callLogs) ? current.callLogs as Array<{ id?: string }> : [];
       let next: SNSGodState = {
-        ...state,
-        callLogs: [log, ...callLogs].slice(0, 100),
-        messages: roomId && sourceMessageId ? {
-          ...state.messages,
-          [roomId]: (state.messages[roomId] || []).map(message => message.id === sourceMessageId ? {
+        ...current,
+        activeCallSessionId: current.activeCallSessionId === claimed.id ? undefined : current.activeCallSessionId,
+        callSessions: [claimed, ...(current.callSessions || []).filter(item => item.id !== claimed.id)].slice(0, 50),
+        callLogs: [log, ...callLogs.filter(item => item.id !== log.id)].slice(0, 100),
+        messages: roomId ? {
+          ...current.messages,
+          [roomId]: (current.messages[roomId] || []).map(message => (sourceMessageId && message.id === sourceMessageId) || message.callResumeSessionId === claimed.id ? {
             ...message,
             callStatus: 'accepted',
             callHandledAt: endedAt
           } : message)
-        } : state.messages
+        } : current.messages
       };
-      if (roomId) {
+      if (missedMessage && roomId) {
+        next = cancelPendingReplyJob(next, roomId, 'newer-user-message');
+        if (!(next.messages[roomId] || []).some(message => message.id === missedMessage.id)) next = appendMessage(next, roomId, missedMessage);
+      } else if (roomId && !(next.messages[roomId] || []).some(message => message.id === `phone_log:${claimed.id}`)) {
         next = appendMessage(next, roomId, {
-          id: makeId('msg'),
+          id: `phone_log:${claimed.id}`,
           role: 'character',
           characterId: character.id,
           content: `통화 기록 ${formatPhoneDuration(endedAt - startedAt)}`,
@@ -590,34 +738,28 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
           sourceMode: 'phone'
         });
       }
-      await onChange(next);
-    }
-    setPhase('ended');
-    onBack();
+      return next;
+    };
+    if (onCommitCurrent) await onCommitCurrent(apply);
+    else if (onChange) await onChange(apply(state));
   }
 
-  async function cancelCall() {
+  async function exitCall() {
     if (endingRef.current) return;
     endingRef.current = true;
     typingTokenRef.current += 1;
     setPhase('ended');
-    if (onChange && roomId && sourceMessageId) {
-      const roomMessageList = state.messages[roomId] || [];
-      const target = roomMessageList.find(message => message.id === sourceMessageId);
-      if (target && target.callStatus !== 'accepted') {
-        await onChange({
-          ...state,
-          messages: {
-            ...state.messages,
-            [roomId]: roomMessageList.map(message => message.id === sourceMessageId ? {
-              ...message,
-              callStatus: 'rejected',
-              callHandledAt: Date.now()
-            } : message)
-          }
-        });
-      }
-    }
+    const hasConnected = Boolean(connectedAtRef.current || linesRef.current.some(line => line.speaker !== 'system'));
+    await persistSession({
+      status: hasConnected ? 'paused' : 'cancelled',
+      phase: hasConnected ? (choices.length ? 'awaiting_choice' : 'awaiting_next') : 'ended',
+      lines: linesRef.current,
+      pages,
+      pageIndex,
+      choices,
+      uiMode,
+      allowDirectReply
+    }, { keepPointer: false });
     onBack();
   }
 
@@ -641,7 +783,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
       <View style={styles.overlay} />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0} style={[styles.stage, keyboardTyping && styles.stageKeyboard]}>
         <View style={styles.header}>
-          <Pressable onPress={() => cancelCall()} style={styles.headerButton}><Text style={styles.headerButtonText}>‹</Text></Pressable>
+          <Pressable onPress={() => exitCall()} style={styles.headerButton}><Text style={styles.headerButtonText}>‹</Text></Pressable>
           <View style={styles.headerButton} />
           <View style={styles.headerButton} />
         </View>
@@ -700,7 +842,7 @@ export function CallScreen({ state, characterId, roomId, sourceMessageId, onBack
             </View>
           ) : null}
         </View>
-        {!keyboardTyping ? <Pressable onPress={() => endCall()} style={styles.endButton}><Text style={styles.endText}>끊기</Text></Pressable> : null}
+        {!keyboardTyping ? <Pressable onPress={() => connectedAtRef.current ? endCall() : exitCall()} style={styles.endButton}><Text style={styles.endText}>끊기</Text></Pressable> : null}
       </KeyboardAvoidingView>
     </ImageBackground>
   );

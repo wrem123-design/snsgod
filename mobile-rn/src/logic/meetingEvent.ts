@@ -5,6 +5,7 @@ import { makeId } from './ids';
 import { DEFAULT_USER_APPEARANCE_PROMPT, configuredPrompt, userNameFor } from './prompts';
 import { appendMessage, findCharacter, findRoom, roomMessages, updateCharacter } from './stateHelpers';
 import { appendMessageToHistory } from './messageHistoryPolicy';
+import { applyLifecycleResultOnce, transitionInteractionLifecycle } from './interactionLifecycle';
 import { SNSGodCharacter, SNSGodRoom, SNSGodState, MeetingEventSession, MeetingEventLine, GroupRoom, SNSGodMessage, CharacterMemory, GroupRoomSummary, MeetingEventType, MeetingScenarioPhase, MeetingStats, MeetingResultCard } from '../types';
 
 export type MeetingStartResult = {
@@ -245,6 +246,27 @@ function appendMeetingMessage(state: SNSGodState, roomId: string, message: SNSGo
     };
   }
   return appendMessage(state, roomId, message);
+}
+
+function appendMeetingMessageOnce(state: SNSGodState, roomId: string, message: SNSGodMessage): SNSGodState {
+  return (state.messages[roomId] || []).some(item => item.id === message.id)
+    ? state
+    : appendMeetingMessage(state, roomId, message);
+}
+
+function claimExistingMeetingResult(state: SNSGodState, session: MeetingEventSession): SNSGodState {
+  if (session.status !== 'finished' || session.resultAppliedAt) return state;
+  const receipt = (state.messages[session.roomId] || []).find(message => (
+    message.id === `meeting_result:${session.id}`
+    || (message.meetingEventId === session.id && (message.sourceMode === 'meeting' || message.sourceMode === 'group_meeting'))
+  ));
+  if (!receipt) return state;
+  const claimed = applyLifecycleResultOnce(session, Number(receipt.createdAt || Date.now())).session;
+  return {
+    ...state,
+    activeMeetingEventId: state.activeMeetingEventId === session.id ? undefined : state.activeMeetingEventId,
+    meetingEventSessions: (state.meetingEventSessions || []).map(item => item.id === session.id ? claimed : item)
+  };
 }
 
 function groupRecentTranscript(state: SNSGodState, room: GroupRoom, participants: SNSGodCharacter[]): string {
@@ -742,7 +764,7 @@ export async function createGroupMeetingEventSession(state: SNSGodState, roomId:
     .filter(Boolean)
     .slice(0, 3) as SNSGodCharacter[];
   if (present.length < 2) return state;
-  const existing = (state.meetingEventSessions || []).find(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active'));
+  const existing = (state.meetingEventSessions || []).find(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active' || item.status === 'paused'));
   if (existing) return state;
   const now = Date.now();
   const presentNames = present.map(character => character.name).join(' · ');
@@ -816,7 +838,7 @@ export async function createManualGroupMeetingEventPrompt(state: SNSGodState, ro
   const room = findGroupRoom(state, roomId);
   const participants = groupCharacters(state, room).slice(0, 3);
   if (!room || participants.length < 2) return state;
-  if ((state.meetingEventSessions || []).some(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active'))) return state;
+  if ((state.meetingEventSessions || []).some(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active' || item.status === 'paused'))) return state;
   const transcript = groupRecentTranscript(state, room, participants);
   const start: GroupMeetingDecision = {
     shouldStartNow: true,
@@ -842,7 +864,7 @@ export async function createManualMeetingEventPrompt(state: SNSGodState, roomId:
   const room = findRoom(state, roomId);
   const character = findCharacter(state, room?.characterId);
   if (!room || !character || room.type === 'random') return state;
-  if ((state.meetingEventSessions || []).some(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active'))) return state;
+  if ((state.meetingEventSessions || []).some(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active' || item.status === 'paused'))) return state;
   const userName = userNameFor(state, character, room);
   const transcript = recentTranscript(state, room, character);
   let start: MeetingStartResult = {
@@ -898,7 +920,7 @@ export async function createBlindDateFirstDatePrompt(state: SNSGodState, roomId:
   const room = findRoom(state, roomId);
   const character = findCharacter(state, room?.characterId);
   if (!room || !character || room.type === 'random') return state;
-  if ((state.meetingEventSessions || []).some(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active'))) return state;
+  if ((state.meetingEventSessions || []).some(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active' || item.status === 'paused'))) return state;
   const userName = userNameFor(state, character, room);
   const isEncounter = characterBlindDateMode(character) === 'encounter'
     || (character.memories || []).some(memory => String(memory).includes('우연한 만남'));
@@ -1015,6 +1037,8 @@ function upsertGroupMeetingMemory(state: SNSGodState, session: MeetingEventSessi
 }
 
 async function finishGroupMeetingEventSession(state: SNSGodState, session: MeetingEventSession): Promise<SNSGodState> {
+  if (session.status === 'cancelled' || (session.status === 'finished' && session.resultAppliedAt)) return state;
+  if (session.status !== 'active' && session.status !== 'paused' && session.status !== 'finished') return state;
   const room = findGroupRoom(state, session.roomId);
   const present = (session.presentCharacterIds || []).map(id => findCharacter(state, id)).filter(Boolean) as SNSGodCharacter[];
   if (!room || present.length < 2) return state;
@@ -1075,14 +1099,16 @@ async function finishGroupMeetingEventSession(state: SNSGodState, session: Meeti
     }
   }
   const endedAt = Date.now();
+  const finishedSession = session.status === 'finished' ? session : transitionInteractionLifecycle(session, 'finished', endedAt);
+  const claimedSession = applyLifecycleResultOnce(finishedSession, endedAt).session;
   let next = upsertGroupMeetingMemory(state, session, overallSummary, perCharacterSummaries, relationshipDeltas);
   next = {
     ...next,
     activeMeetingEventId: next.activeMeetingEventId === session.id ? undefined : next.activeMeetingEventId,
     meetingEventSessions: (next.meetingEventSessions || []).map(item => item.id === session.id ? {
       ...item,
+      ...claimedSession,
       endedAt,
-      status: 'ended',
       summary: overallSummary,
       resultCard,
       postMeetingMessageScheduled: Boolean(resultCard?.afterMessage),
@@ -1090,8 +1116,8 @@ async function finishGroupMeetingEventSession(state: SNSGodState, session: Meeti
       relationshipDeltas
     } : item)
   };
-  next = appendMeetingMessage(next, session.roomId, {
-    id: makeId('msg'),
+  next = appendMeetingMessageOnce(next, session.roomId, {
+    id: `meeting_result:${session.id}`,
     role: 'system',
     content: resultCardText(resultCard),
     createdAt: endedAt,
@@ -1100,8 +1126,8 @@ async function finishGroupMeetingEventSession(state: SNSGodState, session: Meeti
     sourceMode: 'group_meeting'
   });
   if (resultCard.afterMessage && present[0]) {
-    next = appendMeetingMessage(next, session.roomId, {
-      id: makeId('msg'),
+    next = appendMeetingMessageOnce(next, session.roomId, {
+      id: `meeting_followup:${session.id}`,
       role: 'character',
       characterId: present[0].id,
       content: resultCard.afterMessage,
@@ -1154,7 +1180,7 @@ export async function createMeetingEventSession(state: SNSGodState, roomId: stri
   const room = findRoom(state, roomId);
   const character = findCharacter(state, room?.characterId);
   if (!room || !character || !start.shouldStart) return state;
-  const existing = (state.meetingEventSessions || []).find(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active'));
+  const existing = (state.meetingEventSessions || []).find(item => item.roomId === roomId && (item.status === 'pending' || item.status === 'active' || item.status === 'paused'));
   if (existing) return state;
   const now = Date.now();
   const visibleStart = normalizeMeetingStartText(start, start.seedSummary || start.reason || '');
@@ -1224,6 +1250,12 @@ export async function createMeetingEventSession(state: SNSGodState, roomId: stri
 
 export async function finishMeetingEventSession(state: SNSGodState, sessionId: string): Promise<SNSGodState> {
   const session = (state.meetingEventSessions || []).find(item => item.id === sessionId);
+  if (session?.status === 'cancelled' || (session?.status === 'finished' && session.resultAppliedAt)) return state;
+  if (session?.status === 'finished') {
+    const claimed = claimExistingMeetingResult(state, session);
+    if (claimed !== state) return claimed;
+  }
+  if (session && session.status !== 'active' && session.status !== 'paused' && session.status !== 'finished') return state;
   if (session?.mode === 'group' || session?.roomType === 'group') return finishGroupMeetingEventSession(state, session);
   const character = findCharacter(state, session?.characterId);
   const room = findRoom(state, session?.roomId);
@@ -1278,6 +1310,8 @@ export async function finishMeetingEventSession(state: SNSGodState, sessionId: s
   }
   if (!resultCard) resultCard = normalizeResultCard(undefined, session, summary);
   const endedAt = Date.now();
+  const finishedSession = session.status === 'finished' ? session : transitionInteractionLifecycle(session, 'finished', endedAt);
+  const claimedSession = applyLifecycleResultOnce(finishedSession, endedAt).session;
   const memory = `[meeting_event_summary] ${summary}`;
   let next = updateCharacter(state, character.id, {
     memories: [...(character.memories || []), memory].filter(Boolean).slice(-80) as string[],
@@ -1291,16 +1325,16 @@ export async function finishMeetingEventSession(state: SNSGodState, sessionId: s
     activeMeetingEventId: next.activeMeetingEventId === sessionId ? undefined : next.activeMeetingEventId,
     meetingEventSessions: (next.meetingEventSessions || []).map(item => item.id === sessionId ? {
       ...item,
+      ...claimedSession,
       endedAt,
-      status: 'ended',
       summary,
       resultCard,
       postMeetingMessageScheduled: Boolean(resultCard?.afterMessage)
     } : item)
   };
   if (session.roomId) {
-    next = appendMeetingMessage(next, session.roomId, {
-      id: makeId('msg'),
+    next = appendMeetingMessageOnce(next, session.roomId, {
+      id: `meeting_result:${sessionId}`,
       role: 'system',
       content: resultCardText(resultCard),
       createdAt: endedAt,
@@ -1309,8 +1343,8 @@ export async function finishMeetingEventSession(state: SNSGodState, sessionId: s
       sourceMode: 'meeting'
     });
     if (resultCard.afterMessage) {
-      next = appendMeetingMessage(next, session.roomId, {
-        id: makeId('msg'),
+      next = appendMeetingMessageOnce(next, session.roomId, {
+        id: `meeting_followup:${sessionId}`,
         role: 'character',
         characterId: character.id,
         content: resultCard.afterMessage,

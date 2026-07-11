@@ -306,6 +306,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
     onContentSizeChange,
     onLayout,
     pinToBottom,
+    pinToBottomIfNeeded,
     inverted,
     listProps
   } = useStickToBottomList<SNSGodMessage>({
@@ -582,7 +583,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
   }
 
   return (
-    <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0}>
       <View style={styles.header}>
         <Pressable onPress={leaveRoom} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable>
         <View style={styles.titleBlock}>
@@ -648,6 +649,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
           multiline
           submitBehavior="newline"
           blurOnSubmit={false}
+          onFocus={pinToBottomIfNeeded}
           onKeyPress={event => {
             if (!isComposerSendEnter(event)) return;
             if (typeof event.preventDefault === 'function') event.preventDefault();

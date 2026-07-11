@@ -101,6 +101,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
     onContentSizeChange,
     onLayout,
     pinToBottom,
+    pinToBottomIfNeeded,
     inverted,
     listProps
   } = useStickToBottomList<SNSGodMessage>({
@@ -371,7 +372,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
     : '';
 
   return (
-    <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0}>
       <View style={styles.header}>
         <Pressable onPress={onBack} style={styles.iconButton}><Text style={styles.backText}>‹</Text></Pressable>
         <Pressable onPress={() => onOpenProfile(character.id)}>
@@ -471,6 +472,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
           multiline
           submitBehavior="newline"
           blurOnSubmit={false}
+          onFocus={pinToBottomIfNeeded}
           onKeyPress={event => {
             if (!isComposerSendEnter(event)) return;
             if (typeof event.preventDefault === 'function') event.preventDefault();

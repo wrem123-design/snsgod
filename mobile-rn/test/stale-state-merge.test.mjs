@@ -1407,7 +1407,7 @@ test('full backup restore reloads imported state without flushing stale runtime 
 
   assert.match(debugScreenSource, /await onRestoreFullBackup\(state, picked\.assets\[0\]\.uri\)/);
   assert.match(settingsScreenSource, /await onRestoreState\(state, next\)/);
-  assert.match(settingsScreenSource, /onRestoreFullBackup\(state, uri\)/);
+  assert.match(settingsScreenSource, /onRestoreFullBackup\(state, uri, restorePassword\)/);
   assert.match(debugScreenSource, /전체 백업에서 복구하고 화면 데이터도 갱신했습니다/);
   assert.match(restoreSource, /mergeStaleState\(currentBeforeRestore, base, prepared\.state, \{ intent: 'import' \}\)/);
   assert.match(restoreSource, /restoringRef\.current = true/);

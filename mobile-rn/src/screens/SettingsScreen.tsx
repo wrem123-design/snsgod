@@ -12,6 +12,7 @@ import { isRenderableMediaUri, pickStickerDataUri } from '../logic/media';
 import { Avatar } from '../components/Avatar';
 import { fetchGrokAccounts, fetchGrokBilling, fetchGrokStatus, GrokBilling, GrokLocalAccount, GrokLocalStatus, grokBaseUrl, grokCloudBaseUrl, logoutGrokOAuth, selectGrokOAuth, startGrokLogin, submitGrokOAuthCallback } from '../logic/grokLocal';
 import { createBackupPayload, exportFullBackupZip } from '../logic/backup';
+import { BACKUP_PASSWORD_MAX_LENGTH, BACKUP_PASSWORD_MIN_LENGTH } from '../logic/backupEncryptionPolicy';
 import { DEFAULT_USER_APPEARANCE_PROMPT } from '../logic/prompts';
 import { MAX_CONTEXT_MESSAGES } from '../logic/limits';
 import { editableForbiddenPromptRules } from '../logic/imagePromptRules';
@@ -239,7 +240,7 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
   onChange: (next: SNSGodState, options?: { persist?: boolean; conflict?: 'incoming' | 'latest' }) => Promise<void> | void;
   onCommitCurrent: (patch: (current: SNSGodState) => SNSGodState) => Promise<SNSGodState | undefined> | SNSGodState | undefined;
   onRestoreState: (base: SNSGodState, imported: SNSGodState) => Promise<void> | void;
-  onRestoreFullBackup: (base: SNSGodState, uri: string) => Promise<void> | void;
+  onRestoreFullBackup: (base: SNSGodState, uri: string, password?: string) => Promise<void> | void;
   onBack: () => void;
   onOpenLorebook?: () => void;
   onOpenPrompts?: () => void;
@@ -371,6 +372,10 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
   const [snsAutoComments, setSnsAutoComments] = useState(initialSnsOptions.autoComments !== false);
   const [snsAutoImage, setSnsAutoImage] = useState(initialSnsOptions.autoImage !== false);
   const [importJson, setImportJson] = useState('');
+  const [encryptFullBackup, setEncryptFullBackup] = useState(false);
+  const [backupPassword, setBackupPassword] = useState('');
+  const [backupPasswordConfirm, setBackupPasswordConfirm] = useState('');
+  const [restorePassword, setRestorePassword] = useState('');
   const [saving, setSaving] = useState(false);
   const [testingApi, setTestingApi] = useState(false);
   const [status, setStatus] = useState('');
@@ -1240,15 +1245,32 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
 
   async function exportFullBackup() {
     if (saving) return;
+    if (encryptFullBackup && backupPassword.length < BACKUP_PASSWORD_MIN_LENGTH) {
+      setStatus(`암호화 백업 암호는 ${BACKUP_PASSWORD_MIN_LENGTH}자 이상이어야 합니다.`);
+      return;
+    }
+    if (encryptFullBackup && backupPassword.length > BACKUP_PASSWORD_MAX_LENGTH) {
+      setStatus(`암호화 백업 암호는 ${BACKUP_PASSWORD_MAX_LENGTH}자 이하여야 합니다.`);
+      return;
+    }
+    if (encryptFullBackup && backupPassword !== backupPasswordConfirm) {
+      setStatus('암호화 백업 암호 확인이 일치하지 않습니다.');
+      return;
+    }
     setSaving(true);
     try {
-      const uri = await exportFullBackupZip(state);
-      setStatus(`사진 포함 전체 ZIP 생성 완료: ${uri.split('/').pop() || uri}`);
+      const uri = await exportFullBackupZip(state, { password: encryptFullBackup ? backupPassword : undefined });
+      setStatus(`${encryptFullBackup ? '암호화 전체 백업' : '사진 포함 전체 ZIP'} 생성 완료: ${uri.split('/').pop() || uri}`);
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, { mimeType: 'application/zip', dialogTitle: 'SNSGod 사진 포함 전체 백업' });
+        await Sharing.shareAsync(uri, {
+          mimeType: encryptFullBackup ? 'application/octet-stream' : 'application/zip',
+          dialogTitle: encryptFullBackup ? 'SNSGod 암호화 전체 백업' : 'SNSGod 사진 포함 전체 백업',
+        });
       }
+      setBackupPassword('');
+      setBackupPasswordConfirm('');
     } catch (error) {
-      setStatus(`전체 ZIP 백업 실패: ${error instanceof Error ? error.message : String(error)}`);
+      setStatus(`전체 백업 실패: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setSaving(false);
     }
@@ -1264,18 +1286,19 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
       if (result.canceled || !result.assets?.length) return;
       const uri = result.assets[0].uri;
       Alert.alert(
-        '사진 포함 전체 ZIP 복원',
-        '선택한 백업의 상태와 사진을 복원합니다. 실패하면 현재 상태와 이번에 추가한 사진을 원래대로 되돌립니다.',
+        '사진 포함 전체 백업 복원',
+        '일반 ZIP은 암호 없이, .sgbackup은 아래에 입력한 복원 암호로 엽니다. 실패하면 현재 상태와 이번에 추가한 사진을 원래대로 되돌립니다.',
         [
           { text: '취소', style: 'cancel' },
           {
             text: '복원',
             onPress: () => {
               setSaving(true);
-              void Promise.resolve(onRestoreFullBackup(state, uri))
+              void Promise.resolve(onRestoreFullBackup(state, uri, restorePassword))
                 .then(() => {
                   setImportJson('');
-                  setStatus('사진 포함 전체 ZIP 복원 완료');
+                  setRestorePassword('');
+                  setStatus('사진 포함 전체 백업 복원 완료');
                 })
                 .catch(error => {
                   const message = error instanceof Error ? error.message : String(error);
@@ -1927,10 +1950,22 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
 
         <View style={[styles.card, activeSection !== 'user' && styles.hidden]}>
           <Text style={styles.cardTitle}>백업</Text>
-          <Text style={styles.label}>사진 포함 전체 ZIP</Text>
-          <Text style={styles.help}>캐릭터·대화·설정과 앱이 관리하는 사진을 함께 저장합니다. 다른 기기나 재설치 복원에는 이 형식을 권장합니다.</Text>
-          <Pressable onPress={exportFullBackup} disabled={saving} style={[styles.secondary, saving && styles.disabled]}><Text style={styles.secondaryText}>사진 포함 전체 ZIP 내보내기</Text></Pressable>
-          <Pressable onPress={importFullBackupFile} disabled={saving} style={[styles.secondary, saving && styles.disabled]}><Text style={styles.secondaryText}>사진 포함 전체 ZIP 복원</Text></Pressable>
+          <Text style={styles.label}>사진 포함 전체 백업</Text>
+          <Text style={styles.help}>캐릭터·대화·설정과 앱이 관리하는 사진을 함께 저장합니다. 일반 ZIP은 호환성이 높고, 암호화 .sgbackup은 파일을 다른 곳에 보관할 때 내용을 보호합니다.</Text>
+          <SwitchLine label="전체 백업 암호화" value={encryptFullBackup} onChange={setEncryptFullBackup} />
+          {encryptFullBackup ? (
+            <>
+              <Text style={styles.label}>새 백업 암호</Text>
+              <TextInput value={backupPassword} onChangeText={setBackupPassword} style={styles.input} secureTextEntry autoCapitalize="none" accessibilityLabel="새 백업 암호" />
+              <Text style={styles.label}>새 백업 암호 확인</Text>
+              <TextInput value={backupPasswordConfirm} onChangeText={setBackupPasswordConfirm} style={styles.input} secureTextEntry autoCapitalize="none" accessibilityLabel="새 백업 암호 확인" />
+              <Text style={styles.help}>{BACKUP_PASSWORD_MIN_LENGTH}자 이상으로 입력하세요. 암호는 기기·설정·로그에 저장하지 않으며 잊으면 백업을 복원할 수 없습니다.</Text>
+            </>
+          ) : null}
+          <Pressable onPress={exportFullBackup} disabled={saving} style={[styles.secondary, saving && styles.disabled]}><Text style={styles.secondaryText}>{encryptFullBackup ? '암호화 전체 백업 내보내기' : '사진 포함 전체 ZIP 내보내기'}</Text></Pressable>
+          <Text style={styles.label}>암호화 백업 복원 암호</Text>
+          <TextInput value={restorePassword} onChangeText={setRestorePassword} style={styles.input} secureTextEntry autoCapitalize="none" accessibilityLabel="암호화 백업 복원 암호" placeholder="일반 ZIP은 비워 두세요" placeholderTextColor="#9a9387" />
+          <Pressable onPress={importFullBackupFile} disabled={saving} style={[styles.secondary, saving && styles.disabled]}><Text style={styles.secondaryText}>사진 포함 전체 백업 복원</Text></Pressable>
           <Text style={styles.label}>상태만 JSON</Text>
           <Text style={styles.help}>사진 파일은 제외하고 캐릭터·대화·설정만 저장합니다. 기존 WebView의 msgod_state_v2.json 가져오기도 이 영역에서 지원합니다.</Text>
           <Text style={styles.label}>백업 JSON 붙여넣기</Text>

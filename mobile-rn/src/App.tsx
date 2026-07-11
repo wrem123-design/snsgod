@@ -1122,8 +1122,8 @@ export default function App() {
     await executeImportedStateRestore(base, async () => ({ state: imported }));
   }
 
-  async function restoreFullBackup(base: SNSGodState, uri: string): Promise<void> {
-    await executeImportedStateRestore(base, () => importFullBackupZip(uri));
+  async function restoreFullBackup(base: SNSGodState, uri: string, password?: string): Promise<void> {
+    await executeImportedStateRestore(base, () => importFullBackupZip(uri, password));
   }
 
   async function reloadSavedState(options: { discardRuntime?: boolean } = {}) {

@@ -13,6 +13,8 @@ const NEAR_BOTTOM_PX = 64;
  *   stays put and only the new row appears, instead of thrashing the viewport.
  *
  * Room enter still does a silent pin to offset 0 once layout is ready.
+ * Composer focus may request a conditional pin that keeps intentionally
+ * scrolled history in place while stabilizing a conversation already at latest.
  */
 export function useStickToBottomList<T>(deps: {
   roomKey: string;
@@ -82,6 +84,7 @@ export function useStickToBottomList<T>(deps: {
     onContentSizeChange,
     onLayout,
     pinToBottom: () => pinToBottom({ force: true }),
+    pinToBottomIfNeeded: () => pinToBottom(),
     inverted: true as const,
     listProps: {
       // Clipping + inverted often mis-reports initial offset on Android.

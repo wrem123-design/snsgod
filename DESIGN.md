@@ -57,6 +57,7 @@ The app uses warm messenger surfaces with soft contrast, compact controls, and c
 - Album header: 72px height; album grid uses 12px gutter, 8px gap, and 12px image radius.
 - Album filter: 42px minimum touch height, 8px radius, surfaceAlt default and accent selected state.
 - Album states: 26px favorite badge, 220px empty-state minimum, 170px detail information maximum, and 34/36px back glyph size/line-height.
+- Album selection: 52px action bar minimum, 42px action touch height, 28px selected marker, and 12px action bar gap. Selection confirmation uses the existing panel, border, accent, and danger tokens without introducing another surface style.
 
 ## Motion
 - Meeting text fades in with opacity only.

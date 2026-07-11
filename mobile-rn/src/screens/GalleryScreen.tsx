@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme';
 import { SNSGodState } from '../types';
@@ -12,6 +12,17 @@ import {
   type MediaAlbumSource,
   toggleMediaAlbumFavorite,
 } from '../logic/mediaAlbum';
+import {
+  assignAlbumRepresentative,
+  reconcileAlbumSelection,
+  runAlbumDeviceSave,
+  runAlbumShare,
+  selectFilteredAlbumAssets,
+  toggleAlbumSelection,
+  type AlbumBatchResult,
+  type AlbumRepresentativeTarget,
+} from '../logic/mediaAlbumActions';
+import { albumDeviceSaveAdapter, albumShareAdapter } from '../logic/mediaAlbumRuntime';
 
 type DateRange = 'all' | 'today' | '7days' | '30days';
 
@@ -22,6 +33,9 @@ const ALBUM_TOKENS = {
   detailInfoMaxHeight: 170,
   backGlyphSize: 34,
   backGlyphLineHeight: 36,
+  selectionBarMinHeight: 52,
+  selectionMarkerSize: 28,
+  selectionBarGap: 12,
 } as const;
 
 const SOURCE_OPTIONS: Array<{ value: MediaAlbumSource; label: string }> = [
@@ -54,6 +68,15 @@ function FilterChip({ label, active, onPress }: { label: string; active: boolean
       <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>{label}</Text>
     </Pressable>
   );
+}
+
+function batchResultMessage(result: AlbumBatchResult): string {
+  const summary = `성공 ${result.success}개 · 실패 ${result.failed}개 · 건너뜀 ${result.skipped}개`;
+  if (result.permissionDenied) return `${summary}\n사진 저장 권한이 허용되지 않았습니다.`;
+  if (result.unavailable) return `${summary}\n이 기기에서는 시스템 공유를 사용할 수 없습니다.`;
+  const bundle = result.usedBundleFallback ? '\n여러 이미지는 ZIP 파일 하나로 묶어 공유했습니다.' : '';
+  const error = result.errors[0] ? `\n첫 오류: ${result.errors[0]}` : '';
+  return `${summary}${bundle}${error}`;
 }
 
 export function GalleryScreen({
@@ -90,8 +113,26 @@ export function GalleryScreen({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [missingIds, setMissingIds] = useState<Set<string>>(() => new Set());
   const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [actionBusy, setActionBusy] = useState<'save' | 'share' | 'representative' | null>(null);
+  const [representativeAsset, setRepresentativeAsset] = useState<MediaAlbumAsset | null>(null);
+  const [representativeCharacterId, setRepresentativeCharacterId] = useState(state.characters[0]?.id || '');
+  const [representativeTarget, setRepresentativeTarget] = useState<AlbumRepresentativeTarget>('profile');
+  const longPressHandledRef = useRef(false);
   const selected = selectedId ? assets.find(asset => asset.id === selectedId) || null : null;
   const filteredItems = useMemo(() => filterMediaAlbumAssets(assets, filter), [assets, filter]);
+  const availableSelectedIds = useMemo(
+    () => reconcileAlbumSelection(selectedIds, assets.map(asset => asset.id)),
+    [assets, selectedIds],
+  );
+  const selectedAssets = useMemo(() => {
+    const ids = new Set(availableSelectedIds);
+    return assets.filter(asset => ids.has(asset.id));
+  }, [assets, availableSelectedIds]);
+  const allFilteredSelected = Boolean(
+    filteredItems.length && filteredItems.every(asset => availableSelectedIds.includes(asset.id)),
+  );
   const characterOptions = useMemo(() => {
     const available = new Set(assets.flatMap(asset => asset.characterIds));
     return [
@@ -145,6 +186,102 @@ export function GalleryScreen({
     });
   }
 
+  function enterSelection(asset?: MediaAlbumAsset) {
+    setSelectedId(null);
+    setSelectionMode(true);
+    if (asset) setSelectedIds(current => toggleAlbumSelection(current, asset.id));
+  }
+
+  function exitSelection() {
+    setSelectionMode(false);
+    setSelectedIds([]);
+    setRepresentativeAsset(null);
+  }
+
+  function toggleSelectedAsset(asset: MediaAlbumAsset) {
+    setSelectedIds(current => toggleAlbumSelection(current, asset.id));
+  }
+
+  function pressAlbumAsset(asset: MediaAlbumAsset) {
+    if (longPressHandledRef.current) {
+      longPressHandledRef.current = false;
+      return;
+    }
+    if (selectionMode) toggleSelectedAsset(asset);
+    else setSelectedId(asset.id);
+  }
+
+  function toggleFilteredSelection() {
+    setSelectedIds(current => selectFilteredAlbumAssets(
+      current,
+      filteredItems.map(asset => asset.id),
+      !allFilteredSelected,
+    ));
+  }
+
+  async function saveSelectedAssets() {
+    if (!selectedAssets.length || actionBusy) return;
+    setActionBusy('save');
+    try {
+      const result = await runAlbumDeviceSave(selectedAssets.map(asset => asset.uri), albumDeviceSaveAdapter);
+      Alert.alert('기기 저장 결과', batchResultMessage(result));
+    } catch (error) {
+      Alert.alert('기기 저장 실패', error instanceof Error ? error.message : String(error));
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function shareSelectedAssets() {
+    if (!selectedAssets.length || actionBusy) return;
+    setActionBusy('share');
+    try {
+      const result = await runAlbumShare(selectedAssets.map(asset => asset.uri), albumShareAdapter);
+      Alert.alert('공유 결과', batchResultMessage(result));
+    } catch (error) {
+      Alert.alert('공유 실패', error instanceof Error ? error.message : String(error));
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  function openRepresentativeAssignment() {
+    if (selectedAssets.length !== 1) {
+      Alert.alert('대표 이미지', '대표 이미지로 지정할 사진 한 장만 선택해 주세요.');
+      return;
+    }
+    if (!state.characters.length) {
+      Alert.alert('대표 이미지', '이미지를 지정할 캐릭터가 없습니다.');
+      return;
+    }
+    setRepresentativeCharacterId(current => state.characters.some(character => character.id === current)
+      ? current
+      : state.characters[0].id);
+    setRepresentativeTarget('profile');
+    setRepresentativeAsset(selectedAssets[0]);
+  }
+
+  async function confirmRepresentativeAssignment() {
+    if (!representativeAsset || !representativeCharacterId || actionBusy) return;
+    setActionBusy('representative');
+    try {
+      const patch = (current: SNSGodState) => assignAlbumRepresentative(current, {
+        characterId: representativeCharacterId,
+        uri: representativeAsset.uri,
+        target: representativeTarget,
+        prompt: representativeAsset.prompt,
+      }).state;
+      if (onCommitCurrent) await onCommitCurrent(patch);
+      else await onChange(patch(state));
+      setRepresentativeAsset(null);
+      Alert.alert('대표 이미지 지정 완료', '선택한 사진을 캐릭터에 적용했습니다. 기존 프로필·커버 기록과 레퍼런스는 정책에 따라 보존됩니다.');
+    } catch (error) {
+      Alert.alert('대표 이미지 지정 실패', error instanceof Error ? error.message : String(error));
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
   async function moveUnusedMediaToTrash() {
     if (cleanupBusy) return;
     setCleanupBusy(true);
@@ -193,6 +330,12 @@ export function GalleryScreen({
   const emptyText = assets.length
     ? '이 조건에 맞는 이미지가 없습니다.'
     : '아직 앨범에 저장된 이미지가 없습니다.';
+  const representativeCharacter = state.characters.find(character => character.id === representativeCharacterId);
+  const representativeImpact = representativeTarget === 'profile'
+    ? `현재 프로필을 교체하고 이전 값은 프로필 기록에 보관합니다.${representativeCharacter?.avatar || representativeCharacter?.profileImage ? ' 기존 프로필이 있습니다.' : ''}`
+    : representativeTarget === 'cover'
+      ? `현재 커버를 교체하고 이전 값은 커버 기록에 보관합니다.${representativeCharacter?.coverImage ? ' 기존 커버가 있습니다.' : ''}`
+      : `이 사진을 첫 번째 레퍼런스로 지정합니다. 기존 레퍼런스는 중복을 빼고 최대 2장 더 유지합니다.${representativeCharacter?.profileReferenceImage ? ' 현재 대표 레퍼런스가 있습니다.' : ''}`;
 
   return (
     <View style={styles.screen}>
@@ -225,18 +368,63 @@ export function GalleryScreen({
         </View>
       ) : null}
 
-      <View style={styles.header}>
-        <Pressable accessibilityLabel="뒤로" onPress={onBack} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable>
-        <View style={styles.titleBlock}>
-          <Text style={styles.title}>앨범</Text>
-          <Text style={styles.subtitle}>{filteredItems.length}개 / 전체 {assets.length}개</Text>
+      {representativeAsset ? (
+        <View accessibilityViewIsModal style={styles.representativeModal}>
+          <ScrollView style={styles.representativeCard} contentContainerStyle={styles.representativeCardContent}>
+            <Text style={styles.representativeTitle}>대표 이미지 지정</Text>
+            <Text style={styles.representativeSubtitle}>사진 한 장을 적용할 캐릭터와 위치를 확인해 주세요.</Text>
+            <Image source={{ uri: representativeAsset.uri }} style={styles.representativePreview} resizeMode="cover" />
+            <Text style={styles.representativeLabel}>캐릭터</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.representativeOptions}>
+              {state.characters.map(character => (
+                <FilterChip
+                  key={character.id}
+                  label={character.name}
+                  active={representativeCharacterId === character.id}
+                  onPress={() => setRepresentativeCharacterId(character.id)}
+                />
+              ))}
+            </ScrollView>
+            <Text style={styles.representativeLabel}>적용 위치</Text>
+            <View style={styles.representativeOptions}>
+              <FilterChip label="프로필" active={representativeTarget === 'profile'} onPress={() => setRepresentativeTarget('profile')} />
+              <FilterChip label="커버" active={representativeTarget === 'cover'} onPress={() => setRepresentativeTarget('cover')} />
+              <FilterChip label="레퍼런스" active={representativeTarget === 'reference'} onPress={() => setRepresentativeTarget('reference')} />
+            </View>
+            <Text style={styles.representativeImpact}>{representativeImpact}</Text>
+            <View style={styles.representativeActions}>
+              <Pressable disabled={Boolean(actionBusy)} onPress={() => setRepresentativeAsset(null)} style={[styles.modalAction, styles.modalCancel, actionBusy && styles.disabled]}>
+                <Text style={styles.modalCancelText}>취소</Text>
+              </Pressable>
+              <Pressable disabled={Boolean(actionBusy)} onPress={() => { void confirmRepresentativeAssignment(); }} style={[styles.modalAction, styles.modalConfirm, actionBusy && styles.disabled]}>
+                <Text style={styles.modalConfirmText}>{actionBusy === 'representative' ? '적용 중' : '확인 후 적용'}</Text>
+              </Pressable>
+            </View>
+          </ScrollView>
         </View>
+      ) : null}
+
+      <View style={styles.header}>
+        <Pressable accessibilityLabel={selectionMode ? '선택 모드 종료' : '뒤로'} onPress={selectionMode ? exitSelection : onBack} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable>
+        <View style={styles.titleBlock}>
+          <Text style={styles.title}>{selectionMode ? `${selectedAssets.length}개 선택` : '앨범'}</Text>
+          <Text style={styles.subtitle}>{selectionMode ? `현재 조건 ${filteredItems.length}개` : `${filteredItems.length}개 / 전체 ${assets.length}개`}</Text>
+        </View>
+        {selectionMode ? (
+          <Pressable disabled={!filteredItems.length} onPress={toggleFilteredSelection} style={[styles.headerAction, !filteredItems.length && styles.disabled]}>
+            <Text style={styles.headerActionText}>{allFilteredSelected ? '선택 해제' : '전체 선택'}</Text>
+          </Pressable>
+        ) : (
+          <Pressable disabled={!assets.length} onPress={() => enterSelection()} style={[styles.headerAction, !assets.length && styles.disabled]}>
+            <Text style={styles.headerActionText}>선택</Text>
+          </Pressable>
+        )}
         <Pressable
-          disabled={cleanupBusy}
-          onPress={() => { void moveUnusedMediaToTrash(); }}
-          style={({ pressed }) => [styles.cleanupButton, pressed && styles.pressed, cleanupBusy && styles.disabled]}
+          disabled={selectionMode ? false : cleanupBusy}
+          onPress={selectionMode ? exitSelection : () => { void moveUnusedMediaToTrash(); }}
+          style={({ pressed }) => [styles.cleanupButton, pressed && styles.pressed, !selectionMode && cleanupBusy && styles.disabled]}
         >
-          <Text style={styles.cleanupButtonText}>{cleanupBusy ? '검사 중' : '미사용 정리'}</Text>
+          <Text style={styles.cleanupButtonText}>{selectionMode ? '완료' : cleanupBusy ? '검사 중' : '미사용 정리'}</Text>
         </Pressable>
       </View>
 
@@ -279,10 +467,22 @@ export function GalleryScreen({
           </View>
         )}
         renderItem={({ item }) => (
-          <Pressable accessibilityLabel={`${item.title}, ${item.sourceLabel}${item.favorite ? ', 즐겨찾기' : ''}`} onPress={() => setSelectedId(item.id)} style={styles.albumTile}>
+          <Pressable
+            accessibilityLabel={`${item.title}, ${item.sourceLabel}${item.favorite ? ', 즐겨찾기' : ''}${availableSelectedIds.includes(item.id) ? ', 선택됨' : ''}`}
+            accessibilityState={{ selected: availableSelectedIds.includes(item.id) }}
+            onPressIn={() => { longPressHandledRef.current = false; }}
+            onPress={() => pressAlbumAsset(item)}
+            onLongPress={() => { longPressHandledRef.current = true; enterSelection(item); }}
+            style={[styles.albumTile, availableSelectedIds.includes(item.id) && styles.albumTileSelected]}
+          >
             <Image source={{ uri: item.uri }} onError={() => markMissing(item.id)} style={StyleSheet.absoluteFill} resizeMode="cover" />
             {missingIds.has(item.id) ? <View style={styles.tileMissing}><Text style={styles.tileMissingText}>파일 없음</Text></View> : null}
             {item.favorite ? <View style={styles.favoriteBadge}><Text style={styles.favoriteBadgeText}>즐겨찾기</Text></View> : null}
+            {selectionMode ? (
+              <View style={[styles.selectionMarker, availableSelectedIds.includes(item.id) && styles.selectionMarkerActive]}>
+                <Text style={[styles.selectionMarkerText, availableSelectedIds.includes(item.id) && styles.selectionMarkerTextActive]}>{availableSelectedIds.includes(item.id) ? '✓' : ''}</Text>
+              </View>
+            ) : null}
             <View style={styles.tileShade}>
               <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
               <Text style={styles.itemSubtitle} numberOfLines={1}>{item.sourceLabel}{item.references.length > 1 ? ` · 사용처 ${item.references.length}` : ''}</Text>
@@ -290,6 +490,20 @@ export function GalleryScreen({
           </Pressable>
         )}
       />
+      {selectionMode ? (
+        <View style={styles.selectionBar}>
+          <Text style={styles.selectionCount}>{selectedAssets.length}개</Text>
+          <Pressable disabled={!selectedAssets.length || Boolean(actionBusy)} onPress={() => { void saveSelectedAssets(); }} style={[styles.selectionAction, (!selectedAssets.length || actionBusy) && styles.disabled]}>
+            <Text style={styles.selectionActionText}>{actionBusy === 'save' ? '저장 중' : '기기에 저장'}</Text>
+          </Pressable>
+          <Pressable disabled={!selectedAssets.length || Boolean(actionBusy)} onPress={() => { void shareSelectedAssets(); }} style={[styles.selectionAction, (!selectedAssets.length || actionBusy) && styles.disabled]}>
+            <Text style={styles.selectionActionText}>{actionBusy === 'share' ? '공유 중' : '공유'}</Text>
+          </Pressable>
+          <Pressable disabled={selectedAssets.length !== 1 || Boolean(actionBusy)} onPress={openRepresentativeAssignment} style={[styles.selectionAction, (selectedAssets.length !== 1 || actionBusy) && styles.disabled]}>
+            <Text style={styles.selectionActionText}>대표 이미지</Text>
+          </Pressable>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -302,6 +516,8 @@ const styles = StyleSheet.create({
   titleBlock: { flex: 1 },
   title: { fontSize: 19, color: colors.text, fontWeight: '900' },
   subtitle: { marginTop: 2, color: colors.sub, fontSize: 12, fontWeight: '700' },
+  headerAction: { minHeight: 42, paddingHorizontal: 10, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  headerActionText: { color: colors.accentText, fontSize: 11, fontWeight: '900' },
   cleanupButton: { minHeight: 42, paddingHorizontal: 12, borderRadius: 8, backgroundColor: colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
   cleanupButtonText: { color: colors.text, fontSize: 11, fontWeight: '900' },
   pressed: { opacity: 0.78 },
@@ -316,17 +532,26 @@ const styles = StyleSheet.create({
   grid: { flexGrow: 1, padding: 12, paddingBottom: 26, gap: 8 },
   row: { gap: 8 },
   albumTile: { flex: 1, aspectRatio: 1, marginBottom: 8, borderRadius: 12, overflow: 'hidden', backgroundColor: colors.surfaceAlt },
+  albumTileSelected: { borderWidth: 3, borderColor: colors.accent },
   tileShade: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 8, paddingVertical: 8, backgroundColor: colors.modalSurface },
   itemTitle: { color: colors.white, fontSize: 11, fontWeight: '900' },
   itemSubtitle: { marginTop: 1, color: colors.white, fontSize: 9, fontWeight: '800' },
   favoriteBadge: { position: 'absolute', top: 8, left: 8, minHeight: ALBUM_TOKENS.badgeHeight, paddingHorizontal: 8, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent },
   favoriteBadgeText: { color: colors.accentText, fontSize: 9, fontWeight: '900' },
+  selectionMarker: { position: 'absolute', top: 8, right: 8, width: ALBUM_TOKENS.selectionMarkerSize, height: ALBUM_TOKENS.selectionMarkerSize, borderRadius: 14, borderWidth: 2, borderColor: colors.white, backgroundColor: colors.modalSurface, alignItems: 'center', justifyContent: 'center' },
+  selectionMarkerActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  selectionMarkerText: { color: colors.white, fontSize: 15, lineHeight: 18, fontWeight: '900' },
+  selectionMarkerTextActive: { color: colors.accentText },
   tileMissing: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceAlt },
   tileMissingText: { color: colors.sub, fontSize: 11, fontWeight: '900' },
   emptyWrap: { flex: 1, minHeight: ALBUM_TOKENS.emptyMinHeight, alignItems: 'center', justifyContent: 'center', gap: 8 },
   empty: { textAlign: 'center', color: colors.sub, fontWeight: '800' },
   emptyReset: { minHeight: 42, paddingHorizontal: 12, borderRadius: 8, backgroundColor: colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
   emptyResetText: { color: colors.text, fontSize: 11, fontWeight: '900' },
+  selectionBar: { minHeight: ALBUM_TOKENS.selectionBarMinHeight, paddingHorizontal: 12, paddingVertical: 8, gap: ALBUM_TOKENS.selectionBarGap, flexDirection: 'row', alignItems: 'center', backgroundColor: colors.panel, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  selectionCount: { minWidth: 28, color: colors.text, fontSize: 12, fontWeight: '900' },
+  selectionAction: { flex: 1, minHeight: 42, paddingHorizontal: 4, borderRadius: 8, backgroundColor: colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
+  selectionActionText: { color: colors.text, fontSize: 10, fontWeight: '900', textAlign: 'center' },
   viewer: { ...StyleSheet.absoluteFillObject, zIndex: 10, backgroundColor: colors.modalSurface, padding: 12 },
   viewerHeader: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 8 },
   viewerTitleBlock: { flex: 1 },
@@ -348,4 +573,19 @@ const styles = StyleSheet.create({
   viewerPrompt: { marginTop: 8, color: colors.text, fontSize: 13, lineHeight: 19, fontWeight: '700' },
   viewerCaption: { marginTop: 8, color: colors.sub, fontSize: 12, lineHeight: 18, fontWeight: '700' },
   referenceSummary: { marginTop: 8, color: colors.sub, fontSize: 11, lineHeight: 16, fontWeight: '800' },
+  representativeModal: { ...StyleSheet.absoluteFillObject, zIndex: 20, padding: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.modalSurface },
+  representativeCard: { width: '100%', maxWidth: 520, maxHeight: '92%', borderRadius: 12, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border },
+  representativeCardContent: { padding: 16 },
+  representativeTitle: { color: colors.text, fontSize: 19, fontWeight: '900' },
+  representativeSubtitle: { marginTop: 4, color: colors.sub, fontSize: 12, lineHeight: 18, fontWeight: '700' },
+  representativePreview: { width: 112, height: 112, marginTop: 12, borderRadius: 12, alignSelf: 'center', backgroundColor: colors.surfaceAlt },
+  representativeLabel: { marginTop: 12, marginBottom: 6, color: colors.sub, fontSize: 11, fontWeight: '900' },
+  representativeOptions: { flexDirection: 'row', gap: 8 },
+  representativeImpact: { marginTop: 12, padding: 12, borderRadius: 8, color: colors.text, fontSize: 12, lineHeight: 18, fontWeight: '700', backgroundColor: colors.panelSoft, borderWidth: 1, borderColor: colors.border },
+  representativeActions: { marginTop: 12, flexDirection: 'row', gap: 8 },
+  modalAction: { flex: 1, minHeight: 42, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  modalCancel: { backgroundColor: colors.surfaceAlt },
+  modalConfirm: { backgroundColor: colors.accent },
+  modalCancelText: { color: colors.text, fontSize: 12, fontWeight: '900' },
+  modalConfirmText: { color: colors.accentText, fontSize: 12, fontWeight: '900' },
 });

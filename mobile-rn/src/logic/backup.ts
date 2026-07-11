@@ -5,6 +5,7 @@ import { prepareArchivedMediaAssets, readMediaManifest } from './media';
 import { parseMediaManifestText, type MediaManifestEntry } from './mediaStoragePolicy';
 import { applyStateMediaUriReplacements, collectStateMediaReferences } from './stateMediaPolicy';
 import { buildFullBackupMediaPlan, type ArchivedMediaRecord } from './fullBackupPolicy';
+import { stateWithoutStoredSecrets } from '../storage/secureSecrets';
 
 type FullBackupMetadata = {
   version: 'snsgod-full-backup-v2';
@@ -52,7 +53,7 @@ export function stateWithoutSecrets(state: SNSGodState): SNSGodState {
     key,
     stripProfileSecrets((value || {}) as Record<string, unknown>)
   ]));
-  return {
+  return stateWithoutStoredSecrets({
     ...state,
     config: {
       ...state.config,
@@ -70,7 +71,7 @@ export function stateWithoutSecrets(state: SNSGodState): SNSGodState {
         lastError: ''
       } : state.config.serverMessaging
     }
-  };
+  });
 }
 
 export function createBackupPayload(state: SNSGodState, options: { includeMedia?: boolean } = {}) {

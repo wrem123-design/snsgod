@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import { redactSecretText } from './secretRedaction';
 
 export type DebugLogEntry = {
   id: string;
@@ -73,7 +74,7 @@ export async function appendDebugLog(scope: string, message: string, level: Debu
     createdAt: Date.now(),
     level,
     scope,
-    message
+    message: redactSecretText(message)
   };
   cachedLogs = [next, ...(cachedLogs || [])].slice(0, MAX_LOGS);
   writeQueue = writeQueue

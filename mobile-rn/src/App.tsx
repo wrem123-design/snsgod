@@ -68,6 +68,7 @@ import { cancelAllPendingReplyJobs, reconcilePendingReplyJobs } from './logic/pe
 import { normalizePersistedInteractionLifecycles, pauseActiveInteractions, resumePointedInteractions } from './logic/interactionLifecycle';
 import { rootForRouteName, routeForRoot } from './logic/rootNavigation';
 import { isRemoteServicesEnabled } from './logic/remoteServicePolicy';
+import { carryStateSecrets } from './storage/secureSecrets';
 
 const MEDIA_REPLACEMENT_CACHE_TTL_MS = 30_000;
 const MEDIA_REPLACEMENT_CACHE_SWEEP_MS = 5_000;
@@ -1058,9 +1059,10 @@ export default function App() {
     try {
       await flushSaveState(undefined, { reason: 'before full backup import' });
       prepared = await prepare();
-      const candidate = currentBeforeRestore && currentBeforeRestore !== base
+      const restoredCandidate = currentBeforeRestore && currentBeforeRestore !== base
         ? mergeStaleState(currentBeforeRestore, base, prepared.state, { intent: 'import' })
         : prepared.state;
+      const candidate = currentBeforeRestore ? carryStateSecrets(currentBeforeRestore, restoredCandidate) : restoredCandidate;
       stateImportStarted = true;
       await importState(candidate, JSON.stringify(candidate));
       const next = reconcileLoadedState(await loadState()).state;

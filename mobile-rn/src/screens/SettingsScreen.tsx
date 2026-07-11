@@ -1503,6 +1503,7 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
           <SwitchLine label="Oracle 원격 보조 모드" value={remoteServicesEnabled} onChange={value => void changeDataBoundaryMode(value)} />
           <Text style={styles.help}>로컬 전용 모드에서는 앱 시작·복귀·설정 저장 시 Oracle 기기 등록, 서버 메시지 동기화, 외부 푸시 초기화를 수행하지 않습니다.</Text>
           <Text style={styles.help}>AI 답장이나 이미지 생성을 직접 실행하면 선택한 Provider로 요청할 수 있습니다. 이 동작은 Oracle 원격 보조 모드와 별개입니다.</Text>
+          <Text style={styles.help}>API 키, 서비스 계정, Proxy 토큰과 서버 기기 토큰은 Android 보안 저장소에 분리하며 일반 앱 상태·전체 백업·진단 로그에는 넣지 않습니다.</Text>
         </View>
 
         <View style={[styles.card, activeSection !== 'api' && styles.hidden]}>
@@ -1543,7 +1544,7 @@ export function SettingsScreen({ state, onChange, onCommitCurrent, onRestoreStat
                 placeholder="Google Cloud 서비스 계정 JSON 본문을 그대로 붙여넣기"
                 placeholderTextColor="#9a9387"
               />
-              <Text style={styles.help}>키 파일 경로가 아니라 JSON 본문 전체를 붙여넣습니다. 이 값은 앱 저장소에만 저장되고 소스코드에는 넣지 않습니다.</Text>
+              <Text style={styles.help}>키 파일 경로가 아니라 JSON 본문 전체를 붙여넣습니다. 이 값은 Android 보안 저장소에 분리되고 소스코드나 일반 백업에는 넣지 않습니다.</Text>
               <View style={styles.twoCols}>
                 <View style={styles.col}>
                   <Text style={styles.label}>Location Endpoint</Text>

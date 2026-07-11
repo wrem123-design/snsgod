@@ -6,8 +6,9 @@
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
+    "test": "node --test test/*.test.mjs",
     "check": "tsc --noEmit",
-    "android:release": "set \"GRADLE_USER_HOME=%CD%\\.gradle-user-home\" && cd android && gradlew.bat :app:assembleRelease -x lint -x test",
+    "android:release": "set \"GRADLE_USER_HOME=C:\\sg-gradle\" && cd android && gradlew.bat :app:assembleRelease -x lint -x test --no-daemon --max-workers=1 --no-watch-fs",
     "android:install:release": "adb install -r android/app/build/outputs/apk/release/app-release.apk",
     "android:crashlog": "adb logcat -d -b crash",
     "ios": "expo run:ios"
@@ -17,24 +18,28 @@
     "@noble/hashes": "2.2.0",
     "@react-native-async-storage/async-storage": "^2.1.2",
     "@types/jsrsasign": "^10.5.15",
-    "expo": "^53.0.0",
+    "expo": "~57.0.4",
     "expo-application": "^57.0.0",
-    "expo-crypto": "~14.1.5",
-    "expo-document-picker": "~13.1.6",
-    "expo-file-system": "^18.1.11",
-    "expo-image-picker": "~16.1.4",
-    "expo-media-library": "~17.1.7",
-    "expo-secure-store": "~14.2.4",
-    "expo-sharing": "~13.1.5",
-    "expo-sqlite": "~15.2.14",
-    "expo-status-bar": "^2.2.3",
+    "expo-crypto": "~57.0.0",
+    "expo-document-picker": "~57.0.0",
+    "expo-file-system": "~57.0.0",
+    "expo-image-picker": "~57.0.2",
+    "expo-media-library": "~57.0.1",
+    "expo-secure-store": "~57.0.0",
+    "expo-sharing": "~57.0.3",
+    "expo-sqlite": "~57.0.0",
+    "expo-status-bar": "~57.0.0",
     "jsrsasign": "^11.1.3",
     "jszip": "^3.10.1",
-    "react": "19.0.0",
-    "react-native": "^0.79.0"
+    "react": "19.2.3",
+    "react-native": "0.86.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
-    "typescript": "^5.8.3"
+    "babel-preset-expo": "~57.0.0",
+    "typescript": "~6.0.3"
+  },
+  "overrides": {
+    "uuid": "11.1.1"
   }
 }

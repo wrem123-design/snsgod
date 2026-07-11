@@ -930,7 +930,7 @@ const styles = StyleSheet.create({
   stickerTrayName: { marginTop: 4, color: colors.sub, fontSize: 11, fontWeight: '800' },
   emptyStickerText: { color: colors.sub, fontWeight: '800', padding: 8 },
   quickActionLayer: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 62, justifyContent: 'flex-end', alignItems: 'flex-start', paddingLeft: 82, paddingBottom: 8 },
-  quickActionBackdrop: { ...StyleSheet.absoluteFillObject },
+  quickActionBackdrop: { ...StyleSheet.absoluteFill },
   quickActionMenu: { minWidth: 150, borderRadius: 12, backgroundColor: '#fffefa', borderWidth: 1, borderColor: colors.border, shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
   quickActionItem: { minHeight: 46, paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center' },
   quickActionText: { color: colors.text, fontSize: 15, fontWeight: '900' },

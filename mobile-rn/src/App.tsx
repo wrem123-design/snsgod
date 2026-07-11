@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as Application from 'expo-application';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Alert, AppState, BackHandler, DevSettings, Keyboard, Linking, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { ChatListScreen } from './screens/ChatListScreen';
 import { ChatRoomScreen } from './screens/ChatRoomScreen';
@@ -1545,7 +1545,7 @@ const styles = StyleSheet.create({
   loadingBrandMark: { alignItems: 'center', justifyContent: 'center' },
   loadingBrandText: { color: '#fff', fontSize: 86, lineHeight: 96, fontWeight: '900', letterSpacing: 0 },
   loadingSystemText: { position: 'absolute', bottom: 42, left: 24, right: 24, color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '700', textAlign: 'center' },
-  incomingOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 50, backgroundColor: 'rgba(5,11,22,0.76)', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  incomingOverlay: { ...StyleSheet.absoluteFill, zIndex: 50, backgroundColor: 'rgba(5,11,22,0.76)', alignItems: 'center', justifyContent: 'center', padding: 24 },
   incomingPanel: { width: '100%', maxWidth: 420, borderRadius: 18, padding: 24, backgroundColor: '#f7f2e9', alignItems: 'center', borderWidth: 1, borderColor: '#dbcdb9' },
   incomingKicker: { color: colors.sub, fontSize: 12, fontWeight: '900' },
   incomingAvatarWrap: { marginTop: 14, width: 108, height: 108, borderRadius: 54, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fffefa', borderWidth: 2, borderColor: '#e1d4bf' },

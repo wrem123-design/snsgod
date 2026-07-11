@@ -32,10 +32,22 @@ npm run android
 ## Verify
 
 ```powershell
+npm test
 npm run check
 npm run android:release
 npm run android:crashlog
 ```
+
+The Windows release script intentionally uses `C:\sg-gradle` as its Gradle user
+home. React Native 0.86 Prefab headers can otherwise exceed the legacy Windows
+path-length limit when this repository is opened from a nested worktree. This
+directory is only a reproducible build cache; app data and source files are not
+stored there.
+
+This bare native project is upgraded manually. Run `npx expo install --check`
+and `npx expo-doctor` after dependency changes, but do not run `expo prebuild`
+without reviewing the generated native diff: `MainApplication.kt` registers the
+local `TermuxBridgePackage` and `AutomationKeepAlivePackage` packages.
 
 The release APK is written to:
 

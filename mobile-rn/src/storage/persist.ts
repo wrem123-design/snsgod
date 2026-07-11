@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { hydrateStateSecrets, saveStateSecrets, stateWithoutStoredSecrets } from './secureSecrets';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as SQLite from 'expo-sqlite';
 import { InteractionManager } from 'react-native';
 import { SNSGodState } from '../types';

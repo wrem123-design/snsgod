@@ -5,6 +5,7 @@ import { encryptOracleTextGenerationProfile } from './oracleProfileCrypto';
 import { compactLegacyMemoryFacts } from './memoryBridge';
 import { applyMessageToCharacterWorld, resolveCharacterRuntimeState } from './characterWorld';
 import { isRemoteServicesEnabled } from './remoteServicePolicy';
+import { serverRequestError } from './serverConnectionPolicy';
 
 type ServerMessagingConfig = NonNullable<SNSGodState['config']['serverMessaging']>;
 
@@ -60,8 +61,7 @@ async function request<T>(state: SNSGodState, path: string, options: { method?: 
   let payload: unknown;
   try { payload = raw ? JSON.parse(raw) : {}; } catch { throw new Error(`서버 응답 형식 오류 (${response.status})`); }
   if (!response.ok) {
-    const message = payload && typeof payload === 'object' ? String((payload as { error?: unknown }).error || '') : '';
-    throw new Error(message || `서버 요청 실패 (${response.status})`);
+    throw serverRequestError(response.status, payload);
   }
   return payload as T;
 }
@@ -232,7 +232,8 @@ export async function registerServerDevice(state: SNSGodState, deviceName = 'SNS
   });
   const raw = await response.text();
   const payload = raw ? JSON.parse(raw) as { deviceId?: string; deviceToken?: string; error?: string } : {};
-  if (!response.ok || !payload.deviceToken) throw new Error(payload.error || `기기 등록 실패 (${response.status})`);
+  if (!response.ok) throw serverRequestError(response.status, payload);
+  if (!payload.deviceToken) throw new Error(`기기 등록 실패 (${response.status})`);
   return {
     ...state,
     config: {

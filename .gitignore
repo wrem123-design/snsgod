@@ -11,6 +11,8 @@ mobile-rn/android/app/release/
 snsgod-*.png
 snsgod-ui.xml
 window.xml
+.superloopy/evidence/device/**/*.png
+.superloopy/evidence/device/**/window-*.xml
 backup/
 oracle-migration/
 android-app/app/src/main/assets/www/bootstrap-backup.json

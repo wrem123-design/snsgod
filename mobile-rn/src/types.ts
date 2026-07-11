@@ -933,9 +933,17 @@ export type NotificationItem = {
   app?: 'messenger' | 'randomchat' | 'social' | 'snsdm' | 'sumgod' | 'system';
   target?: NotificationTarget;
   collapseKey?: string;
+  eventIds?: string[];
   count?: number;
   createdAt: number;
   read?: boolean;
+};
+
+export type NotificationEventReceipt = {
+  targetKind: 'room' | 'snsdm' | 'notification';
+  targetId: string;
+  receivedAt: number;
+  readAt?: number;
 };
 
 export type SumGodConversationItem = {
@@ -1004,6 +1012,7 @@ export type SNSGodState = {
   referenceFaceSlots?: ReferenceFaceSlot[];
   userStickers?: Sticker[];
   notifications?: NotificationItem[];
+  notificationEvents?: Record<string, NotificationEventReceipt>;
   randomChats?: RandomChatRoom[];
   randomCharacters?: SNSGodCharacter[];
   pendingReplies?: Record<string, { jobId: string; startedAt: number; phase?: 'delay' | 'typing' | 'generating' }>;

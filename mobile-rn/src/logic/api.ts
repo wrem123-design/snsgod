@@ -3,7 +3,7 @@ import { KJUR } from 'jsrsasign';
 
 import { ApiProfile, ImageGenerationConfig, SNSGodCharacter, SNSGodState } from '../types';
 import { editableForbiddenPromptRules } from './imagePromptRules';
-import { ensureSnsAdultTone, snsFinalImagePrompt } from './snsImagePromptPolicy';
+import { snsFinalImagePrompt } from './snsImagePromptPolicy';
 import { appendDebugLog } from './debugLog';
 import { configuredPrompt } from './prompts';
 import { imageContinuityPromptBlock, resolveCharacterRuntimeState } from './characterWorld';
@@ -875,13 +875,15 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
   const continuity = runtimeState && character ? imageContinuityPromptBlock(character, runtimeState) : '';
   const illustrationTags = String(character?.illustrationTags || '').trim();
   const characterVisualIdentity = illustrationTags ? `Character visual identity tags: ${illustrationTags}` : '';
-  const nsfw = config.nsfw
-    ? `NSFW/private fictional adult image tone is enabled. ${configuredTone || 'Keep every depicted person clearly adult.'}`
-    : configuredTone || 'Mature fictional adult tone is allowed when it fits the character and scene. Keep every depicted person clearly adult.';
+  const imageTone = [
+    configuredTone,
+    config.nsfw ? 'NSFW/private image tone is enabled only when it fits the requested scene and depicted subjects.' : ''
+  ].filter(Boolean).join('\n');
   if (options.kind === 'sns') {
     const finalPrompt = snsFinalImagePrompt(requested, options.usesReference === true);
     return [
-      config.nsfw ? ensureSnsAdultTone(finalPrompt) : finalPrompt,
+      finalPrompt,
+      imageTone,
       forbiddenRules ? `금지 조건: ${forbiddenRules}` : '',
     ].filter(Boolean).join(' ');
   }
@@ -892,7 +894,7 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
       'Use only scenery, room details, objects, weather, light, or environmental traces that fit the requested mood.',
       globalRules,
       `Requested cover background: ${requested}`,
-      nsfw
+      imageTone
     ].filter(Boolean).join('\n');
   }
   if (options.kind === 'meeting') {
@@ -908,7 +910,7 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
       globalRules,
       `Requested meeting still: ${requested}`,
       'No text, no captions, no UI, no logos, no watermark.',
-      nsfw
+      imageTone
     ].filter(Boolean).join('\n');
   }
   // Profile photo only: short fixed instruction. Never inject long character profile-photo prompts.
@@ -916,22 +918,28 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
     if (options.usesReference) {
       return [
         'Use the attached reference image. Keep the same face and facial identity.',
-        'Generate a photo suitable for an SNS profile picture.'
-      ].join('\n');
+        'Generate a photo suitable for an SNS profile picture.',
+        globalRules,
+        imageTone
+      ].filter(Boolean).join('\n');
     }
-    return 'Generate a photo suitable for an SNS profile picture with a clear face.';
+    return [
+      'Generate a photo suitable for an SNS profile picture with a clear face.',
+      globalRules,
+      imageTone
+    ].filter(Boolean).join('\n');
   }
   if (options.usesReference) {
     if (options.kind === 'profile-reference-face') {
       return [
-        'MANDATORY FACE REFERENCE: use the attached reference image as the primary facial identity source for this fictional adult female character.',
+        'MANDATORY FACE REFERENCE: use the attached reference image as the primary facial identity source for this fictional character.',
         'Preserve the reference face shape, facial proportions, eye spacing, nose/lip structure, jawline, and recognizable facial vibe. The generated face must clearly resemble the attached reference person.',
         'Only change outfit, background, pose, job context, expression, and photo setting according to the requested prompt. Do not copy the reference outfit, background, pose, age context, job, personality, or story.',
         'Do not ignore the attached image. Do not create a fully new unrelated face from text alone.',
         prefix,
         globalRules,
         `Requested character image: ${requested}`,
-        nsfw
+        imageTone
       ].filter(Boolean).join('\n');
     }
     return [
@@ -941,10 +949,10 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
       prefix,
       globalRules,
       `Requested scene: ${requested}`,
-      nsfw
+      imageTone
     ].filter(Boolean).join('\n');
   }
-  return [prefix, continuity, characterVisualIdentity, globalRules, `Requested image: ${requested}`, nsfw].filter(Boolean).join('\n');
+  return [prefix, continuity, characterVisualIdentity, globalRules, `Requested image: ${requested}`, imageTone].filter(Boolean).join('\n');
 }
 
 function normalizeGrokBaseUrl(value?: string): string {

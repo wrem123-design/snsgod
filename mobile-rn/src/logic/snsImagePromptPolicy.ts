@@ -27,12 +27,6 @@ export function normalizeSnsImagePrompt(candidate: string | undefined, context: 
     : fallbackSnsImagePrompt(context);
 }
 
-/** Adds one clear Korean adult boundary without tag-like duplication. */
-export function ensureSnsAdultTone(prompt: string): string {
-  const sentence = asSentence(prompt);
-  return /등장인물은 모두 성인/.test(sentence) ? sentence : `등장인물은 모두 성인이다. ${sentence}`;
-}
-
 /** Produces the final concise Korean prompt sent to the image provider. */
 export function snsFinalImagePrompt(scene: string, usesReference: boolean): string {
   const identity = usesReference

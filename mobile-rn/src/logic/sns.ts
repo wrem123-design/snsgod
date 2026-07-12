@@ -2,7 +2,7 @@ import { callLLMText, generateImageDataUri, imagePromptWithoutCharacterName, par
 import { appendDebugLog } from './debugLog';
 import { evaluateSnsAutomationCandidates, oneSnsRoomPerCharacter } from './snsAutomationEvaluation';
 import { characterReferenceImageForSns } from './imageReference';
-import { ensureSnsAdultTone, normalizeSnsImagePrompt, snsImagePromptInstruction } from './snsImagePromptPolicy';
+import { normalizeSnsImagePrompt, snsImagePromptInstruction } from './snsImagePromptPolicy';
 import { makeId } from './ids';
 import { MAX_SNS_CONTEXT_MESSAGES, MAX_SNS_DM_CONTEXT_MESSAGES } from './limits';
 import { lorePromptBlock, resolveActiveLore } from './loreEngine';
@@ -467,7 +467,6 @@ async function applySnsImagePolicy(state: SNSGodState, posts: SNSPost[], charact
       continue;
     }
     next.imagePrompt = normalizeSnsImagePrompt(next.imagePrompt, next.content || rawText);
-    if (sns.nsfw && next.imagePrompt) next.imagePrompt = ensureSnsAdultTone(next.imagePrompt);
     if (next.imagePrompt) next.imagePrompt = imagePromptWithoutCharacterName(next.imagePrompt, character);
     if (!next.image && next.imagePrompt && state.config.imageGeneration?.enabled) {
       try {

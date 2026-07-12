@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
-  ensureSnsAdultTone,
   fallbackSnsImagePrompt,
   snsFinalImagePrompt,
   snsImagePromptInstruction,
@@ -12,6 +11,7 @@ import {
 const snsSource = readFileSync(new URL('../src/logic/sns.ts', import.meta.url), 'utf8');
 const apiSource = readFileSync(new URL('../src/logic/api.ts', import.meta.url), 'utf8');
 const imageReferenceSource = readFileSync(new URL('../src/logic/imageReference.ts', import.meta.url), 'utf8');
+const promptsSource = readFileSync(new URL('../src/logic/prompts.ts', import.meta.url), 'utf8');
 
 test('SNS image prompts are short Korean narrative descriptions of the post situation', () => {
   const fallback = fallbackSnsImagePrompt('햇살 좋은 카페에서 조용히 커피를 마시는 아침');
@@ -35,11 +35,15 @@ test('SNS final prompts keep the reference identity while staying concise and Ko
   assert.doesNotMatch(finalPrompt, /MANDATORY|Requested scene|Character visual identity|Create a/i);
 });
 
-test('SNS adult tone is expressed as a Korean sentence without duplicate tags', () => {
-  const prompt = ensureSnsAdultTone('침실 창가의 차분한 셀카 장면');
-  assert.match(prompt, /^등장인물은 모두 성인이다\./);
-  assert.equal(ensureSnsAdultTone(prompt), prompt);
-  assert.doesNotMatch(prompt, /adult private account mood|nsfw/i);
+test('image generation does not inject a blanket adult assertion', () => {
+  const finalPrompt = snsFinalImagePrompt('침실 창가의 차분한 셀카 장면', false);
+  assert.doesNotMatch(finalPrompt, /등장인물은 모두 성인|이 캐릭터는 성인|clearly adult|fictional adult/i);
+  assert.doesNotMatch(snsSource, /ensureSnsAdultTone/);
+  assert.doesNotMatch(apiSource, /Keep every depicted person clearly adult|fictional adult female character/);
+  assert.match(promptsSource, /imageGenerationToneRules: ''/);
+  assert.match(promptsSource, /LEGACY_IMAGE_GENERATION_TONE_RULES/);
+  assert.match(apiSource, /if \(options\.kind === 'sns'\)[\s\S]*?imageTone/);
+  assert.match(apiSource, /if \(options\.kind === 'profile'\)[\s\S]*?imageTone/);
 });
 
 test('SNS generation and retry share the Korean policy and attach every renderable reference URI', () => {

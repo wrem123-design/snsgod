@@ -1,0 +1,32 @@
+--- app.py
++++ app.py
+@@ -28,0 +29,2 @@
++from grok_oauth_pool_policy import active_pool_entries, ordered_pool_entries, pool_attempt_count
++
+@@ -304,3 +306 @@
+-    entries = xai_hermes_latest_pool_entries(pool)
+-    available = [entry for entry in entries if str(getattr(entry, "last_status", "") or "").lower() != "exhausted"]
+-    return sorted(available or entries, key=lambda entry: int(getattr(entry, "priority", 0)))
++    return active_pool_entries(pool)
+@@ -310,2 +310,10 @@
+-    entries = sorted(list(pool.entries()), key=lambda entry: int(getattr(entry, "priority", 0)))
+-    return entries[-MAX_XAI_OAUTH_ACCOUNTS:]
++    return ordered_pool_entries(pool)
++
++
++def xai_hermes_pool_attempt_count() -> int:
++    try:
++        from agent.credential_pool import load_pool
++    except ImportError:
++        return MAX_XAI_OAUTH_ACCOUNTS
++    pool = load_pool("xai-oauth")
++    return pool_attempt_count(pool) if pool and pool.has_credentials() else MAX_XAI_OAUTH_ACCOUNTS
+@@ -1021 +1029 @@
+-    for _attempt in range(MAX_XAI_OAUTH_ACCOUNTS):
++    for _attempt in range(xai_hermes_pool_attempt_count()):
+@@ -1795 +1803 @@
+-    for index, entry in enumerate(entries[:MAX_XAI_OAUTH_ACCOUNTS], start=1):
++    for index, entry in enumerate(entries, start=1):
+@@ -1804 +1812 @@
+-                "max_slots": MAX_XAI_OAUTH_ACCOUNTS,
++                "max_slots": len(entries),

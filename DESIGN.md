@@ -52,9 +52,10 @@ The app uses warm messenger surfaces with soft contrast, compact controls, and c
 - control.touch: 42px minimum height
 - control.pressedOpacity: 0.78
 - control.disabledOpacity: 0.5
-- chat.keyboardAvoidance: iOS uses padding; Android uses height together with native adjustResize
-- chat.keyboardVerticalOffset: 0px because chat screens render inside the root safe area without a navigation header overlay
+- chat.keyboardAvoidance: all chat screens use bottom padding so Galaxy IME toolbars and keyboards cannot cover the composer; Android also keeps native adjustResize
+- chat.keyboardVerticalOffset: Android 56dp to include the Galaxy IME toolbar in avoidance; iOS 0px because chat screens render inside the root safe area without a navigation header overlay
 - chat.composerFocus: keep the latest message visible only when the conversation was already near the bottom; preserve intentionally scrolled history
+- system.statusBarInset: Android uses the runtime `StatusBar.currentHeight`; iOS continues to use the native `SafeAreaView` inset
 
 ## Components
 - Chat bubbles use warm off-white for other speakers and yellow for the user.
@@ -66,7 +67,9 @@ The app uses warm messenger surfaces with soft contrast, compact controls, and c
 - Album selection: 52px action bar minimum, 42px action touch height, 28px selected marker, and 12px action bar gap. Selection confirmation uses the existing panel, border, accent, and danger tokens without introducing another surface style.
 - Album trash: reuse the 42px action touch height, 12px image radius, 12px card padding, and 8px compact gap. Restore uses surfaceAlt; permanent delete uses danger only on the final action. Impact rows remain plain panel rows rather than a new card family.
 - Root navigation: four equal roots in a 68px bottom bar, each with a 24px system glyph and visible 11px Korean label. Selected state uses accent on panel; unselected state uses panelSoft and sub text. Root hub rows use 72px minimum height, 12px padding, 12px radius, and 8px gap.
-- Notification settings: reuse the panel card with 12px padding and 8px radius. Each system-alert row is at least 72px high with an accessible 42px on/off control. Explanatory and Android permission blocks use panelSoft rather than introducing another card family.
+- Notification settings: reuse the panel card with 12px padding and 8px radius. Each system-alert row is at least 72px high with an accessible 42px on/off control. The foreground-service row uses the same rhythm with a 42px Android channel-settings action. Explanatory and Android permission blocks use panelSoft rather than introducing another card family.
+- Android message notifications: use the system conversation template with the character profile as the leading conversation identity. Never duplicate the profile as a right-side large image; the mandatory app identity remains only as Android's small badge.
+- Android automation service: remote/server mode relies on high-priority FCM and does not start the local foreground service, so no automation status card appears. Local-only mode may use Android's required low-priority foreground-service card to keep in-process timers alive.
 
 ## Motion
 - Meeting text fades in with opacity only.

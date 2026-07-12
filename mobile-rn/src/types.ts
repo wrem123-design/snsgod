@@ -320,6 +320,8 @@ export type SNSGodRoom = {
   pinned?: boolean;
   disabled?: boolean;
   disabledAt?: number;
+  /** Messages at or before this epoch belong to a deliberately cleared conversation. */
+  conversationResetAt?: number;
   [key: string]: unknown;
 };
 

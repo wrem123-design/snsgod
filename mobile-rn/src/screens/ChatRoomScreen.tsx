@@ -372,7 +372,7 @@ export function ChatRoomScreen({ state, roomId, onBack, onChange, onCommitCurren
     : '';
 
   return (
-    <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0}>
+    <KeyboardAvoidingView style={styles.screen} behavior="padding" keyboardVerticalOffset={Platform.OS === 'android' ? 56 : 0}>
       <View style={styles.header}>
         <Pressable onPress={onBack} style={styles.iconButton}><Text style={styles.backText}>‹</Text></Pressable>
         <Pressable onPress={() => onOpenProfile(character.id)}>

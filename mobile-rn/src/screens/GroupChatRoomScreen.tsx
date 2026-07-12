@@ -583,7 +583,7 @@ export function GroupChatRoomScreen({ state, roomId, onBack, onChange, onCommitC
   }
 
   return (
-    <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0}>
+    <KeyboardAvoidingView style={styles.screen} behavior="padding" keyboardVerticalOffset={Platform.OS === 'android' ? 56 : 0}>
       <View style={styles.header}>
         <Pressable onPress={leaveRoom} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable>
         <View style={styles.titleBlock}>

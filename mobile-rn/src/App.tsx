@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as Application from 'expo-application';
 import * as FileSystem from 'expo-file-system/legacy';
-import { Alert, AppState, BackHandler, DevSettings, Keyboard, Linking, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { Alert, AppState, BackHandler, DevSettings, Keyboard, Linking, Platform, Pressable, SafeAreaView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { ChatListScreen } from './screens/ChatListScreen';
 import { ChatRoomScreen } from './screens/ChatRoomScreen';
 import { CharacterSettingsScreen } from './screens/CharacterSettingsScreen';
@@ -69,9 +69,11 @@ import { cancelAllPendingReplyJobs, reconcilePendingReplyJobs } from './logic/pe
 import { normalizePersistedInteractionLifecycles, pauseActiveInteractions, resumePointedInteractions } from './logic/interactionLifecycle';
 import { rootForRouteName, routeForRoot, shouldShowBottomNavigation } from './logic/rootNavigation';
 import { isRemoteServicesEnabled } from './logic/remoteServicePolicy';
+import { reconcileMessageReadReceipts } from './logic/messageReadReceipts';
 import { carryStateSecrets } from './storage/secureSecrets';
 
 const ORACLE_SYNC_INTERVAL_MS = 60 * 1000;
+const ANDROID_STATUS_BAR_INSET = Platform.OS === 'android' ? StatusBar.currentHeight || 0 : 0;
 const MEDIA_REPLACEMENT_CACHE_TTL_MS = 30_000;
 const MEDIA_REPLACEMENT_CACHE_SWEEP_MS = 5_000;
 const MEDIA_REPLACEMENT_CACHE_MAX_ENTRIES = 12;
@@ -153,11 +155,16 @@ export default function App() {
   const serverPolicyFingerprintRef = useRef('');
   const oracleSyncInFlightRef = useRef(false);
   const oracleSyncPendingReasonRef = useRef<{ reason: string; epoch: number } | null>(null);
+  const serverSnsTickInFlightRef = useRef(false);
   const meetingEventWorkRef = useRef(new Map<string, Promise<boolean>>());
   const pendingNotificationRequestRef = useRef<NotificationRouteRequest | null>(null);
 
   function reconcileLoadedState(next: SNSGodState): { state: SNSGodState; resumable: PendingReplyJob[] } {
-    const reconciled = reconcilePendingReplyJobs(next);
+    const messages = Object.fromEntries(Object.entries(next.messages || {}).map(([roomId, history]) => [
+      roomId,
+      reconcileMessageReadReceipts(history || []),
+    ]));
+    const reconciled = reconcilePendingReplyJobs({ ...next, messages });
     return { ...reconciled, state: normalizePersistedInteractionLifecycles(reconciled.state) as SNSGodState };
   }
 
@@ -331,7 +338,14 @@ export default function App() {
       proactivePatience: character.proactivePatience,
       notificationImage: character.avatar || character.profileImage || ''
     })),
-    directRooms: Object.values(state.chatRooms || {}).flat().map(room => ({ id: room.id, disabled: room.disabled === true })),
+    directRooms: Object.values(state.chatRooms || {}).flat().map(room => ({
+      id: room.id,
+      disabled: room.disabled === true,
+      relationshipNote: room.relationshipNote || '',
+      roomPrompt: room.roomPrompt || '',
+      userAlias: room.userAlias || '',
+      conversationResetAt: Number(room.conversationResetAt || 0),
+    })),
     groupRooms: (state.groupRooms || []).map(room => ({ id: room.id, disabled: room.disabled === true, participantIds: room.participantIds }))
   }) : '';
 
@@ -410,12 +424,15 @@ export default function App() {
           reason: 'app background',
           onMediaExternalized: applyPersistedMediaUris,
         });
-        // Keep process priority high so setInterval/reply delays continue after Home.
+        // Remote mode is awakened by FCM and must not keep a persistent Android
+        // foreground-service card. Local-only mode still needs the native service
+        // to give in-process timers the strongest background lifetime available.
         if (current.config.autoEnabled !== false) {
-          void setAutomationKeepAliveRunning(true, { force: true });
           if (isServerMessagingEnabled(current)) {
+            void setAutomationKeepAliveRunning(false);
             void syncOracleMessages('app-background');
           } else {
+            void setAutomationKeepAliveRunning(true, { force: true });
             void runAutomationTickOnce('app-background');
           }
         }
@@ -487,15 +504,16 @@ export default function App() {
   useEffect(() => {
     if (!hydrated) return;
     const autoOn = Boolean(state && state.config.autoEnabled !== false);
+    const keepAliveOn = autoOn && state !== null && !isServerMessagingEnabled(state);
     // Defer native service start slightly so first paint/JS boot is stable.
     const timer = setTimeout(() => {
-      void setAutomationKeepAliveRunning(autoOn);
+      void setAutomationKeepAliveRunning(keepAliveOn);
     }, 1500);
     return () => {
       clearTimeout(timer);
       void setAutomationKeepAliveRunning(false);
     };
-  }, [hydrated, state?.config.autoEnabled, state?.config.serverMessaging?.enabled]);
+  }, [hydrated, state?.config.autoEnabled, state?.config.serverMessaging?.enabled, state?.config.serverMessaging?.deviceId]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -898,6 +916,7 @@ export default function App() {
       await commit(latest === current ? next : mergeServerSyncResult(latest, current, next));
       if (reason === 'push-token-changed') console.info('[SNSGod push] server registration completed');
       void appendDebugLog('server.sync', 'sync completed reason=' + reason);
+      void runServerAssistedSnsTick(reason);
     } catch (error) {
       if (!isRuntimeEpochCurrent(operationEpoch)) return;
       const latest = stateRef.current || current;
@@ -917,6 +936,37 @@ export default function App() {
       if (pendingRequest && isRuntimeEpochCurrent(pendingRequest.epoch)) {
         setTimeout(() => void syncOracleMessages(pendingRequest.reason), 0);
       }
+    }
+  }
+
+  /** Uses a successful Oracle synchronization as the remote-mode SNS automation signal. */
+  async function runServerAssistedSnsTick(reason: string): Promise<void> {
+    const operationEpoch = runtimeEpochRef.current;
+    const current = stateRef.current;
+    if (
+      serverSnsTickInFlightRef.current
+      || !isRuntimeEpochCurrent(operationEpoch)
+      || !current
+      || !isServerMessagingEnabled(current)
+      || current.config.snsAutoPostEnabled === false
+    ) return;
+    const profile = current.config.apiProfiles[current.config.apiType] || {};
+    const hasKey = current.config.apiType === 'vertex'
+      ? Boolean(String(profile.serviceAccountJson || '').trim())
+      : current.config.apiType === 'grok' || Boolean(profile.apiKey || profile.apiKeys?.some(Boolean));
+    if (!hasKey) return;
+    serverSnsTickInFlightRef.current = true;
+    try {
+      const next = await maybeCreateBackgroundAutoSNSPost(current);
+      void appendDebugLog('sns.auto', `server-sync tick evaluated reason=${reason} result=${next && next !== current ? 'changed' : 'no-change'}`);
+      if (!next || next === current || !isRuntimeEpochCurrent(operationEpoch)) return;
+      const latest = stateRef.current;
+      await commit(latest && latest !== current ? mergeAutomationResult(latest, current, next) : next);
+      void appendDebugLog('sns.auto', `server-sync tick applied reason=${reason}`);
+    } catch (error) {
+      void appendDebugLog('sns.auto', `server-sync tick failed reason=${reason}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+    } finally {
+      serverSnsTickInFlightRef.current = false;
     }
   }
 
@@ -1654,9 +1704,9 @@ function IncomingCallOverlay({ state, incoming, onAccept, onReject }: {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#fff' },
+  safe: { flex: 1, paddingTop: ANDROID_STATUS_BAR_INSET, backgroundColor: '#fff' },
   content: { flex: 1 },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0877f2' },
+  loading: { flex: 1, paddingTop: ANDROID_STATUS_BAR_INSET, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0877f2' },
   loadingBrandMark: { alignItems: 'center', justifyContent: 'center' },
   loadingBrandText: { color: '#fff', fontSize: 86, lineHeight: 96, fontWeight: '900', letterSpacing: 0 },
   loadingSystemText: { position: 'absolute', bottom: 42, left: 24, right: 24, color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '700', textAlign: 'center' },

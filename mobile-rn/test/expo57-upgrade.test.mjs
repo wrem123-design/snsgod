@@ -44,12 +44,13 @@ test('deprecated native compatibility switches cannot return', () => {
 test('legacy file-system calls use the explicit Expo compatibility entry point', () => {
   for (const path of sourceFiles('src')) {
     const value = readFileSync(path, 'utf8');
-    assert.doesNotMatch(value, /from ['"]expo-file-system['"]/);
+    assert.doesNotMatch(value, /import \* as FileSystem from ['"]expo-file-system['"]/);
     assert.doesNotMatch(value, /StyleSheet\.absoluteFillObject/);
   }
 
   assert.match(source('src/logic/backup.ts'), /expo-file-system\/legacy/);
   assert.match(source('src/storage/persist.ts'), /expo-file-system\/legacy/);
+  assert.match(source('src/logic/api.ts'), /import \{ File as ExpoFile \} from 'expo-file-system'/);
 });
 
 test('Windows release build uses a short Gradle cache path', () => {

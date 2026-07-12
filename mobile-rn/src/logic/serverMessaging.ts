@@ -1,5 +1,6 @@
 import { NotificationDisplayPreferences, SNSGodCharacter, SNSGodMessage, SNSGodState } from '../types';
-import { appendMessage } from './stateHelpers';
+import { allRooms, appendMessage } from './stateHelpers';
+import { markUserMessagesReadBeforeReply } from './messageReadReceipts';
 import { makeId } from './ids';
 import { encryptOracleTextGenerationProfile } from './oracleProfileCrypto';
 import { compactLegacyMemoryFacts } from './memoryBridge';
@@ -95,6 +96,7 @@ function directRooms(state: SNSGodState) {
       enabled: room.disabled !== true && character?.enabled !== false,
       relationshipContext: [room.relationshipNote, room.roomPrompt].filter(Boolean).join('\n').slice(0, 6000),
       userAlias: room.userAlias || '',
+      conversationResetAt: Number(room.conversationResetAt || 0),
       automation: automationFor(state, character, 'direct')
     };
   });
@@ -192,10 +194,21 @@ function notificationPreferencesForServer(state: SNSGodState): Required<Notifica
   };
 }
 
+/** Indexes reset cutoffs once per synchronization pass, including direct and group rooms. */
+function roomResetEpochs(state: SNSGodState): Map<string, number> {
+  return new Map(allRooms(state).map(room => [room.id, Number(room.conversationResetAt || 0)]));
+}
+
 function recentMessages(state: SNSGodState, excludeMessageIds: string[] = []) {
   const excluded = new Set(excludeMessageIds);
+  const resetEpochs = roomResetEpochs(state);
   return Object.entries(state.messages || {}).flatMap(([roomId, messages]) => (messages || [])
-    .filter(message => !excluded.has(message.id) && (message.role === 'user' || message.role === 'character'))
+    .filter(message => {
+      const resetAt = resetEpochs.get(roomId) || 0;
+      return !excluded.has(message.id)
+        && Number(message.createdAt || 0) > resetAt
+        && (message.role === 'user' || message.role === 'character');
+    })
     .slice(-30)
     .map(message => ({
       id: message.id,
@@ -364,8 +377,10 @@ function setServerStatus(state: SNSGodState, patch: Partial<ServerMessagingConfi
 export function mergeServerMessages(state: SNSGodState, incoming: ServerMessage[]): SNSGodState {
   let next = state;
   const existing = new Set(Object.values(next.messages || {}).flat().map(message => message.id));
+  const resetEpochs = roomResetEpochs(next);
   for (const remote of incoming) {
-    if (!remote?.id || existing.has(remote.id) || !next.messages[remote.roomId]) continue;
+    const resetAt = resetEpochs.get(remote.roomId) || 0;
+    if (!remote?.id || existing.has(remote.id) || !next.messages[remote.roomId] || Number(remote.createdAt || 0) <= resetAt) continue;
     const message: SNSGodMessage = {
       id: remote.id,
       role: remote.role,
@@ -379,9 +394,11 @@ export function mergeServerMessages(state: SNSGodState, incoming: ServerMessage[
     };
     const groupIndex = (next.groupRooms || []).findIndex(room => room.id === remote.roomId);
     if (groupIndex >= 0) {
+      const currentHistory = next.messages[remote.roomId] || [];
+      const receiptHistory = markUserMessagesReadBeforeReply(currentHistory, message);
       next = {
         ...next,
-        messages: { ...next.messages, [remote.roomId]: [...(next.messages[remote.roomId] || []), message] },
+        messages: { ...next.messages, [remote.roomId]: [...receiptHistory, message] },
         groupRooms: (next.groupRooms || []).map(room => room.id === remote.roomId ? { ...room, lastActivity: message.createdAt } : room)
       };      if (message.characterId) next = applyMessageToCharacterWorld(next, message.characterId, remote.roomId, message);
     } else {

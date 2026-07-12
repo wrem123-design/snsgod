@@ -268,7 +268,7 @@ test('scheduler repairs an existing recent user message that never received a re
   }
 });
 
-test('FCM uses the character display name and profile image for reply alerts', async () => {
+test('FCM sends character data for native Android conversation alerts', async () => {
   const app = fcmHarness();
   try {
     const registration = app.service.register({ deviceId: 'phone-fcm-display', bootstrapSecret: 'pairing-secret', pushToken: 'fcm-device-token' });
@@ -282,8 +282,11 @@ test('FCM uses the character display name and profile image for reply alerts', a
     await app.service.runScheduler();
 
     assert.equal(app.fcmRequests.length, 1);
-    assert.equal(app.fcmRequests[0].message.notification.title, '미카');
-    assert.equal(app.fcmRequests[0].message.notification.image, 'https://images.example.test/mika.png');
+    assert.equal(app.fcmRequests[0].message.notification, undefined);
+    assert.equal(app.fcmRequests[0].message.data.characterName, '미카');
+    assert.equal(app.fcmRequests[0].message.data.messageBody, 'I saw your message. Let us talk in a moment.');
+    assert.equal(app.fcmRequests[0].message.data.avatarUrl, 'https://images.example.test/mika.png');
+    assert.equal(app.fcmRequests[0].message.data.nativeConversation, '1');
     assert.equal(app.fcmRequests[0].message.data.notificationKind, 'reply');
   } finally {
     app.close();

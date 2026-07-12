@@ -78,10 +78,10 @@ class AutomationKeepAliveService : Service() {
     if (existing != null) return
     val channel = NotificationChannel(
       CHANNEL_ID,
-      "자동화 실행",
+      "Android 필수 알림",
       NotificationManager.IMPORTANCE_LOW
     ).apply {
-      description = "앱이 백그라운드에 있을 때도 선톡·SNS 자동화를 유지합니다."
+      description = "로컬 전용 모드에서 선톡·SNS 자동화를 백그라운드에서도 유지합니다."
       setShowBadge(false)
     }
     manager.createNotificationChannel(channel)

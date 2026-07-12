@@ -12,13 +12,13 @@ test('message copy relies on the Android clipboard toast without a duplicate suc
   }
 });
 
-test('Oracle messaging polls while the JS runtime is alive and keeps the foreground service enabled', () => {
+test('Oracle messaging polls while the JS runtime is alive without requiring its foreground service', () => {
   const app = read('src/App.tsx');
   const server = read('src/logic/serverMessaging.ts');
   assert.match(app, /ORACLE_SYNC_INTERVAL_MS/);
   assert.match(app, /syncOracleMessages\('server-interval'\)/);
-  assert.match(app, /setAutomationKeepAliveRunning\(autoOn\)/);
-  assert.doesNotMatch(app, /autoOn[^;]+!isServerMessagingEnabled/);
+  assert.match(app, /const keepAliveOn = autoOn && state !== null && !isServerMessagingEnabled\(state\)/);
+  assert.match(app, /setAutomationKeepAliveRunning\(keepAliveOn\)/);
   assert.match(app, /shouldBootstrapOracleSync\(reason, registeredNow\)/);
   assert.doesNotMatch(app, /outbox \|\| \[\]\)\.length \? await flushServerOutbox\(next\) : await bootstrapServer\(next\)/);
   assert.match(app, /mergeServerSyncResult\(latest, current, next\)/);
@@ -150,18 +150,51 @@ test('room reset epochs prevent Oracle history from reappearing before bootstrap
   assert.match(server, /Number\(message\.createdAt \|\| 0\) > resetAt/);
 });
 
-test('notification settings include the Android foreground-service channel without stopping automation', () => {
+test('notification settings distinguish remote delivery from the local Android service', () => {
   const settings = read('src/screens/settings/NotificationSettingsSection.tsx');
   const background = read('src/logic/backgroundAutomation.ts');
   const nativeModule = read('android/app/src/main/java/com/snsgod/rn/AutomationKeepAliveModule.kt');
 
   assert.match(settings, /백그라운드 자동화 상태/);
-  assert.match(settings, /Android 필수 알림/);
+  assert.match(settings, /원격 보조 모드에서는 상태 알림 없이 서버가 처리합니다/);
+  assert.match(settings, /로컬 전용 자동화는 Android 필수 상태 알림/);
   assert.match(background, /getAutomationNotificationChannelState/);
   assert.match(background, /openAutomationNotificationChannelSettings/);
   assert.match(nativeModule, /areAutomationNotificationsEnabled/);
   assert.match(nativeModule, /openAutomationNotificationSettings/);
   assert.doesNotMatch(settings, /setAutomationKeepAliveRunning\(false/);
+});
+
+test('Android renders server messages as character-first conversation notifications', () => {
+  const service = read('android/app/src/main/java/com/snsgod/rn/CharacterMessagingService.kt');
+  const manifest = read('android/app/src/main/AndroidManifest.xml');
+  const gradle = read('android/app/build.gradle');
+
+  assert.match(service, /class CharacterMessagingService : ExpoFirebaseMessagingService/);
+  assert.match(service, /NotificationCompat\.MessagingStyle/);
+  assert.match(service, /Person\.Builder\(\)/);
+  assert.match(service, /ShortcutManagerCompat\.pushDynamicShortcut/);
+  assert.match(service, /setShortcutId\(shortcutId\)/);
+  assert.doesNotMatch(service, /setLargeIcon/);
+  assert.match(service, /loadLocalAvatar/);
+  assert.match(service, /canonicalFile/);
+  assert.match(service, /allowedRoots\.any/);
+  assert.match(manifest, /expo\.modules\.notifications\.service\.ExpoFirebaseMessagingService[^>]+tools:node="remove"/);
+  assert.match(manifest, /\.CharacterMessagingService[\s\S]+com\.google\.firebase\.MESSAGING_EVENT/);
+  assert.match(gradle, /com\.google\.firebase:firebase-messaging:25\.0\.1/);
+});
+
+test('remote server mode avoids the foreground automation service and its persistent card', () => {
+  const app = read('src/App.tsx');
+  const service = read('android/app/src/main/java/com/snsgod/rn/AutomationKeepAliveService.kt');
+  const settings = read('src/screens/settings/NotificationSettingsSection.tsx');
+
+  assert.match(app, /const keepAliveOn = autoOn && state !== null && !isServerMessagingEnabled\(state\)/);
+  assert.match(app, /setAutomationKeepAliveRunning\(keepAliveOn\)/);
+  assert.match(app, /if \(isServerMessagingEnabled\(current\)\) \{[\s\S]{0,180}setAutomationKeepAliveRunning\(false\)/);
+  assert.match(service, /ServiceCompat\.startForeground/);
+  assert.match(settings, /원격 보조 모드에서는 상태 알림 없이 서버가 처리합니다/);
+  assert.match(settings, /로컬 전용 자동화는 Android 필수 상태 알림/);
 });
 
 test('returning to the foreground refreshes both push registration and Oracle messages', () => {

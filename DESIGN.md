@@ -68,6 +68,8 @@ The app uses warm messenger surfaces with soft contrast, compact controls, and c
 - Album trash: reuse the 42px action touch height, 12px image radius, 12px card padding, and 8px compact gap. Restore uses surfaceAlt; permanent delete uses danger only on the final action. Impact rows remain plain panel rows rather than a new card family.
 - Root navigation: four equal roots in a 68px bottom bar, each with a 24px system glyph and visible 11px Korean label. Selected state uses accent on panel; unselected state uses panelSoft and sub text. Root hub rows use 72px minimum height, 12px padding, 12px radius, and 8px gap.
 - Notification settings: reuse the panel card with 12px padding and 8px radius. Each system-alert row is at least 72px high with an accessible 42px on/off control. The foreground-service row uses the same rhythm with a 42px Android channel-settings action. Explanatory and Android permission blocks use panelSoft rather than introducing another card family.
+- Android message notifications: use the system conversation template with the character profile as the leading conversation identity. Never duplicate the profile as a right-side large image; the mandatory app identity remains only as Android's small badge.
+- Android automation service: remote/server mode relies on high-priority FCM and does not start the local foreground service, so no automation status card appears. Local-only mode may use Android's required low-priority foreground-service card to keep in-process timers alive.
 
 ## Motion
 - Meeting text fades in with opacity only.

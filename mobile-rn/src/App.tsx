@@ -419,12 +419,15 @@ export default function App() {
           reason: 'app background',
           onMediaExternalized: applyPersistedMediaUris,
         });
-        // Keep process priority high so setInterval/reply delays continue after Home.
+        // Remote mode is awakened by FCM and must not keep a persistent Android
+        // foreground-service card. Local-only mode still needs the native service
+        // to give in-process timers the strongest background lifetime available.
         if (current.config.autoEnabled !== false) {
-          void setAutomationKeepAliveRunning(true, { force: true });
           if (isServerMessagingEnabled(current)) {
+            void setAutomationKeepAliveRunning(false);
             void syncOracleMessages('app-background');
           } else {
+            void setAutomationKeepAliveRunning(true, { force: true });
             void runAutomationTickOnce('app-background');
           }
         }
@@ -496,15 +499,16 @@ export default function App() {
   useEffect(() => {
     if (!hydrated) return;
     const autoOn = Boolean(state && state.config.autoEnabled !== false);
+    const keepAliveOn = autoOn && state !== null && !isServerMessagingEnabled(state);
     // Defer native service start slightly so first paint/JS boot is stable.
     const timer = setTimeout(() => {
-      void setAutomationKeepAliveRunning(autoOn);
+      void setAutomationKeepAliveRunning(keepAliveOn);
     }, 1500);
     return () => {
       clearTimeout(timer);
       void setAutomationKeepAliveRunning(false);
     };
-  }, [hydrated, state?.config.autoEnabled, state?.config.serverMessaging?.enabled]);
+  }, [hydrated, state?.config.autoEnabled, state?.config.serverMessaging?.enabled, state?.config.serverMessaging?.deviceId]);
 
   useEffect(() => {
     if (!hydrated) return;

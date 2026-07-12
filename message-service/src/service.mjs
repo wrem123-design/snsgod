@@ -1255,9 +1255,16 @@ export function createMessageService({ db, config, now = () => Date.now(), rando
           body: JSON.stringify({
             message: {
               token: device.push_token,
-              notification: { title, body: message.content.slice(0, 140), ...(image ? { image } : {}) },
-              data: { roomId: message.roomId, messageId: message.id, notificationKind },
-              android: { priority: 'high', notification: { channel_id: 'snsgod_messages' } }
+              data: {
+                nativeConversation: '1',
+                characterName: title,
+                messageBody: message.content.slice(0, 140),
+                avatarUrl: image,
+                roomId: message.roomId,
+                messageId: message.id,
+                notificationKind
+              },
+              android: { priority: 'high' }
             }
           })
         });

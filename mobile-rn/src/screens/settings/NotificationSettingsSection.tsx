@@ -49,7 +49,7 @@ export function NotificationSettingsSection({ state, visible, onCommitCurrent }:
       <View style={styles.row} accessibilityLabel="백그라운드 자동화 상태 알림">
         <View style={styles.rowBody}>
           <Text style={styles.rowTitle}>백그라운드 자동화 상태</Text>
-          <Text style={styles.rowDescription}>Android 필수 알림입니다. 채널을 꺼도 자동화 처리는 계속되며 Android의 실행 중 앱 목록에는 남을 수 있습니다.</Text>
+          <Text style={styles.rowDescription}>원격 보조 모드에서는 상태 알림 없이 서버가 처리합니다. 로컬 전용 자동화는 Android 필수 상태 알림을 사용할 수 있습니다.</Text>
         </View>
         <Pressable
           onPress={() => void openAutomationNotificationChannelSettings()}
@@ -67,7 +67,7 @@ export function NotificationSettingsSection({ state, visible, onCommitCurrent }:
           <Text style={styles.systemButtonText}>휴대폰 알림 설정 열기</Text>
         </Pressable>
       </View>
-      <Text style={styles.footnote}>종류별 메시지 알림과 자동화 상태 알림은 서로 다른 Android 채널을 사용합니다.</Text>
+      <Text style={styles.footnote}>원격 보조 모드의 메시지 처리는 자동화 상태 알림과 무관하게 계속됩니다.</Text>
     </View>
   );
 }

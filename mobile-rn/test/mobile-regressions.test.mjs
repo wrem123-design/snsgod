@@ -100,12 +100,19 @@ test('Oracle settings expose notification delivery state and system recovery act
   assert.match(settings, /알림 설정 열기/);
 });
 
-test('Grok reference uploads use Expo File blobs accepted by the SDK 57 FormData implementation', () => {
+test('Grok reference uploads use the native multipart uploader without constructing unsupported FormData parts', () => {
   const api = read('src/logic/api.ts');
-  assert.match(api, /import \{ File as ExpoFile \} from 'expo-file-system'/);
-  assert.match(api, /new ExpoFile\(uri\)/);
-  assert.doesNotMatch(api, /\{\s*uri,\s*name:\s*'reference\.jpg'/);
-  assert.doesNotMatch(api, /file as unknown as Blob/);
+  assert.doesNotMatch(api, /import \{ File as ExpoFile \} from 'expo-file-system'/);
+  assert.doesNotMatch(api, /new ExpoFile\(uri\)/);
+  assert.doesNotMatch(api, /type ReactNativeFormDataFile/);
+  assert.doesNotMatch(api, /appendReactNativeFile/);
+  assert.match(api, /FileSystem\.uploadAsync\(`\$\{baseUrl\}\/api\/i2i`, upload\.uri,/);
+  assert.match(api, /uploadType: FileSystem\.FileSystemUploadType\.MULTIPART/);
+  assert.match(api, /fieldName: 'image'/);
+  assert.match(api, /parameters: \{ prompt: finalPrompt, resolution \}/);
+  assert.doesNotMatch(api, /response\.blob\(\)/);
+  assert.match(api, /FileSystem\.downloadAsync\(url, uri\)/);
+  assert.match(api, /FileSystem\.readAsStringAsync\(uri, \{ encoding: FileSystem\.EncodingType\.Base64 \}\)/);
 });
 
 test('basic settings expose system notification categories without gating message sync', () => {

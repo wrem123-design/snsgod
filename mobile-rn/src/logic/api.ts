@@ -1,5 +1,4 @@
 import * as FileSystem from 'expo-file-system/legacy';
-import { File as ExpoFile } from 'expo-file-system';
 import { KJUR } from 'jsrsasign';
 
 import { ApiProfile, ImageGenerationConfig, SNSGodCharacter, SNSGodState } from '../types';
@@ -957,22 +956,24 @@ function absoluteGrokUrl(baseUrl: string, value: string): string {
   return `${normalizeGrokBaseUrl(baseUrl)}${value.startsWith('/') ? value : `/${value}`}`;
 }
 
-async function blobToDataUri(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('이미지 파일을 data URI로 변환하지 못했습니다.'));
-    reader.readAsDataURL(blob);
-  });
-}
-
 async function fetchImageAsDataUri(url: string): Promise<string> {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Grok 이미지 다운로드 실패 ${response.status}`);
-  return blobToDataUri(await response.blob());
+  const cacheDirectory = FileSystem.cacheDirectory;
+  if (!cacheDirectory) throw new Error('이미지 다운로드 캐시 경로를 사용할 수 없습니다.');
+  const uri = `${cacheDirectory}grok-image-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.bin`;
+  try {
+    const download = await FileSystem.downloadAsync(url, uri);
+    if (download.status < 200 || download.status >= 300) throw new Error(`Grok 이미지 다운로드 실패 ${download.status}`);
+    const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+    const contentType = Object.entries(download.headers || {})
+      .find(([name]) => name.toLowerCase() === 'content-type')?.[1] || '';
+    const mime = normalizeUploadImageMime(contentType.split(';')[0], base64);
+    return `data:${mime};base64,${base64}`;
+  } finally {
+    await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => undefined);
+  }
 }
 
-async function dataUriToCacheFile(dataUri: string, name: string): Promise<string> {
+async function dataUriToCacheFile(dataUri: string, name: string): Promise<{ uri: string; mime: string }> {
   const rawMime = dataUri.match(/^data:([^;]+);base64,/)?.[1] || '';
   const base64 = dataUri.replace(/^data:[^;]+;base64,/, '').replace(/\s/g, '');
   const mime = normalizeUploadImageMime(rawMime, base64);
@@ -980,12 +981,7 @@ async function dataUriToCacheFile(dataUri: string, name: string): Promise<string
   const safeName = name.replace(/\.[^.]+$/, '').replace(/[^a-z0-9_-]/gi, '_') || 'reference';
   const uri = `${FileSystem.cacheDirectory || ''}${safeName}-${Date.now()}.${extension}`;
   await FileSystem.writeAsStringAsync(uri, base64, { encoding: FileSystem.EncodingType.Base64 });
-  return uri;
-}
-
-async function appendDataUriImage(form: FormData, field: string, dataUri: string, name: string): Promise<void> {
-  const uri = await dataUriToCacheFile(dataUri, name);
-  form.append(field, new ExpoFile(uri));
+  return { uri, mime };
 }
 
 function normalizeUploadImageMime(rawMime: string, base64: string): string {
@@ -1004,19 +1000,33 @@ function extensionForImageMime(mime: string): string {
   return 'png';
 }
 
-async function appendReferenceImage(form: FormData, field: string, uri: string): Promise<void> {
+function imageMimeForUri(uri: string): string {
+  const pathname = String(uri || '').split(/[?#]/, 1)[0].toLowerCase();
+  if (pathname.endsWith('.png')) return 'image/png';
+  if (pathname.endsWith('.webp')) return 'image/webp';
+  return 'image/jpeg';
+}
+
+async function referenceImageUploadFile(uri: string): Promise<{ uri: string; mime: string; temporary: boolean }> {
   if (uri.startsWith('data:')) {
-    await appendDataUriImage(form, field, uri, 'reference.png');
-    return;
+    const file = await dataUriToCacheFile(uri, 'reference.png');
+    return { ...file, temporary: true };
   }
-  if (/^https?:\/\//i.test(uri)) {
+  if (/^https:\/\//i.test(uri)) {
     const dataUri = await fetchImageAsDataUri(uri);
-    await appendDataUriImage(form, field, dataUri, 'reference.png');
-    return;
+    const file = await dataUriToCacheFile(dataUri, 'reference.png');
+    return { ...file, temporary: true };
   }
-  if (/^(file:|content:|asset:)/i.test(uri)) {
-    form.append(field, new ExpoFile(uri));
+  const mime = imageMimeForUri(uri);
+  if (/^file:/i.test(uri)) return { uri, mime, temporary: false };
+  if (/^(content:|asset:)/i.test(uri)) {
+    const cacheDirectory = FileSystem.cacheDirectory;
+    if (!cacheDirectory) throw new Error('참조 이미지 캐시 경로를 사용할 수 없습니다.');
+    const target = `${cacheDirectory}grok-reference-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${extensionForImageMime(mime)}`;
+    await FileSystem.copyAsync({ from: uri, to: target });
+    return { uri: target, mime, temporary: true };
   }
+  throw new Error('지원하지 않는 참조 이미지 경로입니다.');
 }
 
 async function generateGrokLocalImage(state: SNSGodState, prompt: string, character?: SNSGodCharacter, options?: { referenceImage?: string; kind?: ImagePromptKind }): Promise<string> {
@@ -1034,16 +1044,30 @@ async function generateGrokLocalImage(state: SNSGodState, prompt: string, charac
   const resolution = String(config.grokResolution || config.quality || '1k').includes('1k') ? '1k' : String(config.grokResolution || '1k');
   const aspectRatio = String(config.grokAspectRatio || 'auto');
   if (usesReference) {
-    const form = new FormData();
-    form.append('prompt', finalPrompt);
-    form.append('resolution', resolution);
-    await appendReferenceImage(form, 'image', referenceImage);
-    const response = await fetch(`${baseUrl}/api/i2i`, { method: 'POST', body: form });
-    const payload = await response.json() as { ok?: boolean; error?: { message?: string }; result?: { url?: string } };
-    if (!response.ok || payload?.ok === false) throw new Error(payload?.error?.message || `Grok i2i ${response.status}`);
-    const url = payload?.result?.url;
-    if (!url) throw new Error('Grok i2i 응답에 이미지 URL이 없습니다.');
-    return fetchImageAsDataUri(absoluteGrokUrl(baseUrl, String(url)));
+    const upload = await referenceImageUploadFile(referenceImage);
+    try {
+      const response = await FileSystem.uploadAsync(`${baseUrl}/api/i2i`, upload.uri, {
+        httpMethod: 'POST',
+        uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+        fieldName: 'image',
+        mimeType: upload.mime,
+        parameters: { prompt: finalPrompt, resolution }
+      });
+      let payload: { ok?: boolean; error?: { message?: string }; result?: { url?: string } };
+      try {
+        payload = JSON.parse(response.body) as typeof payload;
+      } catch {
+        throw new Error(`Grok i2i 응답 해석 실패 ${response.status}`);
+      }
+      if (response.status < 200 || response.status >= 300 || payload?.ok === false) {
+        throw new Error(payload?.error?.message || `Grok i2i ${response.status}`);
+      }
+      const url = payload?.result?.url;
+      if (!url) throw new Error('Grok i2i 응답에 이미지 URL이 없습니다.');
+      return fetchImageAsDataUri(absoluteGrokUrl(baseUrl, String(url)));
+    } finally {
+      if (upload.temporary) await FileSystem.deleteAsync(upload.uri, { idempotent: true }).catch(() => undefined);
+    }
   }
   const form = new FormData();
   form.append('prompt', finalPrompt);

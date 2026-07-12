@@ -50,7 +50,8 @@ test('legacy file-system calls use the explicit Expo compatibility entry point',
 
   assert.match(source('src/logic/backup.ts'), /expo-file-system\/legacy/);
   assert.match(source('src/storage/persist.ts'), /expo-file-system\/legacy/);
-  assert.match(source('src/logic/api.ts'), /import \{ File as ExpoFile \} from 'expo-file-system'/);
+  assert.match(source('src/logic/api.ts'), /import \* as FileSystem from 'expo-file-system\/legacy'/);
+  assert.doesNotMatch(source('src/logic/api.ts'), /import \{ File as ExpoFile \} from 'expo-file-system'/);
 });
 
 test('Windows release build uses a short Gradle cache path', () => {

@@ -4,6 +4,7 @@ import { KJUR } from 'jsrsasign';
 
 import { ApiProfile, ImageGenerationConfig, SNSGodCharacter, SNSGodState } from '../types';
 import { editableForbiddenPromptRules } from './imagePromptRules';
+import { ensureSnsAdultTone, snsFinalImagePrompt } from './snsImagePromptPolicy';
 import { appendDebugLog } from './debugLog';
 import { configuredPrompt } from './prompts';
 import { imageContinuityPromptBlock, resolveCharacterRuntimeState } from './characterWorld';
@@ -863,7 +864,7 @@ export function imagePromptWithoutCharacterName(prompt: string, character: SNSGo
   return next || String(prompt || '').trim();
 }
 
-type ImagePromptKind = 'profile' | 'profile-reference-face' | 'cover' | 'general' | 'meeting';
+type ImagePromptKind = 'profile' | 'profile-reference-face' | 'cover' | 'general' | 'meeting' | 'sns';
 
 export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodCharacter | undefined, prompt: string, options: { usesReference?: boolean; kind?: ImagePromptKind; state?: SNSGodState } = {}): string {
   const prefix = config.promptPrefix || 'Create a realistic in-character phone photo. Natural lighting, casual composition, no text overlay.';
@@ -878,6 +879,13 @@ export function imagePromptFor(config: ImageGenerationConfig, character: SNSGodC
   const nsfw = config.nsfw
     ? `NSFW/private fictional adult image tone is enabled. ${configuredTone || 'Keep every depicted person clearly adult.'}`
     : configuredTone || 'Mature fictional adult tone is allowed when it fits the character and scene. Keep every depicted person clearly adult.';
+  if (options.kind === 'sns') {
+    const finalPrompt = snsFinalImagePrompt(requested, options.usesReference === true);
+    return [
+      config.nsfw ? ensureSnsAdultTone(finalPrompt) : finalPrompt,
+      forbiddenRules ? `금지 조건: ${forbiddenRules}` : '',
+    ].filter(Boolean).join(' ');
+  }
   if (options.kind === 'cover') {
     return [
       'Create a wide messenger profile cover/background image, not a profile photo.',
@@ -1014,14 +1022,14 @@ async function appendReferenceImage(form: FormData, field: string, uri: string):
 async function generateGrokLocalImage(state: SNSGodState, prompt: string, character?: SNSGodCharacter, options?: { referenceImage?: string; kind?: ImagePromptKind }): Promise<string> {
   const config = state.config.imageGeneration || {};
   const provider = config.provider || 'openai';
-  const hasReference = /^(data:|file:|content:|asset:)/i.test(String(options?.referenceImage || ''));
+  const hasReference = /^(data:|file:|content:|asset:|https:)/i.test(String(options?.referenceImage || ''));
   await appendDebugLog(
     'image.reference',
     `provider=${provider} kind=${options?.kind || 'general'} character=${character?.name || '-'} reference=${hasReference ? 'yes' : 'no'} supported=${provider === 'grok-local' || provider === 'grok-cloud' ? 'yes' : 'no'} prompt=${String(prompt || '').replace(/\s+/g, ' ').slice(0, 260)}`
   );
   const baseUrl = normalizeGrokBaseUrl(config.provider === 'grok-cloud' ? config.grokCloudBaseUrl : config.grokBaseUrl);
   const referenceImage = options?.kind === 'cover' ? '' : options?.referenceImage || '';
-  const usesReference = /^(data:|file:|content:|asset:)/i.test(referenceImage);
+  const usesReference = /^(data:|file:|content:|asset:|https:)/i.test(referenceImage);
   const finalPrompt = imagePromptFor(config, character, prompt, { usesReference, kind: options?.kind, state });
   const resolution = String(config.grokResolution || config.quality || '1k').includes('1k') ? '1k' : String(config.grokResolution || '1k');
   const aspectRatio = String(config.grokAspectRatio || 'auto');
@@ -1053,7 +1061,7 @@ export async function generateImageDataUri(state: SNSGodState, prompt: string, c
   const config = state.config.imageGeneration || {};
   if (config.provider !== 'grok-local' && config.provider !== 'grok-cloud') {
     const provider = config.provider || 'openai';
-    const hasReference = /^(data:|file:|content:|asset:)/i.test(String(options?.referenceImage || ''));
+    const hasReference = /^(data:|file:|content:|asset:|https:)/i.test(String(options?.referenceImage || ''));
     await appendDebugLog(
       'image.reference',
       `provider=${provider} kind=${options?.kind || 'general'} character=${character?.name || '-'} reference=${hasReference ? 'yes' : 'no'} supported=no prompt=${String(prompt || '').replace(/\s+/g, ' ').slice(0, 260)}`

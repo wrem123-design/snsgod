@@ -21,7 +21,7 @@ export function characterReferenceImageForPrompt(character: SNSGodCharacter | un
 }
 
 export function characterReferenceImageForSns(character: SNSGodCharacter | undefined): string | undefined {
-  return characterReferenceImages(character)[0];
+  return primaryCharacterReferenceImage(character);
 }
 
 export function primaryCharacterReferenceImage(character: SNSGodCharacter | undefined): string | undefined {

@@ -2,6 +2,7 @@ import { callLLMText, generateImageDataUri, imagePromptWithoutCharacterName, par
 import { appendDebugLog } from './debugLog';
 import { evaluateSnsAutomationCandidates, oneSnsRoomPerCharacter } from './snsAutomationEvaluation';
 import { characterReferenceImageForSns } from './imageReference';
+import { ensureSnsAdultTone, normalizeSnsImagePrompt, snsImagePromptInstruction } from './snsImagePromptPolicy';
 import { makeId } from './ids';
 import { MAX_SNS_CONTEXT_MESSAGES, MAX_SNS_DM_CONTEXT_MESSAGES } from './limits';
 import { lorePromptBlock, resolveActiveLore } from './loreEngine';
@@ -121,18 +122,10 @@ function fallbackSnsText(character: SNSGodCharacter, platform: SNSPost['platform
     : `${character.name}의 짧은 근황.`;
 }
 
-function fallbackSnsImagePrompt(character: SNSGodCharacter, text: string): string {
-  return `Natural phone photo of the same fictional character, matching this social post mood: ${cleanSnsText(text).slice(0, 160) || 'quiet daily moment'}, no text overlay, no watermark`;
-}
-
 function titleFromMessageArray(value: unknown): string {
   if (!Array.isArray(value)) return '';
   const first = value.find(item => item && typeof item === 'object') as { title?: unknown } | undefined;
   return cleanSnsText(first?.title || '');
-}
-
-function ensureNsfwTag(prompt: string): string {
-  return /\bnsfw\b|adult/i.test(prompt) ? prompt : `adult private account mood, ${prompt}`;
 }
 
 function platformMatches(value: string | undefined, requested: SNSPost['platform']) {
@@ -473,14 +466,14 @@ async function applySnsImagePolicy(state: SNSGodState, posts: SNSPost[], charact
       result.push(next);
       continue;
     }
-    if (!next.imagePrompt) next.imagePrompt = fallbackSnsImagePrompt(character, next.content || rawText);
-    if (sns.nsfw && next.imagePrompt) next.imagePrompt = ensureNsfwTag(next.imagePrompt);
+    next.imagePrompt = normalizeSnsImagePrompt(next.imagePrompt, next.content || rawText);
+    if (sns.nsfw && next.imagePrompt) next.imagePrompt = ensureSnsAdultTone(next.imagePrompt);
     if (next.imagePrompt) next.imagePrompt = imagePromptWithoutCharacterName(next.imagePrompt, character);
     if (!next.image && next.imagePrompt && state.config.imageGeneration?.enabled) {
       try {
         next.image = await generateImageDataUri(state, next.imagePrompt, character, {
           referenceImage: characterReferenceImageForSns(character),
-          kind: 'general'
+          kind: 'sns'
         });
       } catch (error) {
         await appendDebugLog('sns.image', `SNS image generation failed: ${error instanceof Error ? error.message : String(error)}`, 'warn');
@@ -529,7 +522,7 @@ export async function generateSNSPost(state: SNSGodState, character: SNSGodChara
     sns.nsfw ? snsNsfwInstruction(state) : configuredPrompt(state, 'imageGenerationToneRules'),
     configuredPrompt(state, 'adultBoundaryRules'),
     platform === 'instagram' ? 'Write for an Instagram-style public visual feed. Keep the tone polished and feed-friendly.' : 'Write for a Twitter/X-style timeline. Shorter, sharper, more conversational posts are allowed.',
-    sns.textOnly ? 'Do not include imagePrompt.' : 'If an image fits, include imagePrompt as English visual prompt. When a person appears, it must be this character, not a new random person.',
+    sns.textOnly ? 'Do not include imagePrompt.' : snsImagePromptInstruction(),
     sns.noDM ? 'Do not create dms.' : 'Create one short SNS DM thread when natural.',
     includeUserInDm
       ? (sns.thirdPartyDM ? 'Third-party commenters may initiate DMs if useful.' : 'DMs may be centered on the character and user when the generated post naturally invites it.')

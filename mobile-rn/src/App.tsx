@@ -69,6 +69,7 @@ import { cancelAllPendingReplyJobs, reconcilePendingReplyJobs } from './logic/pe
 import { normalizePersistedInteractionLifecycles, pauseActiveInteractions, resumePointedInteractions } from './logic/interactionLifecycle';
 import { rootForRouteName, routeForRoot, shouldShowBottomNavigation } from './logic/rootNavigation';
 import { isRemoteServicesEnabled } from './logic/remoteServicePolicy';
+import { reconcileMessageReadReceipts } from './logic/messageReadReceipts';
 import { carryStateSecrets } from './storage/secureSecrets';
 
 const ORACLE_SYNC_INTERVAL_MS = 60 * 1000;
@@ -159,7 +160,11 @@ export default function App() {
   const pendingNotificationRequestRef = useRef<NotificationRouteRequest | null>(null);
 
   function reconcileLoadedState(next: SNSGodState): { state: SNSGodState; resumable: PendingReplyJob[] } {
-    const reconciled = reconcilePendingReplyJobs(next);
+    const messages = Object.fromEntries(Object.entries(next.messages || {}).map(([roomId, history]) => [
+      roomId,
+      reconcileMessageReadReceipts(history || []),
+    ]));
+    const reconciled = reconcilePendingReplyJobs({ ...next, messages });
     return { ...reconciled, state: normalizePersistedInteractionLifecycles(reconciled.state) as SNSGodState };
   }
 

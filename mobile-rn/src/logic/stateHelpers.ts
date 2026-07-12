@@ -1,6 +1,7 @@
 import { RandomChatRoom, SNSGodCharacter, SNSGodMessage, SNSGodRoom, SNSGodState } from '../types';
 import { makeId } from './ids';
 import { appendMessageToHistory } from './messageHistoryPolicy';
+import { markUserMessagesReadBeforeReply } from './messageReadReceipts';
 import { updateRoomMemoryAfterAppend } from './memoryBridge';
 import { applyMessageToCharacterWorld } from './characterWorld';
 import { deleteCharacterCascade, deleteRoomCascade } from './deletionCascadePolicy';
@@ -81,7 +82,9 @@ export function appendMessage(state: SNSGodState, roomId: string, message: SNSGo
     : state;
   state = replyAwareState;
   const room = findRoom(state, roomId);
-  const messages = { ...state.messages, [roomId]: appendMessageToHistory(state.messages[roomId], message) };
+  const currentHistory = state.messages[roomId] || [];
+  const receiptHistory = markUserMessagesReadBeforeReply(currentHistory, message);
+  const messages = { ...state.messages, [roomId]: appendMessageToHistory(receiptHistory, message) };
   const chatRooms = { ...state.chatRooms };
   const randomChats = Array.isArray(state.randomChats)
     ? state.randomChats.map(item => item.id === roomId ? { ...item, lastActivity: message.createdAt } : item)

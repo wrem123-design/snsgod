@@ -1,5 +1,6 @@
 import { NotificationDisplayPreferences, SNSGodCharacter, SNSGodMessage, SNSGodState } from '../types';
 import { allRooms, appendMessage } from './stateHelpers';
+import { markUserMessagesReadBeforeReply } from './messageReadReceipts';
 import { makeId } from './ids';
 import { encryptOracleTextGenerationProfile } from './oracleProfileCrypto';
 import { compactLegacyMemoryFacts } from './memoryBridge';
@@ -393,9 +394,11 @@ export function mergeServerMessages(state: SNSGodState, incoming: ServerMessage[
     };
     const groupIndex = (next.groupRooms || []).findIndex(room => room.id === remote.roomId);
     if (groupIndex >= 0) {
+      const currentHistory = next.messages[remote.roomId] || [];
+      const receiptHistory = markUserMessagesReadBeforeReply(currentHistory, message);
       next = {
         ...next,
-        messages: { ...next.messages, [remote.roomId]: [...(next.messages[remote.roomId] || []), message] },
+        messages: { ...next.messages, [remote.roomId]: [...receiptHistory, message] },
         groupRooms: (next.groupRooms || []).map(room => room.id === remote.roomId ? { ...room, lastActivity: message.createdAt } : room)
       };      if (message.characterId) next = applyMessageToCharacterWorld(next, message.characterId, remote.roomId, message);
     } else {

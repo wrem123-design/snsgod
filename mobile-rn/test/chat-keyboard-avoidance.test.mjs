@@ -12,17 +12,17 @@ const chatScreens = [
   ['단체 채팅', groupRoom],
 ];
 
-test('Android chat screens resize above the software keyboard while iOS keeps padding behavior', () => {
+test('chat screens pad above the full Galaxy IME including its toolbar', () => {
   for (const [name, source] of chatScreens) {
     assert.match(
       source,
-      /behavior=\{Platform\.OS === 'ios' \? 'padding' : 'height'\}/,
-      `${name} 화면은 Android height 키보드 회피 동작을 사용해야 합니다.`,
+      /behavior="padding"/,
+      `${name} 화면은 Galaxy IME 툴바까지 composer 아래 padding으로 회피해야 합니다.`,
     );
     assert.match(
       source,
-      /keyboardVerticalOffset=\{0\}/,
-      `${name} 화면은 루트 SafeAreaView 기준 오프셋을 명시해야 합니다.`,
+      /keyboardVerticalOffset=\{Platform\.OS === 'android' \? 56 : 0\}/,
+      `${name} 화면은 Galaxy IME 툴바 높이까지 포함한 Android 오프셋을 적용해야 합니다.`,
     );
   }
 });

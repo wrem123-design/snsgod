@@ -188,7 +188,8 @@ test('new user work and runtime resets terminally cancel active jobs', () => {
 
 test('App and reply engine persist, resume, and terminally record the same durable job', () => {
   assert.doesNotMatch(appSource, /pendingReplies:\s*\{\}/);
-  assert.match(appSource, /reconcilePendingReplyJobs\(next\)/);
+  assert.match(appSource, /reconcileMessageReadReceipts\(history \|\| \[\]\)/);
+  assert.match(appSource, /reconcilePendingReplyJobs\(\{ \.\.\.next, messages \}\)/);
   assert.match(appSource, /resumeJob: job/);
   assert.match(replyEngineSource, /scheduledAt: timeline\.plannedReplyAt/);
   assert.match(replyEngineSource, /reason: 'pending reply scheduled'/);

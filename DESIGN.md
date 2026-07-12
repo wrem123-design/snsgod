@@ -52,8 +52,8 @@ The app uses warm messenger surfaces with soft contrast, compact controls, and c
 - control.touch: 42px minimum height
 - control.pressedOpacity: 0.78
 - control.disabledOpacity: 0.5
-- chat.keyboardAvoidance: iOS uses padding; Android uses height together with native adjustResize
-- chat.keyboardVerticalOffset: 0px because chat screens render inside the root safe area without a navigation header overlay
+- chat.keyboardAvoidance: all chat screens use bottom padding so Galaxy IME toolbars and keyboards cannot cover the composer; Android also keeps native adjustResize
+- chat.keyboardVerticalOffset: Android 56dp to include the Galaxy IME toolbar in avoidance; iOS 0px because chat screens render inside the root safe area without a navigation header overlay
 - chat.composerFocus: keep the latest message visible only when the conversation was already near the bottom; preserve intentionally scrolled history
 - system.statusBarInset: Android uses the runtime `StatusBar.currentHeight`; iOS continues to use the native `SafeAreaView` inset
 

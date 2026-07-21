@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { DEFAULT_PROMPTS } from '../logic/prompts';
+import { DEFAULT_PROMPTS, resolvedPrompts } from '../logic/prompts';
 import { colors } from '../theme';
 import { PromptSet, SNSGodState } from '../types';
 import { PROMPT_SETTING_DEFINITIONS } from '../logic/promptSettingsPolicy';
@@ -10,7 +10,7 @@ export function PromptSettingsScreen({ state, onBack, onChange }: {
   onBack: () => void;
   onChange: (next: SNSGodState) => Promise<void> | void;
 }) {
-  const [draft, setDraft] = useState<PromptSet>({ ...DEFAULT_PROMPTS, ...(state.config.prompts || {}) });
+  const [draft, setDraft] = useState<PromptSet>(resolvedPrompts(state));
 
   async function save() {
     await onChange({ ...state, config: { ...state.config, prompts: draft } });
